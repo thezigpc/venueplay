@@ -1,0 +1,99 @@
+# Bar Games box. Copy to the box (e.g. /opt/bargames), add .env, then:
+#   docker compose up -d --build
+# Games are NOT listed here: core creates them on demand (bg-game-<id>) through the
+# socket proxy, each on its own network.
+name: bargames
+
+services:
+  core:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    image: bargames:dev
+    container_name: bargames-core
+    restart: unless-stopped
+    command: ["node", "apps/core/dist/index.js"]
+    environment:
+      PORT: "7100"
+      DATA_DIR: /data
+      CORE_INTERNAL_URL: http://bargames-core:7100
+      GAME_RUNTIME: docker
+      DOCKER_URL: http://docker-proxy:2375
+      ATTACH_CONTAINERS: bargames-core,bargames-gateway
+      BROKER_URL: http://host.docker.internal:7200
+      BROKER_TOKEN: ${BROKER_TOKEN:?set BROKER_TOKEN in .env}
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:?set GATEWAY_TOKEN in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      ADMIN_DIST: /app/apps/admin/dist
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes: ["./data/core:/data"]
+    networks: [bargames, docker-api]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7100/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+
+  gateway:
+    image: bargames:dev
+    container_name: bargames-gateway
+    restart: unless-stopped
+    command: ["node", "apps/gateway/dist/index.js"]
+    environment:
+      PORT: "7080"
+      CORE_URL: http://bargames-core:7100
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      # LAN, out of the box: http://<box IP>/ opens the admin console (first-run setup,
+      # then login). 7080 stays for the broker's Chromium and development.
+      - "80:7080"
+      - "7080:7080"
+    networks: [bargames]
+    depends_on:
+      core: { condition: service_healthy }
+
+  broker:
+    image: bargames:dev
+    container_name: bargames-broker
+    restart: unless-stopped
+    command: ["node", "apps/broker/dist/index.js"]
+    # Host network: SSDP/mDNS discovery and AirPlay connections from the TVs.
+    network_mode: host
+    environment:
+      PORT: "7200"
+      HOST: "0.0.0.0"
+      DATA_DIR: /data
+      BROKER_TOKEN: ${BROKER_TOKEN}
+      DRIVERS: ${DRIVERS:-roku}
+      MOCK_DISPLAYS: ${MOCK_DISPLAYS:-0}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes: ["./data/broker:/data"]
+    devices: ["/dev/dri:/dev/dri"]
+    group_add: ["${RENDER_GID:-991}"]
+    shm_size: 2gb
+
+  docker-proxy:
+    # Only the Docker API calls core needs. Core never sees the raw socket.
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: bargames-docker-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      IMAGES: 1
+      POST: 1
+      DELETE: 1
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    networks: [docker-api]
+
+  # Cloudflare Tunnel: no service here. The admin UI's Internet tab creates the tunnel
+  # and core runs cloudflared as "bargames-tunnel" on the bargames network (see
+  # docs/CLOUDFLARE.md). Don't also run a cloudflared of your own with that name.
+
+networks:
+  bargames:
+    name: bargames
+  docker-api:
+    name: bargames-docker-api
+    internal: true

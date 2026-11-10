@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Hello Game: big screen</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body class="table">
+    <!-- TV view: 10-foot text, safe margins, no interaction. -->
+    <div class="tv">
+      <header><h1 id="title">Hello Game</h1><div id="venue"></div></header>
+      <div class="big" id="status">Waiting for players…</div>
+      <footer>Join at <b id="join"></b> with code <b id="code"></b></footer>
+    </div>
+    <script type="module">
+      import { watchVenue, applyTheme, gameName, joinUrl } from "/sdk/client.js";
+
+      const code = new URLSearchParams(location.search).get("code") ?? "";
+      document.getElementById("code").textContent = code;
+      let venue = null;
+      watchVenue((ctx) => {
+        venue = ctx;
+        applyTheme(ctx, { title: true });
+        document.getElementById("title").textContent = gameName(ctx, "Hello Game");
+        document.getElementById("venue").textContent = ctx.standalone ? "" : ctx.venue.name;
+        document.getElementById("join").textContent = new URL(joinUrl(ctx, "/")).host;
+      });
+
+      async function tick() {
+        const r = await fetch(`/api/rooms/${code}`).then((r) => (r.ok ? r.json() : null));
+        document.getElementById("status").textContent = !r
+          ? "Room not found"
+          : r.phase === "playing"
+            ? `Round ${r.round}: go!`
+            : r.winner
+              ? `🏆 ${r.winner} wins round ${r.round}`
+              : `${r.players.length} player(s) ready`;
+      }
+      tick();
+      setInterval(tick, 1000);
+    </script>
+  </body>
+</html>

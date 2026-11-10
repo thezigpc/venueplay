@@ -1,0 +1,24 @@
+/* Uses the venue variables from @bargames/sdk, with fallbacks for standalone use. */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--venue-bg, #101528);
+  color: var(--venue-text, #f4f6ff);
+  font-family: var(--venue-font, system-ui, sans-serif);
+}
+main { max-width: 440px; margin: 0 auto; padding: 24px 16px; }
+.card { background: var(--venue-surface, #1c2346); border-radius: var(--venue-radius, 12px); padding: 16px; margin-top: 16px; display: grid; gap: 10px; }
+input { font-size: 1.1rem; padding: 12px; border-radius: 8px; border: 0; }
+button { font-size: 1.05rem; padding: 12px; border: 0; border-radius: 8px; font-weight: 700; background: var(--venue-primary, #f2b33d); color: #111; }
+a { color: var(--venue-accent, #4cc9f0); }
+.or { text-align: center; opacity: 0.7; margin: 4px 0; }
+
+/* Big screen: designed for 1080p TVs viewed from across a room. */
+body.table { overflow: hidden; }
+.tv { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; padding: 4vh 5vw; }
+.tv header { display: flex; justify-content: space-between; align-items: baseline; }
+.tv h1 { font-size: 5vh; margin: 0; color: var(--venue-primary, #f2b33d); }
+.tv #venue { font-size: 3vh; opacity: 0.8; }
+.tv .big { display: grid; place-items: center; font-size: 9vh; font-weight: 800; text-align: center; }
+.tv footer { font-size: 3.5vh; text-align: center; border-top: 4px solid var(--venue-accent, #4cc9f0); padding-top: 2vh; }

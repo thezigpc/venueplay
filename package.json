@@ -1,0 +1,32 @@
+{
+  "name": "bargames-platform",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/sdk",
+    "packages/common",
+    "apps/core",
+    "apps/gateway",
+    "apps/broker",
+    "apps/admin",
+    "examples/hello-game"
+  ],
+  "scripts": {
+    "build": "tsc -b packages/sdk packages/common apps/core apps/gateway apps/broker examples/hello-game && npm run build -w @bargames/admin",
+    "typecheck": "tsc -b packages/sdk packages/common apps/core apps/gateway apps/broker examples/hello-game && npm run typecheck -w @bargames/admin",
+    "test": "node --import tsx --test \"packages/*/src/**/*.test.ts\" \"apps/*/src/**/*.test.ts\"",
+    "dev": "npm run build && concurrently -n core,gateway,broker,admin,hello -c blue,magenta,yellow,green,cyan \"npm run dev -w @bargames/core\" \"npm run dev -w @bargames/gateway\" \"npm run dev -w @bargames/broker\" \"npm run dev -w @bargames/admin\" \"npm run dev -w hello-game\"",
+    "seed:dev": "node scripts/seed-dev.mjs",
+    "sdk:pack": "tsc -b packages/sdk && npm pack -w @bargames/sdk --pack-destination integration"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "esbuild@0.21.5": true
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.5",
+    "concurrently": "^9.0.1",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3"
+  }
+}

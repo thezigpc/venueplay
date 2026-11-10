@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Hello Game</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main>
+      <h1 id="title">Hello Game</h1>
+      <p id="tagline"></p>
+      <section class="card">
+        <button id="create">Create a room</button>
+        <p class="or">or join one</p>
+        <input id="code" placeholder="Room code" maxlength="4" autocapitalize="characters" />
+        <input id="name" placeholder="Your name" maxlength="20" />
+        <button id="join">Join</button>
+      </section>
+      <section class="card" id="room" hidden>
+        <h2>Room <span id="room-code"></span></h2>
+        <p id="room-info"></p>
+        <a id="table-link" target="_blank">Open the big screen</a>
+        <button id="start">Start round</button>
+        <button id="win">I won!</button>
+      </section>
+    </main>
+    <script type="module">
+      import { getVenue, applyTheme, gameName } from "/sdk/client.js";
+
+      const venue = await getVenue();
+      if (venue) {
+        applyTheme(venue, { title: true });
+        document.getElementById("title").textContent = gameName(venue, "Hello Game");
+        document.getElementById("tagline").textContent = venue.game.tagline ?? "";
+      }
+
+      const $ = (id) => document.getElementById(id);
+      const post = (url, body) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) }).then((r) => r.json());
+      let code = new URLSearchParams(location.search).get("code");
+
+      async function enter(c) {
+        code = c;
+        await post(`/api/rooms/${code}/join`, { name: $("name").value });
+        $("room").hidden = false;
+        $("room-code").textContent = code;
+        $("table-link").href = `/table?code=${code}`;
+        refresh();
+      }
+      async function refresh() {
+        if (!code) return;
+        const r = await fetch(`/api/rooms/${code}`).then((r) => r.json());
+        $("room-info").textContent = `${r.players.length} player(s) · round ${r.round} · ${r.phase}${r.winner ? ` · last winner: ${r.winner}` : ""}`;
+      }
+      $("create").onclick = async () => enter((await post("/api/rooms", { kind: "patron" })).code);
+      $("join").onclick = () => enter($("code").value.trim().toUpperCase());
+      $("start").onclick = () => post(`/api/rooms/${code}/start`).then(refresh);
+      $("win").onclick = () => post(`/api/rooms/${code}/win`, { name: $("name").value || "Someone" }).then(refresh);
+      setInterval(refresh, 2000);
+      if (code) enter(code);
+    </script>
+  </body>
+</html>

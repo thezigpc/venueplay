@@ -1,0 +1,21 @@
+{
+  "id": "bingo",
+  "name": "Bingo",
+  "version": "1.0.0",
+  "image": "bargames/bingo:1.0.0",
+  "port": 3002,
+  "sdk": { "version": "0.1.0", "level": 3 },
+  "routes": {
+    "player": "/",
+    "table": "/join/{code}?as=table",
+    "host": "/"
+  },
+  "health": "/health",
+  "events": ["room_created", "room_closed", "players_changed", "round_started", "claim_pending", "winner", "game_over"],
+  "commands": ["start", "pause", "resume", "next_round", "end"],
+  "brandable": ["displayName", "tagline", "accent"],
+  "sessionKinds": ["venue", "patron", "private"],
+  "resources": { "memory": "256m", "cpus": 1 },
+  "network": { "internet": false },
+  "env": { "DATA_DIR": "/data" }
+}

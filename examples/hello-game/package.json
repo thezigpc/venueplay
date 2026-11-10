@@ -1,0 +1,20 @@
+{
+  "name": "hello-game",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reference game for @bargames/sdk at integration level 3.",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "validate": "bargames validate ."
+  },
+  "dependencies": {
+    "@bargames/sdk": "*",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21"
+  }
+}

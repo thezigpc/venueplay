@@ -1,0 +1,19 @@
+{
+  "name": "@bargames/broker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "discover": "tsx src/tools/discover.ts"
+  },
+  "dependencies": {
+    "@bargames/common": "*",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21"
+  }
+}

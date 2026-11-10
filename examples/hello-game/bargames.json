@@ -1,0 +1,18 @@
+{
+  "id": "hello",
+  "name": "Hello Game",
+  "version": "0.1.0",
+  "description": "Reference game: rooms, a big-screen view, events and commands.",
+  "author": "Bar Games",
+  "image": "ghcr.io/OWNER/hello-game:0.1.0",
+  "port": 7300,
+  "sdk": { "version": "0.1.0", "level": 3 },
+  "routes": { "player": "/", "table": "/table?code={code}", "host": "/?host=1" },
+  "health": "/health",
+  "events": ["room_created", "players_changed", "round_started", "winner", "game_over"],
+  "commands": ["start", "end"],
+  "brandable": ["displayName", "tagline", "accent"],
+  "sessionKinds": ["venue", "patron", "private"],
+  "resources": { "memory": "128m", "cpus": 0.25 },
+  "network": { "internet": false }
+}
