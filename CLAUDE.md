@@ -2,6 +2,8 @@
 
 Plan: GAMEPLAN.md · Vision: VISION.md · SDK guide: docs/SDK.md · Overview: README.md
 
+Repo: https://github.com/thezigpc/venueplay (private, branch `main`). Commits use the user's GitHub no-reply email (repo-local git config). The product and code are still called "Bar Games" (`@bargames/*`); only the repo is named venueplay.
+
 ## Conventions
 - npm workspaces, TypeScript (NodeNext), Express 4, React 18 + Vite 5, Node 22 images. These match the user's other games (Bingo, CAH, Pool).
 - Tests use `node:test` through tsx (`npm test`). Every package has `src/*.test.ts`.
