@@ -42,7 +42,7 @@ export class RokuDriver implements DisplayDriver {
       address: base,
       model: `${info.modelName} ${info.modelNumber}`.trim(),
       isTv: info.isTv,
-      meta: { softwareVersion: info.softwareVersion, supportsAirplay: info.supportsAirplay, developerEnabled: info.developerEnabled, networkType: info.networkType },
+      meta: { softwareVersion: info.softwareVersion, supportsAirplay: info.supportsAirplay, developerEnabled: info.developerEnabled, networkType: info.networkType, supportsSuspend: info.supportsSuspend },
     };
   }
 
@@ -53,12 +53,15 @@ export class RokuDriver implements DisplayDriver {
     if (device.meta?.developerEnabled) delivery.push("roku-hls");
     return {
       delivery,
-      power: true,
+      // ECP PowerOn/PowerOff only work on Roku TVs and players that can sleep. An Express
+      // or Stick accepts the keypress and ignores it, so don't offer a button that can't work.
+      power: Boolean(device.isTv || device.meta?.supportsSuspend),
       inputs: device.isTv ? ["hdmi1", "hdmi2", "hdmi3", "hdmi4", "tuner"] : [],
     };
   }
 
   async power(device: DisplayDevice, on: boolean): Promise<void> {
+    if (!(await this.capabilities(device)).power) throw new Error(`${device.name} is a Roku player that can't be switched off over the network; switch the TV itself (its own remote or HDMI-CEC)`);
     const ecp = this.ecp(device);
     await (on ? ecp.powerOn() : ecp.powerOff());
   }

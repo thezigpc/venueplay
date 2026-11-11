@@ -73,11 +73,13 @@ export class DisplayRegistry {
         }
       }),
     );
-    await this.merge(found);
-    return { found: found.length, errors };
+    const kept = dropAirplayDuplicates(found, this.list());
+    await this.merge(kept);
+    return { found: kept.length, errors };
   }
 
   async merge(found: DisplayDevice[]): Promise<void> {
+    found = dropAirplayDuplicates(found, this.list());
     const now = new Date().toISOString();
     await this.store.update((s) => {
       for (const dev of found) {
@@ -120,7 +122,7 @@ export class DisplayRegistry {
           const drv = this.driverFor(d);
           const delivery = d.delivery ?? (await drv.capabilities(d)).delivery[0];
           if (!delivery) return void (results[d.id] = { ok: false, message: "no delivery method available" });
-          results[d.id] = await drv.show(d, content, delivery);
+          results[d.id] = await drv.show(d, playable(content), delivery);
           if (results[d.id].ok) await this.setContent(d.id, content);
         } catch (err) {
           results[d.id] = { ok: false, message: String(err) };
@@ -152,7 +154,7 @@ export class DisplayRegistry {
     setTimeout(() => {
       const d = this.get(id);
       if (!d) return;
-      const back = d.content?.kind === "url" ? this.show({ displayIds: [id] }, d.content) : this.driverFor(d).stop(d);
+      const back = d.content && playable(d.content).kind === "url" ? this.show({ displayIds: [id] }, d.content) : this.driverFor(d).stop(d);
       void Promise.resolve(back).catch(() => undefined);
     }, 8000).unref?.();
   }
@@ -160,7 +162,7 @@ export class DisplayRegistry {
   /** After a restart: put every TV back on what it was showing. */
   async resume(): Promise<void> {
     for (const d of this.list()) {
-      if (d.content?.kind === "url") await this.show({ displayIds: [d.id] }, d.content).catch(() => undefined);
+      if (d.content && playable(d.content).kind === "url") await this.show({ displayIds: [d.id] }, d.content).catch(() => undefined);
     }
   }
 
@@ -169,4 +171,26 @@ export class DisplayRegistry {
       s.displays = s.displays.map((d) => (d.id === id ? { ...d, content } : d));
     });
   }
+}
+
+const hostOf = (address: string): string | undefined => {
+  try {
+    return new URL(address).hostname;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Rokus (and future native drivers) also advertise AirPlay. Keep the richer driver:
+ * drop "airplay" devices whose IP belongs to a non-AirPlay display, found now or known.
+ */
+export function dropAirplayDuplicates(found: DisplayDevice[], known: DisplayDevice[]): DisplayDevice[] {
+  const native = new Set([...found, ...known].filter((d) => d.driver !== "airplay").map((d) => hostOf(d.address)));
+  return found.filter((d) => d.driver !== "airplay" || !native.has(hostOf(d.address)));
+}
+
+/** Drivers only stream pages: an idle screen with a page is streamed like any URL. */
+export function playable(content: DisplayContent): DisplayContent {
+  return content.kind === "idle" && content.url ? { kind: "url", url: content.url, title: content.title ?? "Idle" } : content;
 }

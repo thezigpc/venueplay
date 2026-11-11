@@ -28,6 +28,14 @@ export async function displayName(fallback: string): Promise<string> {
   return onBox ? (await bg.venue()).game.displayName : fallback;
 }
 
+/**
+ * Room link for QR codes and "join" text. On a box: the venue's address for this game
+ * (follows a subdomain rename). Off a box: the game's own link, exactly as before.
+ */
+export async function roomLink(code: string, ownLink: () => string): Promise<string> {
+  return (await bg.publicUrl(`/join/${encodeURIComponent(code)}`)) ?? ownLink(); // ← the game's join path
+}
+
 // ---------------------------------------------------------------- level 3 (adapt)
 // Register commands once the RoomManager exists, e.g. from index.ts:
 //
@@ -62,6 +70,8 @@ export async function displayName(fallback: string): Promise<string> {
 //       phase: r.phase,             // e.g. "lobby" | "playing"
 //       title: r.title,
 //       hostConnected: r.hostConnected,
+//       createdAt: r.createdAt, lastActivityAt: r.lastActivityAt,   // SDK 0.3.0: Rooms page
+//       tables: r.tableCount, maxPlayers: MAX_PLAYERS, hostName: r.host?.name,
 //       pendingClaims: r.pendingClaims.map((c) => ({ id: c.id, player: c.name, detail: c.summary, at: c.at })),
 //     })),
 //   }));

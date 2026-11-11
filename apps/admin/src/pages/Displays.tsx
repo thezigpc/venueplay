@@ -6,6 +6,7 @@ export function DisplaysPage() {
   const displays = useLoad(api.displays, 10_000);
   const { busy, run } = useAction(displays.reload, displays.setError);
   const [host, setHost] = useState("");
+  const [kind, setKind] = useState<"roku" | "airplay">("roku");
   const [note, setNote] = useState("");
 
   return (
@@ -25,8 +26,12 @@ export function DisplaysPage() {
           >
             Find TVs
           </button>
-          <input placeholder="Add Roku by IP" value={host} onChange={(e) => setHost(e.target.value)} />
-          <button disabled={!host || busy} onClick={() => run(() => api.addRoku(host).then(() => setHost("")))}>
+          <select value={kind} onChange={(e) => setKind(e.target.value as "roku" | "airplay")}>
+            <option value="roku">Roku</option>
+            <option value="airplay">AirPlay (Apple TV, AirPlay TV)</option>
+          </select>
+          <input placeholder="Add by IP" value={host} onChange={(e) => setHost(e.target.value)} />
+          <button disabled={!host || busy} onClick={() => run(() => (kind === "roku" ? api.addRoku(host) : api.addAirplay(host)).then(() => setHost("")))}>
             Add
           </button>
         </div>
@@ -62,7 +67,7 @@ function DisplayCard({ d, busy, run, reload }: { d: Display; busy: boolean; run:
         <span className={`dot ${online ? (stream?.state === "streaming" ? "on" : stream ? "warn" : "on") : "off"}`} /> {d.label || d.name}
       </h2>
       <p className="muted">
-        {d.model} · {d.isTv ? "TV" : "player"} · {d.health?.powerMode ?? (online ? "online" : "offline")}
+        {d.driver === "airplay" ? `AirPlay${d.model ? ` · ${d.model}` : ""}` : `${d.model} · ${d.isTv ? "TV" : "player"}`} · {d.health?.powerMode ?? (online ? "online" : "offline")}
       </p>
       {stream ? (
         <p className="muted">

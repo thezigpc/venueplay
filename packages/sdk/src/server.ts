@@ -53,6 +53,12 @@ export interface BarGames {
   /** True on a box (core URL and token present). Off a box every call is a no-op. */
   readonly connected: boolean;
   venue(): Promise<VenueContext>;
+  /**
+   * An absolute link on the venue's address for this game, e.g. publicUrl(`/join/${code}`)
+   * for a room QR. On a box it follows the venue's subdomain (also after a rename).
+   * Off a box: undefined, so keep building the link the way the game always has.
+   */
+  publicUrl(path: string): Promise<string | undefined>;
   /** Fire-and-forget; queued and retried briefly if the box is busy. */
   emit<T extends Record<string, unknown>>(event: GameEventInput<T>): void;
   onCommand(name: string, handler: CommandHandler): void;
@@ -261,6 +267,11 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
     gameId,
     connected,
     venue,
+    publicUrl: async (path) => {
+      if (!connected) return undefined;
+      const base = (await venue()).game.publicUrl;
+      return base ? new URL(path, base).toString() : undefined;
+    },
     emit,
     onCommand: (name, handler) => void commands.set(name, handler),
     displays: async () => {

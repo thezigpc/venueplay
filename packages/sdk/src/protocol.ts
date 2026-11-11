@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.2.1";
+export const SDK_VERSION = "0.3.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -216,6 +216,16 @@ export interface RoomSummary {
   hostConnected?: boolean;
   /** Claims waiting for a decision. Games with confirm_claim / reject_claim should list them. */
   pendingClaims?: PendingClaim[];
+  /** ISO time the room opened (bird's-eye view: "Opened 20 min ago"). */
+  createdAt?: string;
+  /** ISO time of the last player or host action. */
+  lastActivityAt?: string;
+  /** Table/TV clients connected to the room right now. */
+  tables?: number;
+  /** The room's player cap, if it has one. */
+  maxPlayers?: number;
+  /** The host's display name, if the room has a host. */
+  hostName?: string;
 }
 
 export interface GameStatus {

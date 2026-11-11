@@ -22,10 +22,12 @@ import type { CloudflareService } from "./cloudflare/service.js";
 import type { EventBus } from "./events.js";
 import { GameRegistry, HttpError } from "./games.js";
 import { certificateWarning, checkPattern, hostFor } from "./hostnames.js";
+import { idleScreenUrl } from "./idleScreen.js";
 import { fetchManifest } from "./manifestSource.js";
+import { TvWatch } from "./tvWatch.js";
 import type { GameRuntime } from "./runtime/types.js";
 import type { AccessSettings, CastSettings, InstalledGame, State, VenueSettings } from "./state.js";
-import { allHosts, buildContext, buildGatewayConfig, gameHost, gameTarget } from "./venue.js";
+import { allHosts, buildContext, buildGatewayConfig, gameHost, gameTarget, venueInfo } from "./venue.js";
 
 export interface AppDeps {
   state: State;
@@ -93,6 +95,9 @@ export function createApp(d: AppDeps) {
         gameId: game.id,
         at: new Date().toISOString(),
       });
+      if (body.type === "room_closed" && typeof body.roomCode === "string") {
+        void tvWatch.roomClosed(game.id, body.roomCode).catch((err) => d.log.warn("tvwatch", "room_closed handling failed", { err: String(err) }));
+      }
       res.status(204).end();
     }),
   );
@@ -133,6 +138,26 @@ export function createApp(d: AppDeps) {
       return undefined;
     }
   };
+
+  const gameStatusOf = async (game: InstalledGame): Promise<GameStatus | undefined> => {
+    if (game.manifest.sdk.level < 2) return undefined;
+    const r = await doFetch(`${gameTarget(game)}/__bargames/status`, { headers: { authorization: `Bearer ${game.token}` }, signal: AbortSignal.timeout(3000) });
+    return r.ok ? ((await r.json()) as GameStatus) : undefined;
+  };
+  const idleContent = async () => {
+    const venue = d.state.venue.get();
+    const names = d.games.list().filter((g) => g.enabled).map((g) => buildContext(venue, g).game.displayName);
+    return { kind: "idle" as const, title: "Idle", url: await idleScreenUrl({ venue: venueInfo(venue), games: names }) };
+  };
+  const tvWatch = new TvWatch({
+    games: () => d.games.list(),
+    roomOf,
+    status: gameStatusOf,
+    displays: async () => (await brokerCall("GET", "/displays")) as BrokerDisplay[],
+    show: (displayIds, content) => brokerCall("POST", "/show", { displayIds, content }),
+    idle: idleContent,
+    log: d.log,
+  });
 
   app.get(
     "/internal/displays",
@@ -444,7 +469,7 @@ export function createApp(d: AppDeps) {
   app.post(
     "/api/games/install",
     h(async (req, res) => {
-      const { url, manifest, devTarget } = req.body as { url?: string; manifest?: unknown; devTarget?: string };
+      const { url, manifest, devTarget, hostnameAlias } = req.body as { url?: string; manifest?: unknown; devTarget?: string; hostnameAlias?: string };
       let installed;
       let warnings: string[] = [];
       if (url) {
@@ -459,6 +484,14 @@ export function createApp(d: AppDeps) {
         warnings = r.warnings;
         installed = await d.games.install({ manifest: r.manifest, source: { kind: "local", ref: "upload" }, verified: false, devTarget });
       } else throw new HttpError(400, "send { url } or { manifest }");
+      // Optional subdomain chosen at install. A clash or bad label keeps the default and says why.
+      if (typeof hostnameAlias === "string" && hostnameAlias.trim() && hostnameAlias.trim().toLowerCase() !== (installed.game.hostnameAlias ?? installed.game.id)) {
+        try {
+          installed = { ...installed, game: await d.games.patch(installed.game.id, { hostnameAlias }) };
+        } catch (e) {
+          warnings = [...warnings, `Subdomain not set: ${(e as Error).message}`];
+        }
+      }
       d.log.info("games", installed.upgraded ? "upgraded" : "installed", { game: installed.game.id, version: installed.game.manifest.version });
       res.json({ game: await gameView(installed.game), upgraded: installed.upgraded, warnings });
     }),
@@ -469,7 +502,10 @@ export function createApp(d: AppDeps) {
     h(async (req, res) => {
       const game = await d.games.patch(req.params.id, req.body ?? {});
       if (req.body?.enabled === true) await d.runtime.ensureRunning(game);
-      if (req.body?.enabled === false) await d.runtime.stop(game.id);
+      if (req.body?.enabled === false) {
+        await tvWatch.gameGone(game.id).catch(() => undefined);
+        await d.runtime.stop(game.id);
+      }
       res.json(await gameView(game));
     }),
   );
@@ -478,6 +514,7 @@ export function createApp(d: AppDeps) {
     "/api/games/:id",
     h(async (req, res) => {
       const keepData = req.query.keepData !== "false";
+      await tvWatch.gameGone(req.params.id).catch(() => undefined);
       await d.runtime.remove(req.params.id, { keepData });
       res.json({ removed: await d.games.remove(req.params.id) });
     }),
@@ -578,6 +615,47 @@ export function createApp(d: AppDeps) {
     return json;
   }
 
+  /**
+   * Bird's-eye view: every room of every game that's on, with the TVs showing it.
+   * A game whose status can't be read is listed with its error instead of rooms.
+   */
+  app.get(
+    "/api/rooms",
+    h(async (_req, res) => {
+      const venue = d.state.venue.get();
+      const games = d.games.list().filter((g) => g.enabled && g.manifest.sdk.level >= 2);
+      const displays = ((await brokerCall("GET", "/displays").catch(() => [])) as BrokerDisplay[]) ?? [];
+      const out = await Promise.all(
+        games.map(async (game) => {
+          const ctx = buildContext(venue, game);
+          const base = { id: game.id, name: ctx.game.displayName, publicUrl: ctx.game.publicUrl, commands: game.manifest.sdk.level >= 3 ? game.manifest.commands : [] };
+          try {
+            const st = await gameStatusOf(game);
+            if (!st) return { ...base, rooms: [], error: "status unavailable" };
+            const rooms = (st.rooms ?? []).map((r) => ({
+              ...r,
+              tvs: displays.filter((x) => x.content?.kind === "url" && roomOf(game, x.content.url) === r.code).map((x) => ({ id: x.id, name: x.label || x.name })),
+            }));
+            return { ...base, rooms };
+          } catch (err) {
+            return { ...base, rooms: [], error: err instanceof Error ? err.message : String(err) };
+          }
+        }),
+      );
+      res.json({ games: out, at: new Date().toISOString() });
+    }),
+  );
+
+  /** Puts TVs on the venue idle screen: { displayIds?, group? } (none: every TV). */
+  app.post(
+    "/api/tvs/idle",
+    h(async (req, res) => {
+      const { displayIds, group } = (req.body ?? {}) as { displayIds?: string[]; group?: string };
+      const ids = displayIds?.length || group ? displayIds : ((await brokerCall("GET", "/displays")) as { id: string }[]).map((x) => x.id);
+      res.json(await brokerCall("POST", "/show", { displayIds: ids, group, content: await idleContent() }));
+    }),
+  );
+
   app.all(
     "/api/broker/*",
     h(async (req, res) => {
@@ -607,6 +685,7 @@ export function createApp(d: AppDeps) {
     res.status(status).json({ error: err instanceof Error ? err.message : "error" });
   });
 
+  app.locals.tvWatch = tvWatch;
   return app;
 }
 

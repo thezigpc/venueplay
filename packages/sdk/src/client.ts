@@ -81,4 +81,66 @@ export function joinUrl(ctx: VenueContext | null, path: string): string {
   return new URL(path, base).toString();
 }
 
+export type TableState = "connected" | "reconnecting" | "closed";
+
+export interface TableModeController {
+  /** Show the standard banner: "reconnecting" (top strip) or "closed" (full screen). */
+  setState(state: TableState, message?: string): void;
+  /** Undo everything tableMode did. */
+  stop(): void;
+}
+
+const NOOP: TableModeController = { setState: () => undefined, stop: () => undefined };
+
+/**
+ * For the table (TV) view. On a box it:
+ *  - hides the mouse pointer (nobody can use one on a cast TV);
+ *  - keeps the screen awake (Wake Lock, re-taken when the page becomes visible);
+ *  - sets --bg-safe-x / --bg-safe-y (5% margins) for your layout;
+ *  - gives you a standard "Reconnecting…" strip and "Room closed" screen via setState().
+ * Off a box it does nothing and setState is a no-op (rule 1), unless always: true.
+ */
+export function tableMode(ctx: VenueContext | null | undefined, opts: { always?: boolean; doc?: Document } = {}): TableModeController {
+  if (!isOnBox(ctx) && !opts.always) return NOOP;
+  const doc = opts.doc ?? document;
+  const style = doc.createElement("style");
+  style.dataset.bargames = "table";
+  style.textContent = [
+    ":root{--bg-safe-x:5vw;--bg-safe-y:5vh}",
+    "html,body,*{cursor:none!important}",
+    "#bargames-table-banner{position:fixed;z-index:2147483647;left:0;right:0;font:600 3.2vh/1.3 system-ui,sans-serif;text-align:center;color:#fff;pointer-events:none}",
+    "#bargames-table-banner[data-state=reconnecting]{top:0;padding:1.2vh;background:rgba(180,90,0,.92)}",
+    "#bargames-table-banner[data-state=closed]{inset:0;display:flex;align-items:center;justify-content:center;font-size:6vh;background:var(--venue-bg,#101528)}",
+  ].join("\n");
+  doc.head.appendChild(style);
+  const banner = doc.createElement("div");
+  banner.id = "bargames-table-banner";
+  banner.hidden = true;
+  doc.body.appendChild(banner);
+
+  type Sentinel = { release(): Promise<void> };
+  let lock: Sentinel | undefined;
+  const nav = (doc.defaultView?.navigator ?? (globalThis as { navigator?: Navigator }).navigator) as (Navigator & { wakeLock?: { request(t: "screen"): Promise<Sentinel> } }) | undefined;
+  const wake = () => {
+    if (doc.visibilityState !== "visible" || !nav?.wakeLock) return;
+    nav.wakeLock.request("screen").then((l) => (lock = l), () => undefined);
+  };
+  wake();
+  doc.addEventListener("visibilitychange", wake);
+
+  return {
+    setState(state, message) {
+      banner.hidden = state === "connected";
+      banner.dataset.state = state;
+      banner.textContent = state === "connected" ? "" : (message ?? (state === "reconnecting" ? "Reconnecting…" : "This room has closed"));
+    },
+    stop() {
+      doc.removeEventListener("visibilitychange", wake);
+      void lock?.release().catch(() => undefined);
+      style.remove();
+      banner.remove();
+    },
+  };
+}
+
 export type { VenueContext } from "./protocol.js";

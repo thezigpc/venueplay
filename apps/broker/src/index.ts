@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBrokerApp } from "./app.js";
 import { MockDriver } from "./drivers/mock.js";
+import { AirplayDriver } from "./drivers/airplay/index.js";
 import { RokuDriver } from "./drivers/roku/index.js";
 import { DisplayRegistry, type DisplayRecord } from "./registry.js";
 import { AirplayStreams } from "./airplay.js";
@@ -39,15 +40,17 @@ const airplay = airplayReady
   : undefined;
 const streams: StreamService = airplay ?? new PendingStreamService();
 const drivers = new Map<string, DisplayDriver>();
-const enabled = (process.env.DRIVERS ?? "roku").split(",").map((s) => s.trim());
+const enabled = (process.env.DRIVERS ?? "roku,airplay").split(",").map((s) => s.trim());
 const roku = enabled.includes("roku") ? new RokuDriver(streams) : undefined;
 if (roku) drivers.set(roku.id, roku);
+const airplayDriver = enabled.includes("airplay") ? new AirplayDriver(streams) : undefined;
+if (airplayDriver) drivers.set(airplayDriver.id, airplayDriver);
 const mockCount = envNum("MOCK_DISPLAYS", 0);
 if (mockCount) drivers.set("mock", new MockDriver(mockCount));
 
 const registry = new DisplayRegistry(new JsonStore<{ displays: DisplayRecord[] }>(path.join(dataDir, "displays.json"), { displays: [] }), drivers);
 
-createBrokerApp({ registry, roku, token, log }).listen(port, host, () => {
+createBrokerApp({ registry, roku, airplay: airplayDriver, token, log }).listen(port, host, () => {
   log.info("boot", "listening", { port, host, drivers: [...drivers.keys()], airplay: Boolean(airplay) });
   if (mockCount) void registry.discover();
   if (airplay) {

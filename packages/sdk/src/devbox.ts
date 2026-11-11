@@ -72,10 +72,12 @@ export interface MockBoxOptions {
 }
 
 /** The mock box's pretend venue TVs. */
-export const FAKE_TVS = [
+export const FAKE_TVS: readonly { id: string; name: string; group: string; unpaired?: boolean }[] = [
   { id: "fake-bar", name: "Bar (fake TV)", group: "Main room" },
   { id: "fake-patio", name: "Patio (fake TV)", group: "Patio" },
-] as const;
+  // Answers like a TV the venue hasn't paired yet, so games can test that message.
+  { id: "fake-unpaired", name: "Lounge (fake TV, not paired)", group: "Main room", unpaired: true },
+];
 
 export function mockBox(o: MockBoxOptions) {
   const publicUrl = `http://localhost:${o.gatewayPort}`;
@@ -147,8 +149,14 @@ export function mockBox(o: MockBoxOptions) {
       }
       const url = new URL(tableUrl(o.manifest, room)!, publicUrl).toString();
       for (const id of ids) {
-        if (!FAKE_TVS.some((t) => t.id === id)) {
+        const tv = FAKE_TVS.find((t) => t.id === id);
+        if (!tv) {
           results[id] = { ok: false, message: "no such TV" };
+          continue;
+        }
+        if (tv.unpaired) {
+          (results as Record<string, { ok: boolean; message?: string; needsCode?: boolean }>)[id] = { ok: false, needsCode: true, message: `${tv.name} is showing an AirPlay code. Enter it under TVs (needed once per TV).` };
+          console.log(`${c.warn("TV needs pairing")} ${id} (what an unpaired TV answers)`);
           continue;
         }
         showing.set(id, room);
@@ -241,7 +249,7 @@ export async function callGame(gameUrl: string, p: string, body?: unknown, token
  * Conformance checks against a running game started with the mock-box env
  * (BG_CORE_URL, BG_GAME_TOKEN=dev-token). Returns false if any check failed.
  */
-export async function check(manifest: GameManifest, gameUrl: string): Promise<boolean> {
+export async function check(manifest: GameManifest, gameUrl: string, opts: { room?: string } = {}): Promise<boolean> {
   let failed = 0;
   const pass = (m: string) => console.log(`${c.ok("✓")} ${m}`);
   const fail = (m: string, hint?: string) => {
@@ -271,6 +279,11 @@ export async function check(manifest: GameManifest, gameUrl: string): Promise<bo
   }
 
   if (level >= 2 && manifest.events.length === 0) warn(`level ${level} but "events" is empty in bargames.json`);
+  if (level >= 2 && manifest.routes.table) {
+    manifest.events.includes("room_closed")
+      ? pass(`"room_closed" declared (the box takes a closed room off the TVs at once)`)
+      : fail(`"room_closed" isn't in bargames.json "events"`, "castable games must emit it when a room closes, so the box can clear its TVs right away");
+  }
 
   if (level >= 3) {
     const anon = await callGame(gameUrl, PATHS.status, undefined, "");
@@ -325,6 +338,30 @@ export async function check(manifest: GameManifest, gameUrl: string): Promise<bo
       if (manifest.commands.includes("end")) {
         const end = await callGame(gameUrl, PATHS.command, { command: "end", roomCode: code });
         (end.body as { ok?: boolean })?.ok ? pass(`end closes ${code}`) : fail(`end ${code} → ${JSON.stringify(end.body)}`);
+        const after = await callGame(gameUrl, PATHS.status);
+        const still = ((after.body as { rooms?: { code: string }[] })?.rooms ?? []).some((x) => x.code === code);
+        still ? fail(`room ${code} is still in status after "end"`, "a closed room must leave status (and emit room_closed)") : pass(`${code} left status after "end"`);
+      }
+    }
+  }
+
+  if (opts.room) {
+    const st = await callGame(gameUrl, PATHS.status);
+    const r = ((st.body as { rooms?: Record<string, unknown>[] })?.rooms ?? []).find((x) => x.code === opts.room);
+    if (!r) fail(`--room ${opts.room}: not in status`);
+    else {
+      pass(`--room ${opts.room}: ${JSON.stringify(r)}`);
+      const claims = r.pendingClaims;
+      if (claims === undefined) warn(`--room ${opts.room}: no pendingClaims (make a claim in that room first to test them)`);
+      else if (Array.isArray(claims) && claims.every((x) => typeof (x as { id?: unknown })?.id === "string")) pass(`--room ${opts.room}: ${claims.length} pending claim(s), shape ok`);
+      else fail(`--room ${opts.room}: pendingClaims must be [{ id: string, player?, detail?, at? }]`);
+      for (const k of ["createdAt", "lastActivityAt"] as const) {
+        if (r[k] !== undefined && Number.isNaN(Date.parse(String(r[k])))) fail(`--room ${opts.room}: ${k} must be an ISO time`);
+      }
+      const table = tableUrl(manifest, opts.room);
+      if (table) {
+        const page = await callGame(gameUrl, table, undefined, "").catch(() => ({ status: 0, body: "" }));
+        page.status === 200 ? pass(`table view ${table} → 200`) : fail(`table view ${table} → ${page.status}`);
       }
     }
   }

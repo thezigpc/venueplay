@@ -37,6 +37,8 @@ export interface CtlReply {
   error?: string;
   message?: string;
   streams?: CtlStream[];
+  /** `devices`: the daemon's mDNS cache. */
+  devices?: { ip?: string; port?: number }[];
 }
 
 export interface ProcRunner {
@@ -70,10 +72,14 @@ export interface AirplayOptions {
   settleMs?: number;
   /** A TV missing from the daemon this long after connect counts as dropped (retried). */
   connectTimeoutMs?: number;
+  /** How long to wait for doubletake to discover a receiver on a non-7000 port. */
+  discoverWaitMs?: number;
 }
 
 interface Target {
   ip: string;
+  /** AirPlay port when it isn't 7000 (UxPlay picks its own). */
+  port?: number;
   name: string;
   /** Last state doubletake reported for this TV. */
   state: string;
@@ -92,6 +98,9 @@ interface Channel {
   procs: { xvfb: Proc; chrome: Proc; daemon: Proc };
   targets: Map<string, Target>;
 }
+
+/** The standard AirPlay port; receivers on other ports are reached through discovery. */
+export const AIRPLAY_PORT = 7000;
 
 const STREAMING = "streaming";
 const NEEDS_CODE = "pin_required";
@@ -142,6 +151,7 @@ export class AirplayStreams implements StreamService {
       firstPort: 60000,
       settleMs: 12_000,
       connectTimeoutMs: 30_000,
+      discoverWaitMs: 15_000,
       ...opts,
     };
   }
@@ -155,14 +165,17 @@ export class AirplayStreams implements StreamService {
 
   async startAirplay(device: DisplayDevice, content: { url: string }): Promise<ShowResult> {
     const ip = new URL(device.address).hostname;
+    // The AirPlay port comes from discovery (meta.port); a Roku's address is its ECP port, not AirPlay's.
+    const port = Number(device.meta?.port) && Number(device.meta?.port) !== AIRPLAY_PORT ? Number(device.meta?.port) : undefined;
     const ch = await this.locked(async () => {
       const current = this.member.get(device.id);
       if (current && current !== content.url) await this.leave(device.id);
       const channel = this.channels.get(content.url) ?? (await this.open(content.url));
       if (!channel.targets.has(device.id)) {
-        channel.targets.set(device.id, { ip, name: device.name, state: "connecting", since: Date.now(), failures: 0, nextRetry: 0 });
+        const t: Target = { ip, port, name: device.name, state: "connecting", since: Date.now(), failures: 0, nextRetry: 0 };
+        channel.targets.set(device.id, t);
         this.member.set(device.id, content.url);
-        await this.connect(channel, ip);
+        await this.connect(channel, t);
       }
       return channel;
     });
@@ -174,6 +187,7 @@ export class AirplayStreams implements StreamService {
     const ch = url ? this.channels.get(url) : undefined;
     const t = ch?.targets.get(device.id);
     if (!ch || !t) return { ok: false, message: `Cast something to ${device.name} first; its AirPlay code appears then.` };
+    await this.awaitDiscovered(ch, t);
     await this.o.runner.ctl(ch.socket, ["connect", t.ip, code]);
     return this.settle(ch, device.id);
   }
@@ -278,11 +292,29 @@ export class AirplayStreams implements StreamService {
     if (ch.targets.size === 0) this.close(ch);
   }
 
-  private async connect(ch: Channel, ip: string): Promise<void> {
-    const r = await this.o.runner.ctl(ch.socket, ["connect", ip]).catch((err: Error) => ({ ok: false, error: err.message }) as CtlReply);
-    if (!r.ok) {
-      for (const t of ch.targets.values()) if (t.ip === ip) Object.assign(t, { state: "error", detail: r.error ?? r.message });
+  /**
+   * doubletake-ctl can't pass a port: the daemon uses the port from its own mDNS cache
+   * for a known IP, else 7000. For a receiver on another port, wait until the daemon
+   * has discovered it (its scan runs every few seconds).
+   */
+  private async awaitDiscovered(ch: Channel, t: Target): Promise<void> {
+    if (!t.port) return;
+    const deadline = Date.now() + this.o.discoverWaitMs;
+    for (;;) {
+      const r = await this.o.runner.ctl(ch.socket, ["devices"]).catch(() => undefined);
+      if (r?.devices?.some((d) => d.ip === t.ip)) return;
+      if (Date.now() >= deadline) {
+        this.o.log.warn("airplay", "receiver not in doubletake's discovery; connecting on 7000", { tv: t.name, ip: t.ip, port: t.port });
+        return;
+      }
+      await this.o.runner.sleep(500);
     }
+  }
+
+  private async connect(ch: Channel, t: Target): Promise<void> {
+    await this.awaitDiscovered(ch, t);
+    const r = await this.o.runner.ctl(ch.socket, ["connect", t.ip]).catch((err: Error) => ({ ok: false, error: err.message }) as CtlReply);
+    if (!r.ok) Object.assign(t, { state: "error", detail: r.error ?? r.message });
   }
 
   /** Refreshes target states from the daemon. */
@@ -330,7 +362,7 @@ export class AirplayStreams implements StreamService {
         for (const [id, t] of targets) {
           fresh.targets.set(id, { ...t, state: "connecting", since: Date.now() });
           this.member.set(id, ch.url);
-          await this.connect(fresh, t.ip);
+          await this.connect(fresh, fresh.targets.get(id)!);
         }
         continue;
       }
@@ -345,7 +377,7 @@ export class AirplayStreams implements StreamService {
         this.o.log.info("airplay", "reconnecting", { tv: t.name, ip: t.ip, attempt: t.failures });
         t.state = "connecting";
         t.since = now;
-        await this.connect(ch, t.ip);
+        await this.connect(ch, t);
       }
     }
   }

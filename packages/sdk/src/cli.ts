@@ -5,7 +5,7 @@
 //   bargames mock-box [dir] [--game URL] [--port N] [--core-port N] [--name S] [--tv-pin N] [--no-cast]
 //   bargames command <name> [--room CODE] [--args JSON] [--game URL]
 //   bargames status [--game URL]
-//   bargames check [dir] [--game URL]
+//   bargames check [dir] [--game URL] [--room CODE]
 
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -94,7 +94,7 @@ switch (cmd) {
   3. In another terminal, from the game repo:
        npx bargames check     npx bargames status     npx bargames command start --room ABCD
 
-  4. Two fake TVs ("fake-bar", "fake-patio") answer bg.displays() / bg.cast()${tvPin ? `, TV PIN ${tvPin}` : ", no TV PIN (try --tv-pin 1234)"}.
+  4. Fake TVs ("fake-bar", "fake-patio", and "fake-unpaired", which answers like an unpaired TV) answer bg.displays() / bg.cast()${tvPin ? `, TV PIN ${tvPin}` : ", no TV PIN (try --tv-pin 1234)"}.
      Each cast prints the table URL: open it to see what that TV would show.
 
 Events and casts from your game print below (✗ = would be rejected, or isn't declared in bargames.json).
@@ -126,7 +126,7 @@ Events and casts from your game print below (✗ = would be rejected, or isn't d
       console.error(`✗ no valid ${MANIFEST_FILE} in ${target} (run: bargames validate ${target})`);
       process.exit(1);
     }
-    process.exit((await check(m, gameUrlFor(m.port))) ? 0 : 1);
+    process.exit((await check(m, gameUrlFor(m.port), { room: flags.room })) ? 0 : 1);
     break;
   }
   default:
@@ -138,9 +138,13 @@ Events and casts from your game print below (✗ = would be rejected, or isn't d
                                  --tv-pin 1234: require a TV PIN for casting · --no-cast: casting turned off
       [--game http://127.0.0.1:PORT] [--port 7080] [--core-port 7199] [--name "Display Name"]
   bargames check [dir]           conformance checks against your running game
+      [--room CODE]              also check one live room (its pendingClaims, times, table view)
   bargames status                room status, as the box's iPad sees it
-  bargames command <name>        send a command: start, pause, resume, next_round, end
-      [--room CODE] [--args '{"k":1}']
+  bargames command <name>        send a command, as the box's iPad does:
+      create_room                  --args '{"kind":"venue","title":"Friday"}'
+      start · pause · resume · next_round · end           --room CODE
+      confirm_claim · reject_claim --room CODE [--args '{"claimId":"c1","reason":"Not a line"}']
+                                   (no claimId: the room's oldest pending claim)
 
   --game defaults to http://127.0.0.1:<port from bargames.json>.`);
 }

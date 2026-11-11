@@ -5,10 +5,12 @@ import { DisplaysPage } from "./pages/Displays";
 import { GamesPage } from "./pages/Games";
 import { HomePage } from "./pages/Home";
 import { InternetPage } from "./pages/Internet";
+import { RoomsPage } from "./pages/Rooms";
 import { VenuePage } from "./pages/Venue";
 
 const TABS = [
   { id: "home", label: "Tonight" },
+  { id: "rooms", label: "Rooms" },
   { id: "games", label: "Games" },
   { id: "displays", label: "TVs" },
   { id: "venue", label: "Venue" },
@@ -56,6 +58,7 @@ export function App() {
       </nav>
       <main>
         {tab === "home" && <HomePage />}
+        {tab === "rooms" && <RoomsPage />}
         {tab === "games" && <GamesPage />}
         {tab === "displays" && <DisplaysPage />}
         {tab === "internet" && <InternetPage />}

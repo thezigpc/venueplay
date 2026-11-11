@@ -11,9 +11,11 @@
   "dependencies": {
     "@bargames/common": "*",
     "@bargames/sdk": "*",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21"
+    "@types/express": "^4.17.21",
+    "@types/qrcode": "^1.5.5"
   }
 }

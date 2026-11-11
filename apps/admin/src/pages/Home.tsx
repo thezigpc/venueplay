@@ -15,12 +15,28 @@ export function HomePage() {
   return (
     <div className="grid">
       <section className="card">
-        <h2>Games</h2>
+        <h2>
+          Games
+          {games.data?.[0]?.context.venue.playUrl && (
+            <small>
+              {" "}
+              <a href={games.data[0].context.venue.playUrl} target="_blank" rel="noreferrer">
+                Players' page ↗
+              </a>
+            </small>
+          )}
+        </h2>
         {games.error && <p className="error">{games.error}</p>}
         {(games.data ?? []).map((g) => (
           <div className="row" key={g.id}>
             <div>
-              <b>{g.context.game.displayName}</b>
+              {g.context.game.publicUrl ? (
+                <a href={g.context.game.publicUrl} target="_blank" rel="noreferrer" title="Open the game's site">
+                  <b>{g.context.game.displayName}</b> ↗
+                </a>
+              ) : (
+                <b>{g.context.game.displayName}</b>
+              )}
               <small>{g.host}</small>
             </div>
             <label className="switch">
@@ -34,7 +50,6 @@ export function HomePage() {
 
       <CastCard games={castable} displays={displays.data ?? []} displaysError={displays.error} groups={groups} />
 
-      <RoomsCard games={(games.data ?? []).filter((g) => g.enabled && g.manifest.sdk.level >= 3)} />
 
       <section className="card wide">
         <h2>Live events</h2>
@@ -50,98 +65,6 @@ export function HomePage() {
         </ul>
       </section>
     </div>
-  );
-}
-
-/** Labels for the standard room commands, in button order. create_room is the Cast card's job. */
-const ROOM_COMMANDS: [string, string][] = [
-  ["start", "Start"],
-  ["pause", "Pause"],
-  ["resume", "Resume"],
-  ["next_round", "Next round"],
-  ["end", "End room"],
-];
-
-/** Open rooms of every controllable game: run them from the iPad, and resolve pending claims. */
-function RoomsCard({ games }: { games: Game[] }) {
-  const [rooms, setRooms] = useState<Record<string, RoomSummary[]>>({});
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState("");
-  const ids = games.map((g) => g.id).join(",");
-
-  const load = () =>
-    Promise.all(games.map((g) => api.gameStatus(g.id).then((s) => [g.id, s.rooms ?? []] as const, () => [g.id, [] as RoomSummary[]] as const))).then((list) => setRooms(Object.fromEntries(list)));
-
-  useEffect(() => {
-    void load();
-    const t = setInterval(() => void load(), 5_000);
-    return () => clearInterval(t);
-  }, [ids]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const send = async (game: Game, command: string, roomCode: string, args?: Record<string, unknown>) => {
-    if (command === "end" && !confirm(`End room ${roomCode}? Players are sent home.`)) return;
-    setBusy(true);
-    try {
-      const r = await api.command(game.id, { command, roomCode, args });
-      setNote(r.ok ? (r.message ?? `${game.context.game.displayName} ${roomCode}: done.`) : `Refused: ${r.message ?? "no reason given"}`);
-    } catch (e) {
-      setNote((e as Error).message);
-    } finally {
-      setBusy(false);
-      void load();
-    }
-  };
-
-  const total = games.reduce((n, g) => n + (rooms[g.id]?.length ?? 0), 0);
-  if (!games.length) return null;
-  return (
-    <section className="card">
-      <h2>Rooms</h2>
-      {total === 0 && <p className="muted">No open rooms right now.</p>}
-      {games.map((g) =>
-        (rooms[g.id] ?? []).map((r) => (
-          <div key={`${g.id}/${r.code}`} className="room">
-            <div className="row">
-              <div>
-                <b>
-                  {g.context.game.displayName} · {r.code}
-                </b>
-                <small>
-                  {r.kind} · {r.players} player(s){r.phase ? ` · ${r.phase}` : ""}
-                  {r.title ? ` · ${r.title}` : ""}
-                </small>
-              </div>
-            </div>
-            {(r.pendingClaims ?? []).map((c) => (
-              <div key={c.id} className="claim">
-                <span>
-                  <b>Claim</b> {c.player ?? "a player"}
-                  {c.detail ? `: ${c.detail}` : ""}
-                </span>
-                {g.manifest.commands.includes("confirm_claim") && (
-                  <button className="primary" disabled={busy} onClick={() => void send(g, "confirm_claim", r.code, { claimId: c.id })}>
-                    Confirm
-                  </button>
-                )}
-                {g.manifest.commands.includes("reject_claim") && (
-                  <button className="danger" disabled={busy} onClick={() => void send(g, "reject_claim", r.code, { claimId: c.id })}>
-                    Reject
-                  </button>
-                )}
-              </div>
-            ))}
-            <div className="buttons">
-              {ROOM_COMMANDS.filter(([c]) => g.manifest.commands.includes(c)).map(([c, label]) => (
-                <button key={c} className={c === "end" ? "danger" : undefined} disabled={busy} onClick={() => void send(g, c, r.code)}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )),
-      )}
-      {note && <pre className="note">{note}</pre>}
-    </section>
   );
 }
 
@@ -232,6 +155,9 @@ function CastCard({ games, displays, displaysError, groups }: { games: Game[]; d
               {d.label || d.name}
             </button>
           ))}
+        <button disabled={busy} onClick={() => void api.idleTvs().then(() => setResult({ text: "TVs on the idle screen." }), (e: Error) => setResult({ text: e.message }))}>
+          Idle screen
+        </button>
         <button
           className="danger"
           disabled={busy}

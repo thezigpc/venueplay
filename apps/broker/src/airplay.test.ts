@@ -9,6 +9,7 @@ class FakeRunner implements ProcRunner {
   procs: { tag: string; cmd: string; args: string[]; env: Record<string, string>; alive: boolean }[] = [];
   daemons = new Map<string, Map<string, string>>(); // socket → ip → state
   paired = new Set<string>();
+  discovered = new Set<string>();
   ctlCalls: string[][] = [];
   constructor(readonly needCode = new Set<string>()) {}
 
@@ -35,6 +36,7 @@ class FakeRunner implements ProcRunner {
       d.set(ip, this.needCode.has(ip) && !this.paired.has(ip) ? "pin_required" : "streaming");
     }
     if (cmd === "disconnect") d.delete(ip);
+    if (cmd === "devices") return { ok: true, devices: [...this.discovered].map((x) => ({ ip: x, port: 63333 })) };
     return { ok: true, streams: [...d].map(([device_ip, state]) => ({ device_ip, state })) };
   }
   async waitForDisplay() {}
@@ -108,4 +110,17 @@ test("chromium runs as a kiosk on the page", () => {
   const args = chromiumArgs("https://x/t", "/run/p", 1920, 1080);
   assert.equal(args.at(-1), "https://x/t");
   assert.ok(args.includes("--kiosk") && args.includes("--window-size=1920,1080") && args.includes("--user-data-dir=/run/p"));
+});
+
+test("airplay: a receiver on another port waits for doubletake's discovery; Rokus don't", async () => {
+  const runner = new FakeRunner();
+  const s = make(runner);
+  await s.startAirplay(tv(1), { url: "https://x/a" });
+  assert.ok(!runner.ctlCalls.some((c) => c[1] === "devices"), "a Roku (ECP :8060) connects straight away");
+
+  runner.discovered.add("10.0.0.105");
+  const ux: DisplayDevice = { id: "airplay:ux", driver: "airplay", name: "UxPlay", address: "http://10.0.0.105:63333", meta: { port: 63333 } };
+  assert.equal((await s.startAirplay(ux, { url: "https://x/a" })).ok, true);
+  const calls = runner.ctlCalls.map((c) => c.slice(1).join(" "));
+  assert.ok(calls.indexOf("devices") >= 0 && calls.indexOf("devices") < calls.indexOf("connect 10.0.0.105"), "checks discovery before connecting");
 });

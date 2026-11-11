@@ -31,7 +31,8 @@ export interface Capabilities {
 
 export type DisplayContent =
   | { kind: "url"; url: string; title?: string }
-  | { kind: "idle" }
+  /** The venue's idle screen. `url` is the page core rendered for it (data: or http). */
+  | { kind: "idle"; url?: string; title?: string }
   | { kind: "off" };
 
 export interface ShowResult {

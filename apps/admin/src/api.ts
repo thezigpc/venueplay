@@ -91,6 +91,16 @@ export interface RoomSummary {
   title?: string;
   hostConnected?: boolean;
   pendingClaims?: { id: string; player?: string; detail?: string; at?: string }[];
+  createdAt?: string;
+  lastActivityAt?: string;
+  tables?: number;
+  maxPlayers?: number;
+  hostName?: string;
+}
+
+export interface RoomsOverview {
+  at: string;
+  games: { id: string; name: string; publicUrl?: string; commands: string[]; error?: string; rooms: (RoomSummary & { tvs: { id: string; name: string }[] })[] }[];
 }
 
 export interface CfZone {
@@ -126,18 +136,21 @@ export const api = {
   access: () => call<Access>("GET", "/access"),
   saveAccess: (a: Partial<Access>) => call<Access>("PUT", "/access", a),
   games: () => call<Game[]>("GET", "/games"),
-  install: (url: string) => call<{ game: Game; upgraded: boolean; warnings: string[] }>("POST", "/games/install", { url }),
+  install: (url: string, hostnameAlias?: string) => call<{ game: Game; upgraded: boolean; warnings: string[] }>("POST", "/games/install", { url, hostnameAlias: hostnameAlias || undefined }),
   patchGame: (id: string, patch: { enabled?: boolean; branding?: GameBranding; hostnameAlias?: string | null }) => call<Game>("PATCH", `/games/${id}`, patch),
   removeGame: (id: string) => call("DELETE", `/games/${id}`),
   events: () => call<BarGamesEvent[]>("GET", "/events/recent?limit=30"),
   displays: () => call<Display[]>("GET", "/broker/displays?health=1"),
   discover: () => call<{ found: number; errors: string[] }>("POST", "/broker/discover", {}),
   addRoku: (host: string) => call<Display>("POST", "/broker/displays/roku", { host }),
+  addAirplay: (host: string) => call<Display>("POST", "/broker/displays/airplay", { host }),
   patchDisplay: (id: string, patch: { label?: string; group?: string; delivery?: string }) => call<Display>("PATCH", `/broker/displays/${encodeURIComponent(id)}`, patch),
   power: (id: string, on: boolean) => call("POST", `/broker/displays/${encodeURIComponent(id)}/power`, { on }),
   pair: (id: string, code?: string) => call<ShowResult>("POST", `/broker/displays/${encodeURIComponent(id)}/pair`, code ? { code } : {}),
   command: (id: string, body: { command: string; roomCode?: string; args?: Record<string, unknown> }) =>
     call<{ ok: boolean; message?: string; data?: unknown }>("POST", `/games/${encodeURIComponent(id)}/command`, body),
+  rooms: () => call<RoomsOverview>("GET", "/rooms"),
+  idleTvs: (target: { displayIds?: string[]; group?: string } = {}) => call<Record<string, ShowResult>>("POST", "/tvs/idle", target),
   gameStatus: (id: string) => call<{ rooms: RoomSummary[] }>("GET", `/games/${encodeURIComponent(id)}/status`),
   cast: (body: { gameId: string; roomCode?: string; displayIds?: string[]; group?: string }) =>
     call<{ roomCode: string; created: boolean; hostUrl?: string; url: string; results: Record<string, ShowResult> }>("POST", "/cast", body),

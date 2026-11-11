@@ -40,6 +40,9 @@ bg.onCommand("end", ({ roomCode }) => {
   if (!room) return { ok: false, message: "no such room" };
   room.phase = "over";
   bg.emit({ type: "game_over", roomCode: room.code, sessionKind: room.kind });
+  // Closing the room: it leaves status and the box takes it off the TVs.
+  rooms.delete(room.code);
+  bg.emit({ type: "room_closed", roomCode: room.code, sessionKind: room.kind });
   return { ok: true };
 });
 bg.setStatusProvider(

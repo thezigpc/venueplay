@@ -1,5 +1,6 @@
 import { bearer, safeEqual, type Logger } from "@bargames/common";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
+import type { AirplayDriver } from "./drivers/airplay/index.js";
 import type { RokuDriver } from "./drivers/roku/index.js";
 import type { DisplayRegistry } from "./registry.js";
 import type { DeliveryMethod, DisplayContent } from "./types.js";
@@ -10,7 +11,7 @@ const h =
     Promise.resolve(fn(req, res)).catch(next);
 
 /** Broker API. Only core calls it (bearer token); it never faces players. */
-export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; token: string; log: Logger }) {
+export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; token: string; log: Logger }) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "64kb" }));
@@ -42,6 +43,21 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
       const dev = await d.roku.probe(`http://${host}:8060`);
       await d.registry.merge([dev]);
       res.json(d.registry.get(dev.id));
+    }),
+  );
+
+  /** Add an AirPlay receiver (Apple TV, AirPlay TV, UxPlay) by IP when mDNS can't see it. */
+  app.post(
+    "/displays/airplay",
+    h(async (req, res) => {
+      if (!d.airplay) return void res.status(400).json({ error: "airplay driver disabled" });
+      const host = String(req.body?.host ?? "");
+      if (!/^[\w.-]+$/.test(host)) return void res.status(400).json({ error: "host must be an IP or hostname" });
+      const dev = await d.airplay.probe(host);
+      await d.registry.merge([dev]);
+      const added = d.registry.get(dev.id);
+      if (!added) return void res.status(409).json({ error: `${host} is already listed as a Roku` });
+      res.json(added);
     }),
   );
 
@@ -103,6 +119,7 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
       const content = req.body?.content as DisplayContent | undefined;
       if (!content || !["url", "idle", "off"].includes(content.kind)) return void res.status(400).json({ error: "content.kind must be url, idle or off" });
       if (content.kind === "url" && !/^https?:\/\//.test(content.url)) return void res.status(400).json({ error: "content.url must be http(s)" });
+      if (content.kind === "idle" && content.url !== undefined && !/^(https?:\/\/|data:text\/html[;,])/.test(content.url)) return void res.status(400).json({ error: "idle url must be http(s) or a data:text/html page" });
       res.json(await d.registry.show({ displayIds: req.body.displayIds, group: req.body.group }, content));
     }),
   );

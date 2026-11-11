@@ -14,6 +14,8 @@ export interface RokuDeviceInfo {
   networkType?: string;
   developerEnabled: boolean;
   supportsAirplay?: boolean;
+  /** Players that can sleep (most can't: Express, Stick). Roku TVs always can. */
+  supportsSuspend?: boolean;
   /** Everything ECP returned, for diagnostics. */
   raw: Record<string, string>;
 }
@@ -43,6 +45,7 @@ export function parseDeviceInfo(xml: string): RokuDeviceInfo {
     networkType: r["network-type"],
     developerEnabled: r["developer-enabled"] === "true",
     supportsAirplay: bool("supports-airplay"),
+    supportsSuspend: bool("supports-suspend"),
     raw: r,
   };
 }

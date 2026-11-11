@@ -20,6 +20,25 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.3.0 (for games already on 0.2.x)
+
+1. **Vendor the new tarball** (step 1, "Updating later"): `bargames-sdk-0.3.0.tgz`,
+   both `package.json` entries, `npm install`, and `"sdk": { "version": "0.3.0", … }`.
+2. **`room_closed` is required for castable games** (step 5). The box takes a closed
+   room off the TVs the moment it hears it (TVs go to the venue's idle screen). Every
+   way a room closes must emit it, and the room must leave status. `npx bargames check`
+   now fails without it, and checks that `end` removes the room from status.
+3. **More in status, for the box's Rooms page** (step 6, all optional):
+   `createdAt`, `lastActivityAt`, `tables`, `maxPlayers`, `hostName`.
+4. **`bg.publicUrl(path)`** (step 3): room links and QR codes on the venue's address,
+   which follows a subdomain rename. Off a box it returns undefined: keep your own link.
+5. **`tableMode(ctx)`** (step 7) for the TV view: hides the pointer, keeps the screen
+   awake, gives you `--bg-safe-x/--bg-safe-y` and a standard "Reconnecting…" /
+   "Room closed" banner. Replace the game's own versions of those on a box.
+6. **Developer tools:** a third fake TV, `fake-unpaired`, answers like an unpaired TV;
+   `npx bargames check --room CODE` checks one live room (its claims, times, table view);
+   `npx bargames help` lists every command and the claim `--args`.
+
 ## What's new in SDK 0.2.1 (for games already on 0.2.0)
 
 1. **Vendor the new tarball** (step 1, "Updating later"): `bargames-sdk-0.2.1.tgz`,
@@ -35,8 +54,8 @@ Nothing else changed; 0.2.0 games keep working on a 0.2.1 box.
 ## What's new in SDK 0.2.0 (for games already on 0.1.0)
 
 1. **Vendor the new tarball** (step 1, "Updating later"):
-   the newest tarball (now `bargames-sdk-0.2.1.tgz`), both `package.json` entries, `npm install`, and set
-   `"sdk": { "version": "0.2.1", … }` in `bargames.json`.
+   the newest tarball (now `bargames-sdk-0.3.0.tgz`), both `package.json` entries, `npm install`, and set
+   `"sdk": { "version": "0.3.0", … }` in `bargames.json`.
 2. **`create_room`** (step 6): the box can start a venue room for the TVs.
 3. **Casting from inside the game** (step 6b, optional): the host's screen can put
    the room on the venue's TVs, with the venue's TV PIN. It's box-only, so nothing
@@ -107,11 +126,11 @@ Work through them in order, and get each level fully working before starting the
 
 ## Step 1: Vendor the SDK
 
-1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.2.1.tgz` to
+1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.3.0.tgz` to
    `<repo>\vendor\` (create the folder).
 2. Add the dependency to **both** the `server` and `client` workspace `package.json`:
    ```json
-   "@bargames/sdk": "file:../vendor/bargames-sdk-0.2.1.tgz"
+   "@bargames/sdk": "file:../vendor/bargames-sdk-0.3.0.tgz"
    ```
 3. Run `npm install` at the repo root and commit the lockfile change along with it.
 4. **Dockerfile:** the `npm ci` layer needs the tarball. Next to the other
@@ -122,7 +141,7 @@ Work through them in order, and get each level fully working before starting the
 5. The CLI is now available as `npx bargames` (try `npx bargames` with no arguments).
 
 **Updating later:** a newer SDK arrives as a new file name, for example
-`bargames-sdk-0.2.1.tgz`. Replace the file, update both `package.json` entries, and run
+`bargames-sdk-0.3.0.tgz`. Replace the file, update both `package.json` entries, and run
 `npm install`. Never overwrite a tarball under the same name: the lockfile's integrity
 hash would then fail `npm ci`.
 
@@ -221,7 +240,7 @@ bg.emit({ type: "winner", roomCode: room.code, sessionKind: room.kind, data: { n
 | Event | When | `data` (keep it small) |
 |---|---|---|
 | `room_created` | A room is created | `{ title? }` |
-| `room_closed` | A room closes (host, idle sweep or shutdown) | `{ reason }` |
+| `room_closed` | A room closes, **every way it can** (host, `end`, idle sweep, admin, shutdown). Required for castable games (SDK 0.3.0): the box takes the room off the TVs at once. | `{ reason }` |
 | `players_changed` | The player count changes. **At most once every 2 s per room** (debounce), and not for reconnects. | `{ players }` |
 | `round_started` | A game, round or rack begins | `{ round }` and game-specific detail |
 | `round_ended` | A round finishes without the session ending | `{ round }` |
@@ -238,6 +257,9 @@ bg.emit({ type: "winner", roomCode: room.code, sessionKind: room.kind, data: { n
   defaulting to `"patron"`. Rooms the box creates with `create_room` (step 6) are
   `"venue"`.
 - **Declare** every type you emit in `bargames.json` `events`.
+- **Closed means gone:** after `room_closed`, the room must no longer appear in status.
+  The box also sweeps every 30 s and clears TVs whose room vanished from status, so a
+  crash doesn't leave a dead room on a TV, but the event is what makes it instant.
 
 ## Step 6: Commands and status (level 3)
 
@@ -269,7 +291,10 @@ bg.setStatusProvider(() => ({ rooms: [...] }));
   - `players` (players only, not tables or viewers);
   - `phase` (the game's own phase names);
   - optional `title` and `hostConnected`;
-  - `pendingClaims` if the game has claims (below).
+  - `pendingClaims` if the game has claims (below);
+  - for the box's **Rooms** page (SDK 0.3.0, optional but cheap): `createdAt` and
+    `lastActivityAt` (ISO times), `tables` (TV/table clients connected), `maxPlayers`,
+    `hostName`.
 
 ### `create_room`: the box starts a room for the TVs (SDK 0.2.0)
 
@@ -357,8 +382,8 @@ await bg.stopCast(["roku:X123"], { pin });                    // only clears TVs
   host to ask staff; pairing happens in the box admin.
 - The box only casts rooms your status lists, and only this game's table route.
 - Refresh `displays()` when the host opens the control. Don't poll it.
-- **Test it with the mock box** (step 9): it has two fake TVs, `fake-bar` and
-  `fake-patio`, and follows the same rules as a real box (rooms must be in status,
+- **Test it with the mock box** (step 9): it has fake TVs `fake-bar` and `fake-patio`,
+  plus `fake-unpaired`, which answers `needsCode` like a TV the venue hasn't paired. It follows the same rules as a real box (rooms must be in status,
   wrong-PIN lockout). `--tv-pin 1234` requires a PIN; `--no-cast` acts like a venue
   that turned casting from games off. Each cast prints the table URL the TV would show.
 
@@ -382,6 +407,21 @@ fix whatever fails:
 
 If the table route needs a key or role parameter, the `{code}` URL must still work
 display-only. If it can't, write that in your report.
+
+**`tableMode(ctx)` (SDK 0.3.0)** covers the pointer, wake and banner items for you:
+
+```ts
+import { getVenue, tableMode } from "@bargames/sdk/client";
+
+const tm = tableMode(await getVenue());          // does nothing off a box
+socket.on("disconnect", () => tm.setState("reconnecting"));
+socket.on("connect", () => tm.setState("connected"));
+socket.on("room:closed", () => tm.setState("closed"));   // "This room has closed"
+// Layout: padding: var(--bg-safe-y, 0) var(--bg-safe-x, 0);
+```
+
+Keep the game's own reconnect handling; `tableMode` only shows the state. On a box the
+TV goes to the venue idle screen shortly after the room closes anyway.
 
 ## Step 8: Container compatibility (level 0)
 
@@ -444,6 +484,7 @@ display-only. If it can't, write that in your report.
 3. Run the checks and drive the game:
    ```bash
    npx bargames check            # must end with "all checks passed"
+   npx bargames check --room <CODE>   # one live room: claims, times, table view
    npx bargames status
    npx bargames command start --room <CODE>
    ```

@@ -183,7 +183,9 @@ test("mock-box: fake TVs answer displays/cast/stopCast like the real box", async
     const tvs = await bg.displays();
     assert.equal(tvs.enabled, true);
     assert.equal(tvs.pinRequired, true);
-    assert.deepEqual(tvs.displays.map((d) => d.id), ["fake-bar", "fake-patio"]);
+    assert.deepEqual(tvs.displays.map((d) => d.id), ["fake-bar", "fake-patio", "fake-unpaired"]);
+    const unpaired = await bg.cast("ABCD", ["fake-unpaired"], { pin: "4321" });
+    assert.equal(unpaired.results?.["fake-unpaired"]?.needsCode, true);
     assert.match(String((await bg.cast("ABCD", ["fake-bar"])).message), /PIN required/);
     assert.match(String((await bg.cast("ABCD", ["fake-bar"], { pin: "0000" })).message), /wrong/);
     assert.match(String((await bg.cast("NOPE", ["fake-bar"], { pin: "4321" })).message), /no room/);
@@ -205,6 +207,45 @@ test("manifest: claim commands are standard", async () => {
   assert.ok(STANDARD_COMMANDS.includes("confirm_claim") && STANDARD_COMMANDS.includes("reject_claim"));
   const r = validateManifest({ ...base, sdk: { version: "0.2.1", level: 3 }, commands: ["confirm_claim", "reject_claim"] });
   assert.equal(r.ok, true);
+});
+
+test("server sdk: publicUrl follows the box's address, undefined standalone", async () => {
+  const off = createBarGames({ gameId: "pool", coreUrl: "", token: "" });
+  assert.equal(await off.publicUrl("/join/AB"), undefined);
+  const ctx = { protocol: 1, standalone: false, venue: { name: "V", theme: DEFAULT_THEME }, game: { id: "pool", displayName: "P", theme: DEFAULT_THEME, publicUrl: "https://billiards.kava.example" }, generatedAt: "" };
+  const on = createBarGames({ gameId: "pool", coreUrl: "http://core", token: "t", fetch: (async () => new Response(JSON.stringify(ctx))) as typeof fetch });
+  assert.equal(await on.publicUrl("/join/AB"), "https://billiards.kava.example/join/AB");
+});
+
+test("client sdk: tableMode is inert standalone, hides the pointer and shows banners on a box", async () => {
+  const { tableMode } = await import("./client.js");
+  const { standaloneContext } = await import("./context.js");
+  const added: { id?: string; hidden?: boolean; textContent?: string; dataset: Record<string, string>; remove(): void }[] = [];
+  const el = () => {
+    const e = { hidden: false, textContent: "", dataset: {} as Record<string, string>, remove: () => void added.splice(added.indexOf(e), 1) } as (typeof added)[number];
+    return e;
+  };
+  const doc = {
+    visibilityState: "hidden",
+    createElement: el,
+    head: { appendChild: (e: (typeof added)[number]) => added.push(e) },
+    body: { appendChild: (e: (typeof added)[number]) => added.push(e) },
+    addEventListener() {},
+    removeEventListener() {},
+  } as unknown as Document;
+  const ctx = standaloneContext("pool", "Pool");
+  tableMode(ctx, { doc }).setState("closed");
+  assert.equal(added.length, 0, "standalone: nothing added");
+
+  const tm = tableMode({ ...ctx, standalone: false }, { doc });
+  assert.equal(added.length, 2);
+  assert.match(String(added[0].textContent), /cursor:none/);
+  tm.setState("reconnecting");
+  assert.deepEqual([added[1].hidden, added[1].textContent], [false, "Reconnecting…"]);
+  tm.setState("connected");
+  assert.equal(added[1].hidden, true);
+  tm.stop();
+  assert.equal(added.length, 0, "stop removes everything");
 });
 
 test("manifest: roomFromTableUrl reverses tableUrl", () => {
