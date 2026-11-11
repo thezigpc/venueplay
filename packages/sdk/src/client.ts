@@ -3,6 +3,7 @@
 
 import { PATHS, type VenueContext } from "./protocol.js";
 import { themeCssVars } from "./theme.js";
+import { activeAnnouncement, GAMES_LINK_CSS, gamesLinkHtml, type GamesLinkOptions } from "./links.js";
 
 let cache: Promise<VenueContext | null> | undefined;
 
@@ -143,4 +144,138 @@ export function tableMode(ctx: VenueContext | null | undefined, opts: { always?:
   };
 }
 
+export interface GamesLinkController {
+  /** Re-render from a newer context (e.g. from watchVenue). */
+  update(ctx: VenueContext | null | undefined): void;
+  /** Remove the link and its CSS. */
+  remove(): void;
+}
+
+/**
+ * For your landing page only (not during play, never on the TV view): adds a
+ * "← All games" link back to the venue's games list, with "Also playing: …" under it,
+ * at the end of `container` (default document.body). Styled from the venue theme.
+ * Off a box it adds nothing (rule 1); it also stays empty on a box that sent no games
+ * list address. Prefer your own markup? Use gamesListUrl() / otherGames() instead.
+ */
+export function gamesLink(
+  ctx: VenueContext | null | undefined,
+  opts: GamesLinkOptions & { container?: HTMLElement; doc?: Document } = {},
+): GamesLinkController {
+  const doc = opts.doc ?? document;
+  let nav: HTMLElement | undefined;
+  let style: HTMLStyleElement | undefined;
+  const render = (c: VenueContext | null | undefined) => {
+    const html = gamesLinkHtml(c, opts);
+    if (!html) return void (nav && (nav.hidden = true));
+    if (!nav) {
+      style = doc.createElement("style");
+      style.dataset.bargames = "games-link";
+      style.textContent = GAMES_LINK_CSS;
+      doc.head.appendChild(style);
+      nav = doc.createElement("nav");
+      nav.className = "bargames-games-link";
+      nav.setAttribute("aria-label", "Venue games");
+      (opts.container ?? doc.body).appendChild(nav);
+    }
+    nav.hidden = false;
+    nav.innerHTML = html;
+  };
+  render(ctx);
+  return {
+    update: render,
+    remove() {
+      nav?.remove();
+      style?.remove();
+      nav = style = undefined;
+    },
+  };
+}
+
+export interface AnnouncementController {
+  update(ctx: VenueContext | null | undefined): void;
+  remove(): void;
+}
+
+/**
+ * Shows the staff's announcement as a strip at the top of the page (sticky, so it stays
+ * in view and never covers your layout), with a close
+ * button (dismissed per message, for this browser tab's session). Hides itself when the
+ * announcement expires or the staff take it down. Feed it newer contexts with update()
+ * (watchVenue). Off a box it shows nothing (rule 1).
+ */
+export function announcementBanner(ctx: VenueContext | null | undefined, opts: { doc?: Document; storage?: Pick<Storage, "getItem" | "setItem"> } = {}): AnnouncementController {
+  const doc = opts.doc ?? document;
+  const store = opts.storage ?? (() => {
+    try {
+      return sessionStorage;
+    } catch {
+      return undefined;
+    }
+  })();
+  const KEY = "bargames.dismissed";
+  const dismissed = () => {
+    try {
+      return store?.getItem(KEY) ?? "";
+    } catch {
+      return "";
+    }
+  };
+  let el: HTMLElement | undefined;
+  let style: HTMLStyleElement | undefined;
+  let current: VenueContext | null | undefined = ctx;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const render = () => {
+    if (timer) clearTimeout(timer);
+    const a = activeAnnouncement(current);
+    if (!a || dismissed() === a.id) return void (el && (el.hidden = true));
+    if (!el) {
+      style = doc.createElement("style");
+      style.dataset.bargames = "announcement";
+      style.textContent =
+        "#bargames-announcement{position:sticky;z-index:2147483646;top:0;margin:0;display:flex;gap:12px;align-items:center;justify-content:center;padding:10px 48px 10px 16px;" +
+        "background:var(--venue-primary,#f2b33d);color:#111;font:600 15px/1.4 var(--venue-font,system-ui,sans-serif);text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.3)}" +
+        "#bargames-announcement[hidden]{display:none}#bargames-announcement button{all:unset;box-sizing:border-box;position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:50%;color:inherit;font:400 24px/1 system-ui,sans-serif;cursor:pointer}#bargames-announcement button:focus-visible{outline:2px solid currentColor}";
+      doc.head.appendChild(style);
+      el = doc.createElement("div");
+      el.id = "bargames-announcement";
+      el.setAttribute("role", "status");
+      // First in the page and sticky: pushes the game down instead of covering it.
+      if (typeof doc.body.prepend === "function") doc.body.prepend(el);
+      else doc.body.appendChild(el);
+    }
+    el.hidden = false;
+    el.textContent = a.text;
+    const close = doc.createElement("button");
+    close.type = "button";
+    close.setAttribute("aria-label", "Dismiss");
+    close.textContent = "×";
+    close.onclick = () => {
+      try {
+        store?.setItem(KEY, a.id);
+      } catch {
+        /* storage blocked: dismissed until reload */
+      }
+      if (el) el.hidden = true;
+    };
+    el.appendChild(close);
+    if (a.until) timer = setTimeout(render, Math.min(Math.max(Date.parse(a.until) - Date.now(), 0) + 50, 2 ** 31 - 1));
+  };
+  render();
+  return {
+    update(c) {
+      current = c;
+      render();
+    },
+    remove() {
+      if (timer) clearTimeout(timer);
+      el?.remove();
+      style?.remove();
+      el = style = undefined;
+    },
+  };
+}
+
+export { activeAnnouncement, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
+export type { Announcement, VenueGameLink } from "./protocol.js";
 export type { VenueContext } from "./protocol.js";

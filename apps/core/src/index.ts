@@ -52,6 +52,7 @@ app.listen(config.port, () => {
   log.info("boot", "listening", { port: config.port, runtime: runtime.kind, dataDir: config.dataDir });
   cloudflare.start();
   (app.locals.tvWatch as { start(): void }).start();
+  (app.locals.roomCache as { start(): void }).start();
   // Bring enabled games back after a reboot.
   for (const g of games.list().filter((g) => g.enabled)) {
     runtime.ensureRunning(g).catch((err) => log.error("runtime", "failed to start game", { game: g.id, err: String(err) }));

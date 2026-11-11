@@ -125,6 +125,12 @@ export interface CfStatus {
   lastSync?: { at: string; ok: boolean; hosts: CfHost[]; removed: string[]; errors: string[] };
 }
 
+export interface Announcement {
+  id: string;
+  text: string;
+  until?: string;
+}
+
 export const api = {
   authStatus: () => call<{ setup: boolean; loggedIn: boolean; canSetup: boolean }>("GET", "/auth/status"),
   setup: (password: string) => call("POST", "/auth/setup", { password }),
@@ -150,6 +156,9 @@ export const api = {
   command: (id: string, body: { command: string; roomCode?: string; args?: Record<string, unknown> }) =>
     call<{ ok: boolean; message?: string; data?: unknown }>("POST", `/games/${encodeURIComponent(id)}/command`, body),
   rooms: () => call<RoomsOverview>("GET", "/rooms"),
+  announcement: () => call<Announcement | null>("GET", "/announcement"),
+  announce: (text: string, minutes?: number) => call<Announcement>("PUT", "/announcement", { text, minutes }),
+  clearAnnouncement: () => call<null>("DELETE", "/announcement"),
   idleTvs: (target: { displayIds?: string[]; group?: string } = {}) => call<Record<string, ShowResult>>("POST", "/tvs/idle", target),
   gameStatus: (id: string) => call<{ rooms: RoomSummary[] }>("GET", `/games/${encodeURIComponent(id)}/status`),
   cast: (body: { gameId: string; roomCode?: string; displayIds?: string[]; group?: string }) =>

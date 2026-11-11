@@ -20,7 +20,7 @@ export function useVenue(): VenueContext | null {
           applyTheme(c); // sets --venue-* on <html>
           setCtx(c);
         },
-        { base: serverUrl || undefined }, // needed when the client runs on Vite's port in dev
+        { base: serverUrl || undefined, intervalMs: 30_000 }, // base: needed when the client runs on Vite's port in dev; 30 s: announcements show up quickly
       ),
     [],
   );

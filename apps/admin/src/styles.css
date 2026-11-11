@@ -115,3 +115,6 @@ button.danger { background: var(--danger); color: #1a0505; border: none; }
 .badge.venue { background: #2f5d50; }
 .badge.private { background: #5a3d5c; }
 .tvs { border-top: 1px solid var(--surface-2); margin-top: 8px; padding-top: 8px; }
+
+.announce-live{background:rgba(242,179,61,.12);border-left:4px solid var(--primary,#f2b33d);padding:8px 12px;border-radius:8px;margin-bottom:12px}
+.announce-live p{margin:0 0 4px}

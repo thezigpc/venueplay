@@ -24,10 +24,11 @@ import { GameRegistry, HttpError } from "./games.js";
 import { certificateWarning, checkPattern, hostFor } from "./hostnames.js";
 import { idleScreenUrl } from "./idleScreen.js";
 import { fetchManifest } from "./manifestSource.js";
+import { RoomCache } from "./roomCache.js";
 import { TvWatch } from "./tvWatch.js";
 import type { GameRuntime } from "./runtime/types.js";
 import type { AccessSettings, CastSettings, InstalledGame, State, VenueSettings } from "./state.js";
-import { allHosts, buildContext, buildGatewayConfig, gameHost, gameTarget, venueInfo } from "./venue.js";
+import { allHosts, buildContext, buildGatewayConfig, gameHost, gameTarget, liveAnnouncement, venueInfo } from "./venue.js";
 
 export interface AppDeps {
   state: State;
@@ -95,6 +96,7 @@ export function createApp(d: AppDeps) {
         gameId: game.id,
         at: new Date().toISOString(),
       });
+      if (["room_created", "room_closed", "players_changed", "round_started", "round_ended"].includes(body.type)) roomCache.touched(game.id);
       if (body.type === "room_closed" && typeof body.roomCode === "string") {
         void tvWatch.roomClosed(game.id, body.roomCode).catch((err) => d.log.warn("tvwatch", "room_closed handling failed", { err: String(err) }));
       }
@@ -147,8 +149,20 @@ export function createApp(d: AppDeps) {
   const idleContent = async () => {
     const venue = d.state.venue.get();
     const names = d.games.list().filter((g) => g.enabled).map((g) => buildContext(venue, g).game.displayName);
-    return { kind: "idle" as const, title: "Idle", url: await idleScreenUrl({ venue: venueInfo(venue), games: names }) };
+    return { kind: "idle" as const, title: "Idle", url: await idleScreenUrl({ venue: venueInfo(venue, { announcement: d.state.announcement.get() }), games: names }) };
   };
+  /** Re-render the idle screen on TVs already showing it (after an announcement change). */
+  const refreshIdleTvs = async () => {
+    const list = ((await brokerCall("GET", "/displays").catch(() => [])) as BrokerDisplay[]) ?? [];
+    const ids = list.filter((x) => x.content?.kind === "idle").map((x) => x.id);
+    if (ids.length) await brokerCall("POST", "/show", { displayIds: ids, content: await idleContent() });
+  };
+  const roomCache = new RoomCache({
+    games: () => d.games.list(),
+    status: gameStatusOf,
+    publicUrl: (g) => buildContext(d.state.venue.get(), g).game.publicUrl,
+    log: d.log,
+  });
   const tvWatch = new TvWatch({
     games: () => d.games.list(),
     roomOf,
@@ -218,7 +232,7 @@ export function createApp(d: AppDeps) {
   app.get(
     "/internal/venue",
     h((req, res) => {
-      res.json(buildContext(d.state.venue.get(), gameAuth(req)));
+      res.json(buildContext(d.state.venue.get(), gameAuth(req), { games: d.games.list(), announcement: d.state.announcement.get() }));
     }),
   );
 
@@ -234,6 +248,8 @@ export function createApp(d: AppDeps) {
           coreUrl: d.config.internalUrl,
           boxVersion: d.config.boxVersion,
           setupRequired: !d.auth.isSetup(),
+          announcement: d.state.announcement.get(),
+          rooms: roomCache.snapshot(),
         }),
       );
     }),
@@ -333,6 +349,50 @@ export function createApp(d: AppDeps) {
       }
       await d.state.venue.set(next);
       res.json(venueView(next));
+    }),
+  );
+
+  // ------------------------------------------------------------ announcement
+
+  let announcementTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Repaint idle TVs when a timed announcement comes down. */
+  const scheduleExpiry = (until?: string) => {
+    if (announcementTimer) clearTimeout(announcementTimer);
+    announcementTimer = undefined;
+    const ms = until ? Date.parse(until) - Date.now() : NaN;
+    if (ms > 0 && ms < 2 ** 31 - 1) {
+      announcementTimer = setTimeout(() => void refreshIdleTvs().catch(() => undefined), ms + 1000);
+      announcementTimer.unref?.();
+    }
+  };
+  scheduleExpiry(liveAnnouncement(d.state.announcement.get())?.until);
+
+  app.get("/api/announcement", (_req, res) => res.json(liveAnnouncement(d.state.announcement.get()) ?? null));
+  /** { text, minutes? }: shown on every game page (SDK 0.4.0), the games list and idle TVs. */
+  app.put(
+    "/api/announcement",
+    h(async (req, res) => {
+      const { text, minutes } = (req.body ?? {}) as { text?: unknown; minutes?: unknown };
+      const t = typeof text === "string" ? text.trim().replace(/\s+/g, " ") : "";
+      if (!t) throw new HttpError(400, "text required");
+      if (t.length > 200) throw new HttpError(400, "keep it under 200 characters");
+      const mins = minutes === undefined || minutes === null || minutes === "" ? undefined : Number(minutes);
+      if (mins !== undefined && !(Number.isFinite(mins) && mins > 0 && mins <= 24 * 60)) throw new HttpError(400, "minutes must be between 1 and 1440");
+      const a = { id: Date.now().toString(36), text: t, ...(mins ? { until: new Date(Date.now() + mins * 60_000).toISOString() } : {}) };
+      await d.state.announcement.set(a);
+      scheduleExpiry(a.until);
+      d.log.info("announcement", "posted", { minutes: mins ?? null });
+      await refreshIdleTvs().catch(() => undefined);
+      res.json(a);
+    }),
+  );
+  app.delete(
+    "/api/announcement",
+    h(async (_req, res) => {
+      await d.state.announcement.set({});
+      scheduleExpiry(undefined);
+      await refreshIdleTvs().catch(() => undefined);
+      res.json(null);
     }),
   );
 
@@ -686,6 +746,7 @@ export function createApp(d: AppDeps) {
   });
 
   app.locals.tvWatch = tvWatch;
+  app.locals.roomCache = roomCache;
   return app;
 }
 

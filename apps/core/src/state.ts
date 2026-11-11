@@ -1,5 +1,5 @@
 import { JsonStore, type GatewayAccess } from "@bargames/common";
-import { DEFAULT_THEME, type GameBranding, type GameManifest, type VenueTheme, type WifiInfo } from "@bargames/sdk";
+import { DEFAULT_THEME, type Announcement, type GameBranding, type GameManifest, type VenueTheme, type WifiInfo } from "@bargames/sdk";
 import path from "node:path";
 import type { CloudflareSettings } from "./cloudflare/service.js";
 
@@ -83,6 +83,8 @@ export function openState(dataDir: string) {
     access: new JsonStore<AccessSettings>(path.join(dataDir, "access.json"), DEFAULT_ACCESS),
     games: new JsonStore<{ games: InstalledGame[] }>(path.join(dataDir, "games.json"), { games: [] }),
     cast: new JsonStore<CastSettings>(path.join(dataDir, "cast.json"), DEFAULT_CAST),
+    /** The staff's current announcement (none: {}). */
+    announcement: new JsonStore<Partial<Announcement>>(path.join(dataDir, "announcement.json"), {}),
     auth: new JsonStore<{ passwordHash?: string }>(path.join(dataDir, "auth.json"), {}),
     // Holds the Cloudflare API token and tunnel token: owner-only.
     cloudflare: new JsonStore<CloudflareSettings>(path.join(dataDir, "cloudflare.json"), {}, 0o600),

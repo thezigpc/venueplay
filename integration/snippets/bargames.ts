@@ -68,6 +68,7 @@ export async function roomLink(code: string, ownLink: () => string): Promise<str
 //       kind: r.kind,               // "venue" | "patron" | "private"
 //       players: r.playerCount,     // players only: not tables/viewers
 //       phase: r.phase,             // e.g. "lobby" | "playing"
+//       joinPath: r.kind === "private" ? undefined : `/join/${r.code}`, // SDK 0.4.0: "Join" on the games list
 //       title: r.title,
 //       hostConnected: r.hostConnected,
 //       createdAt: r.createdAt, lastActivityAt: r.lastActivityAt,   // SDK 0.3.0: Rooms page

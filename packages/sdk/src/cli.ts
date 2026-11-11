@@ -82,7 +82,7 @@ switch (cmd) {
     const gameUrl = gameUrlFor(m?.port);
     const name = flags.name ?? `${m?.name ?? gameId} (mock)`;
     const tvPin = flags["tv-pin"] ?? "";
-    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined });
+    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined, announcement: flags.announce });
     const gamePort = new URL(gameUrl).port;
     console.log(`mock box for "${gameId}"
 
@@ -96,6 +96,8 @@ switch (cmd) {
 
   4. Fake TVs ("fake-bar", "fake-patio", and "fake-unpaired", which answers like an unpaired TV) answer bg.displays() / bg.cast()${tvPin ? `, TV PIN ${tvPin}` : ", no TV PIN (try --tv-pin 1234)"}.
      Each cast prints the table URL: open it to see what that TV would show.
+  5. "← All games" (gamesLink) goes to ${box.publicUrl}/__bargames/dev/games, a pretend games list with
+     your open rooms and their Join links (joinPath). ${flags.announce ? `Announcement: "${flags.announce}".` : `Try --announce "Last call at 1:30" for announcementBanner().`}
 
 Events and casts from your game print below (✗ = would be rejected, or isn't declared in bargames.json).
 `);
@@ -136,6 +138,7 @@ Events and casts from your game print below (✗ = would be rejected, or isn't d
   bargames init [dir]            write a starter bargames.json
   bargames mock-box [dir]        pretend box: fake core on :7199 + fake gateway on :7080 in front of your game
                                  --tv-pin 1234: require a TV PIN for casting · --no-cast: casting turned off
+                                 --announce "Last call at 1:30": a pretend staff announcement
       [--game http://127.0.0.1:PORT] [--port 7080] [--core-port 7199] [--name "Display Name"]
   bargames check [dir]           conformance checks against your running game
       [--room CODE]              also check one live room (its pendingClaims, times, table view)

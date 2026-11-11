@@ -20,6 +20,7 @@ export interface IdleScreenInput {
 
 export async function idleScreenHtml({ venue, games }: IdleScreenInput): Promise<string> {
   const c = venue.theme.colors;
+  const news = venue.announcement && (!venue.announcement.until || Date.parse(venue.announcement.until) > Date.now()) ? venue.announcement.text : "";
   const play = venue.playUrl ? await qrSvg(venue.playUrl, "#000000", "#ffffff") : "";
   const wifi = venue.wifi?.ssid ? await qrSvg(wifiQrPayload(venue.wifi), "#000000", "#ffffff") : "";
   const logo = venue.theme.logoDarkUrl ?? venue.theme.logoUrl;
@@ -32,6 +33,7 @@ body{background:${c.background};color:${c.text};font-family:${venue.theme.font ?
 header img{max-height:14vh;max-width:40vw}
 h1{font-size:8vh;line-height:1.1}
 p.lead{font-size:4.2vh;color:${c.accent}}
+p.news{font-size:4.6vh;font-weight:700;background:${c.primary};color:#111;padding:1.6vh 3vw;border-radius:${venue.theme.radius ?? 16}px;max-width:80vw}
 .row{display:flex;gap:6vw;justify-content:center}
 figure{display:flex;flex-direction:column;align-items:center;gap:2vh}
 .qr{background:#fff;border-radius:${venue.theme.radius ?? 16}px;padding:1.2vh;width:30vh;height:30vh}
@@ -42,7 +44,7 @@ figcaption span{font-size:2.6vh;opacity:.85}
 footer{font-size:2.6vh;opacity:.8}
 </style></head><body>
 <header>${logo ? `<img src="${esc(logo)}" alt="">` : ""}<h1>${esc(venue.name)}</h1></header>
-<p class="lead">Next game starting soon</p>
+${news ? `<p class="news">${esc(news)}</p>` : `<p class="lead">Next game starting soon</p>`}
 <div class="row">${play ? card(play, "Play", venue.playUrl!.replace(/^https?:\/\//, "")) : ""}${wifi ? card(wifi, "Wi-Fi", venue.wifi!.ssid) : ""}</div>
 ${games.length ? `<footer>Tonight: ${games.map(esc).join(" · ")}</footer>` : ""}
 </body></html>`;

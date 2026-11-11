@@ -31,10 +31,24 @@ export function loadManifest(dirOrFile: string): GameManifest | undefined {
   return r.ok ? r.manifest : undefined;
 }
 
-export function mockContext(gameId: string, displayName: string, publicUrl: string): VenueContext {
+/** The mock box's games list page, served by its fake gateway. */
+export const MOCK_GAMES_PATH = "/__bargames/dev/games";
+
+export function mockContext(gameId: string, displayName: string, publicUrl: string, opts: { announcement?: string } = {}): VenueContext {
   return {
     protocol: PROTOCOL_VERSION,
-    venue: { name: "Test Venue", theme: TEST_THEME, wifi: { ssid: "TestVenueGuest" }, playUrl: "http://play.localhost" },
+    venue: {
+      name: "Test Venue",
+      theme: TEST_THEME,
+      wifi: { ssid: "TestVenueGuest" },
+      playUrl: new URL(MOCK_GAMES_PATH, publicUrl).toString(),
+      games: [
+        { id: gameId, displayName, tagline: "Branded by the mock box", url: publicUrl },
+        // A pretend second game, so "Also playing" has something to show.
+        { id: "other-game", displayName: "Other Game (fake)", url: new URL(`${MOCK_GAMES_PATH}#other-game`, publicUrl).toString() },
+      ],
+      ...(opts.announcement ? { announcement: { id: "mock-1", text: opts.announcement } } : {}),
+    },
     game: { id: gameId, displayName, tagline: "Branded by the mock box", publicUrl, theme: TEST_THEME },
     standalone: false,
     generatedAt: new Date().toISOString(),
@@ -69,6 +83,8 @@ export interface MockBoxOptions {
   tvPin?: string;
   /** false: act like a venue that turned "casting from games" off. */
   castFromGames?: boolean;
+  /** A pretend staff announcement, shown by announcementBanner(). */
+  announcement?: string;
 }
 
 /** The mock box's pretend venue TVs. */
@@ -117,7 +133,7 @@ export function mockBox(o: MockBoxOptions) {
       console.log(c.bad(`✗ core: ${req.method} ${req.url} with a wrong/missing token (expected BG_GAME_TOKEN=${DEV_TOKEN})`));
       return json(401, { error: "bad game token" });
     }
-    if (req.url === "/internal/venue") return json(200, mockContext(o.gameId, o.displayName, publicUrl));
+    if (req.url === "/internal/venue") return json(200, mockContext(o.gameId, o.displayName, publicUrl, { announcement: o.announcement }));
     if (req.url === "/internal/displays" && req.method === "GET") {
       if (o.castFromGames === false) return json(200, { enabled: false, pinRequired: false, displays: [] } satisfies CastTargets);
       const displays: CastDisplay[] = FAKE_TVS.map((t) => ({ id: t.id, name: t.name, group: t.group, busy: showing.has(t.id), showingThisGame: showing.has(t.id), roomCode: showing.get(t.id) }));
@@ -195,6 +211,10 @@ export function mockBox(o: MockBoxOptions) {
     return h;
   };
   const gateway = createServer((req, res) => {
+    if (req.url?.split("?")[0] === MOCK_GAMES_PATH) return void mockGamesList(o, publicUrl).then((html) => {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(html);
+    });
     const up = request({ host: target.hostname, port: target.port, method: req.method, path: req.url, headers: forwardHeaders(req) }, (r) => {
       res.writeHead(r.statusCode ?? 502, r.headers);
       r.pipe(res);
@@ -222,6 +242,23 @@ export function mockBox(o: MockBoxOptions) {
   gateway.listen(o.gatewayPort);
   core.on("close", () => clearInterval(pinReset));
   return { core, gateway, publicUrl, showing };
+}
+
+/** What the real games list shows for this game: its open rooms and their Join links. */
+async function mockGamesList(o: MockBoxOptions, publicUrl: string): Promise<string> {
+  const st = await fetch(new URL(PATHS.status, o.gameUrl), { headers: { authorization: `Bearer ${DEV_TOKEN}` }, signal: AbortSignal.timeout(3000) })
+    .then((r) => r.json() as Promise<GameStatus>)
+    .catch(() => ({ rooms: [] }) as GameStatus);
+  const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
+  const rooms = (st.rooms ?? []).filter((r) => r.kind !== "private");
+  const items = rooms
+    .map((r) => `<li>${esc(r.code)} · ${r.players} player(s)${r.joinPath ? ` · <a href="${esc(new URL(r.joinPath, publicUrl).toString())}">Join</a>` : " · <i>no joinPath, so no Join link</i>"}</li>`)
+    .join("");
+  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Games (mock box)</title>
+<body style="font-family:system-ui;max-width:520px;margin:24px auto;padding:0 16px"><h1>Test Venue: games (mock)</h1>
+<p>The real box shows this list at the venue's play address. "← All games" links land here.</p>
+<h2><a href="${esc(publicUrl)}">${esc(o.displayName)}</a></h2><ul>${items || "<li>No open rooms</li>"}</ul>
+<h2 id="other-game">Other Game (fake)</h2><p>A pretend second game for "Also playing".</p></body>`;
 }
 
 // ---------------------------------------------------------------- command / status
@@ -297,11 +334,17 @@ export async function check(manifest: GameManifest, gameUrl: string, opts: { roo
           fail(`room summary ${JSON.stringify(r)} needs code (string), kind (venue|patron|private), players (number)`);
           break;
         }
+        if (r.joinPath !== undefined && (typeof r.joinPath !== "string" || !r.joinPath.startsWith("/") || r.joinPath.startsWith("//"))) {
+          fail(`room ${String(r.code)}: joinPath must be a path on the game's address, like "/join/${String(r.code)}"`);
+          break;
+        }
         if (r.pendingClaims !== undefined && (!Array.isArray(r.pendingClaims) || r.pendingClaims.some((x) => typeof (x as { id?: unknown })?.id !== "string"))) {
           fail(`room ${String(r.code)}: pendingClaims must be an array of { id: string, player?, detail?, at? }`);
           break;
         }
       }
+      const open = (rooms as Record<string, unknown>[]).filter((r) => r.kind !== "private");
+      if (open.length && open.every((r) => r.joinPath === undefined)) warn(`no joinPath on your rooms: the venue's games list can't show "Join" links (SDK 0.4.0)`);
     } else fail(`status → ${st.status}`, "call bg.setStatusProvider(() => ({ rooms: [...] }))");
     const bogus = await callGame(gameUrl, PATHS.command, { command: "definitely-not-a-command" });
     bogus.status === 404 ? pass("unknown commands are rejected") : fail(`unknown command → ${bogus.status} (expected 404)`);

@@ -73,7 +73,7 @@ test("gateway: routing, gate, PIN, closed games, headers", async () => {
     ],
     access: { pinEnabled: false, pin: "4321", whitelist: [], autoVenueIp: true, venueCidrs: [], adminRemote: false },
     contexts: { pool: ctx("pool"), bingo: ctx("bingo"), _hub: ctx("_hub") },
-    hub: { games: [{ id: "pool", displayName: "Kava Pool", url: "https://pool.example.com", enabled: true }, { id: "bingo", displayName: "Bingo", url: "https://bingo.example.com", enabled: false }] },
+    hub: { games: [{ id: "pool", displayName: "Kava Pool", url: "https://pool.example.com", enabled: true, rooms: [{ code: "KQ7P", players: 6, joinUrl: "https://pool.example.com/join/KQ7P" }, { code: "ZZ9", players: 1 }] }, { id: "bingo", displayName: "Bingo", url: "https://bingo.example.com", enabled: false }] },
     setupRequired: false,
     adminUrl: "https://admin.example.com",
   };
@@ -101,7 +101,10 @@ test("gateway: routing, gate, PIN, closed games, headers", async () => {
     // Local (no CF header, loopback) is allowed; spoofed bargames headers are replaced.
     const local = await get("pool.example.com", "/", { "x-bargames-access": "pin" });
     assert.equal(local.status, 200);
-    assert.match(await local.text(), /theme\.css/, "level-0 route gets the theme injected");
+    const landing = await local.text();
+    assert.match(landing, /theme\.css/, "level-0 route gets the theme injected");
+    assert.match(landing, /class="bargames-games-link".*href="https:\/\/play\.example\.com".*<\/nav><\/body>/, "and the games link at the end of its landing page");
+    assert.doesNotMatch(await (await get("pool.example.com", "/room/AB")).text(), /bargames-games-link/, "never during play");
     assert.equal(seen.at(-1)!.access, "local");
     assert.equal(seen.at(-1)!.proof, undefined, "games never see the core proof token");
 
@@ -118,6 +121,12 @@ test("gateway: routing, gate, PIN, closed games, headers", async () => {
     const hub = await (await get("play.example.com", "/", venueIp)).text();
     assert.match(hub, /Kava Pool/);
     assert.doesNotMatch(hub, /bingo\.example\.com/);
+    assert.match(hub, /KQ7P.*6 players.*href="https:\/\/pool\.example\.com\/join\/KQ7P">Join/, "open rooms with Join links");
+    assert.match(hub, /ZZ9.*1 player<\/span><\/li>/, "no joinPath: listed without a Join link");
+    assert.doesNotMatch(hub, /class="news"/);
+    (venue as typeof venue & { announcement?: unknown }).announcement = { id: "a1", text: "Last call at 1:30" };
+    assert.match(await (await get("play.example.com", "/", venueIp)).text(), /class="news" role="status">Last call at 1:30/);
+    delete (venue as typeof venue & { announcement?: unknown }).announcement;
     assert.equal(((await (await get("pool.example.com", "/__bargames/venue.json", venueIp)).json()) as { game: { displayName: string } }).game.displayName, "Kava Pool");
 
     // PIN: required for tunnel traffic, cookie unlocks it.

@@ -162,6 +162,16 @@ export interface HubGame {
   iconUrl?: string;
   url: string;
   enabled: boolean;
+  /** Its open venue/patron rooms (games list "Join" links). Undefined: unknown or not level 2+. */
+  rooms?: HubRoom[];
+}
+
+/** A room on the games list. joinUrl is set only when the game gave a joinPath. */
+export interface HubRoom {
+  code: string;
+  players: number;
+  title?: string;
+  joinUrl?: string;
 }
 
 export interface GatewayConfig {

@@ -47,7 +47,7 @@ bg.onCommand("end", ({ roomCode }) => {
 });
 bg.setStatusProvider(
   (): GameStatus => ({
-    rooms: [...rooms.values()].map((r) => ({ code: r.code, kind: r.kind, players: r.players.size, phase: r.phase })),
+    rooms: [...rooms.values()].map((r) => ({ code: r.code, kind: r.kind, players: r.players.size, phase: r.phase, joinPath: `/?code=${r.code}` })),
   }),
 );
 

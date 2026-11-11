@@ -128,6 +128,23 @@ test("api: setup, install, brand, events, gateway config", async () => {
     const ctx = (await (await json("GET", "/internal/venue", undefined, { authorization: `Bearer ${token}` })).json()) as { game: { displayName: string; publicUrl: string } };
     assert.equal(ctx.game.displayName, "Kava Bingo");
     assert.equal(ctx.game.publicUrl, "http://kavabingo.localhost:7080");
+    const lineup = ctx as unknown as { venue: { games: { id: string; displayName: string; url: string }[]; announcement?: unknown } };
+    assert.deepEqual(lineup.venue.games, [{ id: "bingo", displayName: "Kava Bingo", url: "http://kavabingo.localhost:7080" }], "SDK 0.4.0: the venue's lineup");
+    assert.equal(lineup.venue.announcement, undefined);
+
+    // Announcements: validated, on every game's context and the gateway's, then taken down.
+    assert.equal((await json("PUT", "/api/announcement", { text: "  " }, authed)).status, 400);
+    assert.equal((await json("PUT", "/api/announcement", { text: "x", minutes: 0 }, authed)).status, 400);
+    assert.equal((await json("PUT", "/api/announcement", { text: "Last call" })).status, 401);
+    const posted = (await (await json("PUT", "/api/announcement", { text: "Last  call at 1:30", minutes: 60 }, authed)).json()) as { id: string; text: string; until: string };
+    assert.equal(posted.text, "Last call at 1:30");
+    assert.ok(Date.parse(posted.until) > Date.now());
+    const withNews = (await (await json("GET", "/internal/venue", undefined, { authorization: `Bearer ${token}` })).json()) as { venue: { announcement?: { text: string } } };
+    assert.equal(withNews.venue.announcement?.text, "Last call at 1:30");
+    const gwNews = (await (await json("GET", "/internal/gateway-config", undefined, { authorization: "Bearer gw" })).json()) as { contexts: Record<string, { venue: { announcement?: unknown } }> };
+    assert.ok(gwNews.contexts._hub.venue.announcement && gwNews.contexts.bingo.venue.announcement);
+    assert.equal((await json("DELETE", "/api/announcement", undefined, authed)).status, 200);
+    assert.equal(await (await json("GET", "/api/announcement", undefined, authed)).json(), null);
 
     assert.equal((await json("GET", "/internal/gateway-config")).status, 401);
     const gw = (await (await json("GET", "/internal/gateway-config", undefined, { authorization: "Bearer gw" })).json()) as { routes: { host: string; kind: string; target?: string }[] };
@@ -241,4 +258,39 @@ test("casting: new room from the admin, and casting from inside a game (gated, P
   } finally {
     server.close();
   }
+});
+
+test("room cache: games list rooms skip private ones and only link same-origin join paths", async () => {
+  const { hubRooms, RoomCache } = await import("./roomCache.js");
+  const rooms = [
+    { code: "KQ7P", kind: "patron", players: 6, joinPath: "/join/KQ7P", title: "Friday" },
+    { code: "PRIV", kind: "private", players: 3, joinPath: "/join/PRIV" },
+    { code: "EVIL", kind: "venue", players: 1, joinPath: "//evil.example/x" },
+    { code: "ABS", kind: "venue", players: 2, joinPath: "https://evil.example/x" },
+    { code: "NOJ", kind: "venue", players: 0 },
+  ] as Parameters<typeof hubRooms>[0];
+  assert.deepEqual(hubRooms(rooms, "https://bingo.kava.example"), [
+    { code: "KQ7P", players: 6, title: "Friday", joinUrl: "https://bingo.kava.example/join/KQ7P" },
+    { code: "EVIL", players: 1 },
+    { code: "ABS", players: 2 },
+    { code: "NOJ", players: 0 },
+  ]);
+
+  let fail = false;
+  const game = { id: "bingo", enabled: true, manifest: { sdk: { level: 2 } } } as unknown as InstalledGame;
+  const cache = new RoomCache({
+    games: () => [game],
+    status: async () => {
+      if (fail) throw new Error("down");
+      return { rooms: [{ code: "KQ7P", kind: "venue", players: 2, joinPath: "/j/KQ7P" }] };
+    },
+    publicUrl: () => "https://bingo.kava.example",
+    log: createLogger("t", "error"),
+  });
+  await cache.refresh();
+  assert.equal(cache.snapshot().bingo[0].joinUrl, "https://bingo.kava.example/j/KQ7P");
+  fail = true;
+  await cache.refresh("bingo");
+  assert.equal(cache.snapshot().bingo, undefined, "unreadable status: no stale Join links");
+  cache.stop();
 });

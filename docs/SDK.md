@@ -158,6 +158,25 @@ export function useVenue(): VenueContext | null {
 }
 ```
 
+**The venue around the game (SDK 0.4.0).** All of these are empty / no-ops standalone:
+
+```ts
+import { gamesLink, announcementBanner, gamesListUrl, otherGames, activeAnnouncement } from "@bargames/sdk/client";
+
+const link = gamesLink(venue, { container: landingEl }); // "← All games" + "Also playing: …", landing page only
+const news = announcementBanner(venue);                   // staff announcement, sticky strip at the top (phone pages)
+watchVenue((c) => { link.update(c); news.update(c); }, 30_000);
+```
+
+- `gamesListUrl(ctx)`: the venue's games list (`ctx.venue.playUrl`).
+- `otherGames(ctx)`: the other games on tonight (`ctx.venue.games`, this one left out).
+- `activeAnnouncement(ctx)`: `{ id, text, until? }` unless expired.
+- `gamesLinkHtml(ctx)` / `GAMES_LINK_CSS`: the link's escaped HTML and CSS, for your own
+  rendering. The box's gateway adds the same link to the landing page of games without
+  the SDK (level 0).
+- In status, `joinPath` on a room (e.g. `/join/KQ7P`) puts a **Join** button for it on
+  the venue's games list (venue and patron rooms only).
+
 **Big-screen (`table`) views:**
 - Design for 1080p, seen from across a room: text 3vh or larger, no hover, and safe margins of about 4–5%.
 - The broker loads the table view in Chromium and casts it. Keep animations light: a static board at 10–15 fps is cheaper than 30 fps motion.
@@ -187,5 +206,8 @@ The `bargames` CLI ships with a pretend box:
 ## Versioning
 
 - `PROTOCOL_VERSION` changes only on breaking changes. The box supports the current and previous major version.
+- New SDK versions only add optional fields, helpers and commands. The box never checks
+  `sdk.version`: it goes by `sdk.level` and the declared events and commands, so a game
+  on an older SDK keeps working and just doesn't use the newer features.
 - Manifests declare `sdk.version`.
 - `minBoxVersion` keeps a game off boxes that are too old for it.

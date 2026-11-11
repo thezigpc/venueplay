@@ -11,6 +11,7 @@ Bar Games support. Read this whole file before changing anything.
 | `bargames-sdk-<version>.tgz` | The SDK package to vendor into the game (zero dependencies) |
 | `snippets/bargames.ts` | Server module to copy and adapt |
 | `snippets/useVenue.ts` | React hook for branding |
+| `snippets/VenueExtras.tsx` | React components for the games link and announcements (SDK 0.4.0) |
 | `snippets/bargames.example.json` | An example manifest (Bingo) |
 | `snippets/publish-image.yml` | GitHub Actions workflow that publishes the image (step 10) |
 
@@ -19,6 +20,29 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
+
+## What's new in SDK 0.4.0 (for games already on 0.3.0)
+
+Nothing breaks: a game left on 0.3.0 keeps working on a 0.4.0 box, it just doesn't
+show the new things. They're all on a box only; standalone, nothing changes (rule 1).
+
+1. **Vendor the new tarball** (step 1, "Updating later"): `bargames-sdk-0.4.0.tgz`,
+   both `package.json` entries, `npm install`, and `"sdk": { "version": "0.4.0", … }`.
+2. **"← All games" on the landing page** (step 4, item 6): a link back to the venue's
+   games list, with "Also playing: …" (the venue's other games) under it. Landing page
+   only: not during play, never on the TV view. `gamesLink(ctx)`, or the React
+   `<BackToGames />` in `snippets/VenueExtras.tsx` (or the game kit).
+3. **Staff announcements** (step 4, item 7): "Last call at 1:30", typed on the box's
+   iPad, shown as a dismissible strip at the top of the game's phone pages.
+   `announcementBanner(ctx)`, or `<VenueAnnouncement />`. Not on the TV view: the box
+   puts announcements on idle TVs itself.
+4. **`joinPath` in status** (step 6): the venue's games list now shows each game's open
+   rooms; set `joinPath` (e.g. `/join/KQ7P`) and it gets a **Join** button. Private
+   rooms are never listed. `npx bargames check` warns when no room has one.
+5. **Developer tools:** the mock box's "← All games" goes to a pretend games list at
+   `/__bargames/dev/games` (your open rooms and their Join links); the context lists a
+   fake second game; `mock-box --announce "Last call at 1:30"` posts a pretend
+   announcement.
 
 ## What's new in SDK 0.3.0 (for games already on 0.2.x)
 
@@ -54,8 +78,8 @@ Nothing else changed; 0.2.0 games keep working on a 0.2.1 box.
 ## What's new in SDK 0.2.0 (for games already on 0.1.0)
 
 1. **Vendor the new tarball** (step 1, "Updating later"):
-   the newest tarball (now `bargames-sdk-0.3.0.tgz`), both `package.json` entries, `npm install`, and set
-   `"sdk": { "version": "0.3.0", … }` in `bargames.json`.
+   the newest tarball (now `bargames-sdk-0.4.0.tgz`), both `package.json` entries, `npm install`, and set
+   `"sdk": { "version": "0.4.0", … }` in `bargames.json`.
 2. **`create_room`** (step 6): the box can start a venue room for the TVs.
 3. **Casting from inside the game** (step 6b, optional): the host's screen can put
    the room on the venue's TVs, with the venue's TV PIN. It's box-only, so nothing
@@ -126,11 +150,11 @@ Work through them in order, and get each level fully working before starting the
 
 ## Step 1: Vendor the SDK
 
-1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.3.0.tgz` to
+1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.4.0.tgz` to
    `<repo>\vendor\` (create the folder).
 2. Add the dependency to **both** the `server` and `client` workspace `package.json`:
    ```json
-   "@bargames/sdk": "file:../vendor/bargames-sdk-0.3.0.tgz"
+   "@bargames/sdk": "file:../vendor/bargames-sdk-0.4.0.tgz"
    ```
 3. Run `npm install` at the repo root and commit the lockfile change along with it.
 4. **Dockerfile:** the `npm ci` layer needs the tarball. Next to the other
@@ -141,7 +165,7 @@ Work through them in order, and get each level fully working before starting the
 5. The CLI is now available as `npx bargames` (try `npx bargames` with no arguments).
 
 **Updating later:** a newer SDK arrives as a new file name, for example
-`bargames-sdk-0.3.0.tgz`. Replace the file, update both `package.json` entries, and run
+`bargames-sdk-0.4.0.tgz`. Replace the file, update both `package.json` entries, and run
 `npm install`. Never overwrite a tarball under the same name: the lockfile's integrity
 hash would then fail `npm ci`.
 
@@ -227,6 +251,23 @@ re-downloads a tag it already has. Any change you want on a box therefore needs 
 5. **Readability:** the venue chooses its colors, and the box warns them about poor
    contrast. Don't put venue colors on text that sits on top of the game's own fixed
    colors.
+6. **"← All games" (SDK 0.4.0), landing page only.** Put the venue's games link at the
+   bottom of the page a player first lands on (create/join), and nowhere else: not in a
+   room, not on the host screen, never on the TV view. With React, copy
+   `snippets/VenueExtras.tsx` (or use the game kit's `<BackToGames />`) and render
+   `<BackToGames ctx={venue} />` at the end of the landing page. Without React:
+   ```ts
+   const link = gamesLink(ctx, { container: landingEl }); // adds nothing standalone
+   // newer contexts from watchVenue: link.update(ctx); leaving the landing page: link.remove()
+   ```
+   It shows "Also playing: Bingo · Pool" under the link; pass `alsoPlaying: false` to
+   leave that out. For your own markup, `gamesListUrl(ctx)` and `otherGames(ctx)` give
+   you the data (undefined / empty standalone).
+7. **Staff announcements (SDK 0.4.0).** Render `<VenueAnnouncement ctx={venue} />` once
+   at the root of the **phone** app (not the TV view), or call `announcementBanner(ctx)`
+   and feed it `update(ctx)` from `watchVenue`. It's a sticky strip at the top of the
+   page with a close button, and comes down on its own when it expires. Check that your
+   layout still works with it: no full-height `position: fixed` page that would hide it.
 
 ## Step 5: Events (level 2)
 
@@ -294,7 +335,11 @@ bg.setStatusProvider(() => ({ rooms: [...] }));
   - `pendingClaims` if the game has claims (below);
   - for the box's **Rooms** page (SDK 0.3.0, optional but cheap): `createdAt` and
     `lastActivityAt` (ISO times), `tables` (TV/table clients connected), `maxPlayers`,
-    `hostName`.
+    `hostName`;
+  - `joinPath` (SDK 0.4.0): where a new player joins the room, as a path on the game's
+    address, e.g. `/join/KQ7P`. The venue's games list shows open venue and patron
+    rooms with a **Join** button that goes there. Never list a private room's path
+    (the box skips private rooms anyway).
 
 ### `create_room`: the box starts a room for the TVs (SDK 0.2.0)
 
@@ -543,7 +588,10 @@ accounts or secrets beyond the repo's own `GITHUB_TOKEN`.
 2. Make sure `image` in `bargames.json` follows step 2 (lowercase owner, tag ==
    `version`). Run `npx bargames validate .`.
 3. **Stop and hand over to the user.** Pushing is their call (rule 6). Tell them:
-   - push `main`; the "Publish image" workflow should go green;
+   - push `main`; the "Publish image" workflow should go green. **On a brand-new repo**
+     the first push doesn't trigger the `bargames.json` path filter, so start the first
+     run by hand (Actions tab > Publish image > Run workflow, or
+     `gh workflow run publish-image.yml`);
    - **first publish only:** GHCR packages start out *private*. Open
      `https://github.com/users/<owner>/packages/container/<name>/settings`, go to
      "Danger Zone", choose "Change visibility", and select **Public**. Otherwise the box

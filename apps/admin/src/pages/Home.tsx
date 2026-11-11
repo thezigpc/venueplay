@@ -50,6 +50,8 @@ export function HomePage() {
 
       <CastCard games={castable} displays={displays.data ?? []} displaysError={displays.error} groups={groups} />
 
+      <AnnouncementCard />
+
 
       <section className="card wide">
         <h2>Live events</h2>
@@ -65,6 +67,65 @@ export function HomePage() {
         </ul>
       </section>
     </div>
+  );
+}
+
+const DURATIONS = [
+  { label: "Until I take it down", minutes: 0 },
+  { label: "15 minutes", minutes: 15 },
+  { label: "1 hour", minutes: 60 },
+  { label: "3 hours", minutes: 180 },
+];
+
+/** A message on every game page, the players' page and idle TVs ("Last call at 1:30"). */
+function AnnouncementCard() {
+  const current = useLoad(api.announcement, 30_000);
+  const { busy, run } = useAction(current.reload, current.setError);
+  const [text, setText] = useState("");
+  const [minutes, setMinutes] = useState(0);
+  const a = current.data;
+  return (
+    <section className="card">
+      <h2>Announcement</h2>
+      {current.error && <p className="error">{current.error}</p>}
+      {a ? (
+        <div className="announce-live">
+          <p>
+            <b>{a.text}</b>
+          </p>
+          <small className="muted">{a.until ? `Comes down at ${new Date(a.until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Up until you take it down"}</small>
+          <div className="buttons">
+            <button disabled={busy} onClick={() => run(() => api.clearAnnouncement())}>
+              Take it down
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="muted">Shown across the top of every game, on the players' page and on idle TVs.</p>
+      )}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!text.trim()) return;
+          void run(async () => {
+            await api.announce(text, minutes || undefined);
+            setText("");
+          });
+        }}
+      >
+        <input value={text} maxLength={200} placeholder="Last call at 1:30" onChange={(e) => setText(e.target.value)} aria-label="Announcement text" />
+        <div className="inline">
+          <select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} aria-label="How long">
+            {DURATIONS.map((d) => (
+              <option key={d.minutes} value={d.minutes}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+          <button className="primary" disabled={busy || !text.trim()}>{a ? "Replace" : "Post"}</button>
+        </div>
+      </form>
+    </section>
   );
 }
 

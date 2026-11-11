@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.3.0";
+export const SDK_VERSION = "0.4.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -50,8 +50,30 @@ export interface VenueInfo {
   name: string;
   theme: VenueTheme;
   wifi?: WifiInfo;
-  /** The venue landing page, e.g. https://play.example.com */
+  /** The venue's games list (landing page), e.g. https://play.example.com */
   playUrl?: string;
+  /** Every game that's on tonight, this one included (SDK 0.4.0+ boxes). */
+  games?: VenueGameLink[];
+  /** A message from the staff for every game page ("Last call at 1:30"), if one is up. */
+  announcement?: Announcement;
+}
+
+/** One game on the venue's games list. */
+export interface VenueGameLink {
+  id: string;
+  displayName: string;
+  tagline?: string;
+  iconUrl?: string;
+  /** The game's public address. */
+  url: string;
+}
+
+export interface Announcement {
+  /** Changes with every new message, so a dismissed message stays dismissed. */
+  id: string;
+  text: string;
+  /** ISO time it comes down on its own, if set. */
+  until?: string;
 }
 
 /** What a venue may override per game (only slots the manifest marks brandable). */
@@ -226,6 +248,12 @@ export interface RoomSummary {
   maxPlayers?: number;
   /** The host's display name, if the room has a host. */
   hostName?: string;
+  /**
+   * Where a new player joins this room, as a path on the game's address (e.g. "/join/KQ7P").
+   * The venue's games list shows a "Join" link for venue and patron rooms that set it;
+   * private rooms are never listed.
+   */
+  joinPath?: string;
 }
 
 export interface GameStatus {

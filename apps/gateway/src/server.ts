@@ -1,5 +1,5 @@
 import { GATEWAY_PROOF_HEADER, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
-import { HEADERS, PATHS, themeToCss, type VenueContext } from "@bargames/sdk";
+import { GAMES_LINK_CSS, gamesLinkHtml, HEADERS, PATHS, themeToCss, type VenueContext } from "@bargames/sdk";
 import httpProxy from "http-proxy";
 import { createHmac } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -33,7 +33,7 @@ export function createGateway(d: GatewayDeps) {
     });
   }
   injecting.on("proxyReq", (proxyReq) => proxyReq.setHeader("accept-encoding", "identity"));
-  injecting.on("proxyRes", (proxyRes, _req, res) => {
+  injecting.on("proxyRes", (proxyRes, req, res) => {
     const type = String(proxyRes.headers["content-type"] ?? "");
     const headers = { ...proxyRes.headers };
     if (!type.includes("text/html")) {
@@ -43,7 +43,10 @@ export function createGateway(d: GatewayDeps) {
     const chunks: Buffer[] = [];
     proxyRes.on("data", (c: Buffer) => chunks.push(c));
     proxyRes.on("end", () => {
-      const html = injectTheme(Buffer.concat(chunks).toString("utf8"));
+      // Games without the SDK can't place a games link themselves: add it to their landing page.
+      const landing = new URL(req.url ?? "/", "http://x").pathname === "/";
+      const ctx = landing ? (req as IncomingMessage & { bgContext?: VenueContext }).bgContext : undefined;
+      const html = injectTheme(Buffer.concat(chunks).toString("utf8"), ctx);
       delete headers["content-length"];
       delete headers["content-encoding"];
       res.writeHead(proxyRes.statusCode ?? 200, headers);
@@ -113,6 +116,7 @@ export function createGateway(d: GatewayDeps) {
     if (!route.target) return send(res, 502, simplePage(cfg.venue, "Misconfigured", "No upstream for this address."));
 
     prepare(req, decision, route);
+    if (route.injectTheme) (req as IncomingMessage & { bgContext?: VenueContext }).bgContext = ctx;
     (route.injectTheme ? injecting : proxy).web(req, res, { target: route.target });
   }
 
@@ -148,10 +152,21 @@ export function createGateway(d: GatewayDeps) {
   return server;
 }
 
-export function injectTheme(html: string): string {
+/**
+ * For games without the SDK (level 0): the venue theme on every page and, on the landing
+ * page only (pass its context), the "← All games" link at the end of the body.
+ */
+export function injectTheme(html: string, landingCtx?: VenueContext): string {
   const tag = `<link rel="stylesheet" href="${PATHS.themeCss}" data-bargames>`;
   const i = html.search(/<\/head>/i);
-  return i >= 0 ? html.slice(0, i) + tag + html.slice(i) : tag + html;
+  let out = i >= 0 ? html.slice(0, i) + tag + html.slice(i) : tag + html;
+  const link = landingCtx ? gamesLinkHtml(landingCtx) : "";
+  if (link) {
+    const nav = `<style data-bargames>${GAMES_LINK_CSS}</style><nav class="bargames-games-link" aria-label="Venue games">${link}</nav>`;
+    const j = out.search(/<\/body>/i);
+    out = j >= 0 ? out.slice(0, j) + nav + out.slice(j) : out + nav;
+  }
+  return out;
 }
 
 function findRoute(cfg: GatewayConfig, req: IncomingMessage): GatewayRoute | undefined {

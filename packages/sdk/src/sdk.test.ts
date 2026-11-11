@@ -255,3 +255,117 @@ test("manifest: roomFromTableUrl reverses tableUrl", () => {
   assert.equal(roomFromTableUrl(m, "/join/A/B?as=table"), undefined);
   assert.equal(roomFromTableUrl({ routes: { player: "/", table: "/table?code={code}" } }, "/table?code=XY"), "XY");
 });
+
+// ---------------------------------------------------------------- 0.4.0: games list, also playing, announcements
+
+const boxCtx = (venue: Record<string, unknown> = {}) => ({
+  protocol: 1,
+  standalone: false,
+  venue: { name: "V", theme: DEFAULT_THEME, playUrl: "https://play.kava.example", ...venue },
+  game: { id: "pool", displayName: "Pool", theme: DEFAULT_THEME, publicUrl: "https://pool.kava.example" },
+  generatedAt: "",
+});
+
+test("links: games list, other games and announcements only on a box", async () => {
+  const { gamesListUrl, otherGames, activeAnnouncement, gamesLinkHtml } = await import("./links.js");
+  const { standaloneContext } = await import("./context.js");
+  const off = standaloneContext("pool", "Pool");
+  assert.equal(gamesListUrl(off), undefined);
+  assert.deepEqual(otherGames(off), []);
+  assert.equal(gamesLinkHtml(off), "");
+  assert.equal(gamesLinkHtml(null), "");
+
+  const games = [
+    { id: "pool", displayName: "Pool", url: "https://pool.kava.example" },
+    { id: "bingo", displayName: "Kava <Bingo>", url: "https://bingo.kava.example" },
+  ];
+  const on = boxCtx({ games, announcement: { id: "a1", text: "Last call", until: "2026-01-01T02:00:00Z" } });
+  assert.equal(gamesListUrl(on), "https://play.kava.example");
+  assert.deepEqual(otherGames(on).map((g) => g.id), ["bingo"]);
+  const html = gamesLinkHtml(on);
+  assert.match(html, /href="https:\/\/play\.kava\.example"/);
+  assert.match(html, /Also playing: <a href="https:\/\/bingo\.kava\.example">Kava &lt;Bingo&gt;<\/a>/);
+  assert.doesNotMatch(gamesLinkHtml(on, { alsoPlaying: false }), /Also playing/);
+  assert.equal(activeAnnouncement(on, Date.parse("2026-01-01T01:00:00Z"))?.text, "Last call");
+  assert.equal(activeAnnouncement(on, Date.parse("2026-01-01T03:00:00Z")), undefined, "expired");
+});
+
+test("links: a 0.3.0-era box context (no games, no announcement) still works", async () => {
+  const { gamesListUrl, otherGames, activeAnnouncement, gamesLinkHtml } = await import("./links.js");
+  const old = boxCtx();
+  assert.equal(gamesListUrl(old), "https://play.kava.example");
+  assert.deepEqual(otherGames(old), []);
+  assert.equal(activeAnnouncement(old), undefined);
+  assert.doesNotMatch(gamesLinkHtml(old), /Also playing/);
+  assert.equal(gamesLinkHtml(boxCtx({ playUrl: undefined })), "", "no games list address: no link");
+});
+
+function fakeDoc() {
+  type El = { id?: string; className?: string; hidden: boolean; textContent: string; innerHTML: string; dataset: Record<string, string>; children: El[]; attrs: Record<string, string>; onclick?: () => void; type?: string; remove(): void; appendChild(e: El): void; setAttribute(k: string, v: string): void };
+  const added: El[] = [];
+  const el = (): El => {
+    const e: El = {
+      hidden: false,
+      textContent: "",
+      innerHTML: "",
+      dataset: {},
+      children: [],
+      attrs: {},
+      remove: () => void (added.includes(e) && added.splice(added.indexOf(e), 1)),
+      appendChild: (c: El) => void e.children.push(c),
+      setAttribute: (k, v) => void (e.attrs[k] = v),
+    };
+    Object.defineProperty(e, "textContent", { get: () => e.attrs._text ?? "", set: (v: string) => ((e.attrs._text = v), (e.children = [])) });
+    return e;
+  };
+  const doc = { createElement: el, head: { appendChild: (e: El) => added.push(e) }, body: { appendChild: (e: El) => added.push(e) } } as unknown as Document;
+  return { doc, added };
+}
+
+test("client sdk: gamesLink adds nothing standalone, renders and updates on a box", async () => {
+  const { gamesLink } = await import("./client.js");
+  const { standaloneContext } = await import("./context.js");
+  const { doc, added } = fakeDoc();
+  gamesLink(standaloneContext("pool", "Pool"), { doc });
+  assert.equal(added.length, 0);
+  const ctl = gamesLink(boxCtx(), { doc });
+  assert.equal(added.length, 2, "style + nav");
+  const nav = added[1];
+  assert.match(nav.innerHTML, /All games/);
+  ctl.update(boxCtx({ games: [{ id: "bingo", displayName: "Bingo", url: "https://b" }] }));
+  assert.match(nav.innerHTML, /Also playing/);
+  ctl.update(null);
+  assert.equal(nav.hidden, true);
+  ctl.remove();
+  assert.equal(added.length, 0);
+});
+
+test("client sdk: announcementBanner shows, dismisses per message, and follows updates", async () => {
+  const { announcementBanner } = await import("./client.js");
+  const { doc, added } = fakeDoc();
+  const mem = new Map<string, string>();
+  const storage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) };
+  const ctl = announcementBanner(boxCtx(), { doc, storage });
+  assert.equal(added.length, 0, "no announcement: nothing");
+  ctl.update(boxCtx({ announcement: { id: "a1", text: "Last call at 1:30" } }));
+  const bar = added[1];
+  assert.equal(bar.hidden, false);
+  assert.equal(bar.textContent, "Last call at 1:30");
+  bar.children[0].onclick!();
+  assert.equal(bar.hidden, true);
+  ctl.update(boxCtx({ announcement: { id: "a1", text: "Last call at 1:30" } }));
+  assert.equal(bar.hidden, true, "same message stays dismissed");
+  ctl.update(boxCtx({ announcement: { id: "a2", text: "Trivia at 9" } }));
+  assert.equal(bar.hidden, false, "a new message shows again");
+  ctl.remove();
+  assert.equal(added.length, 0);
+});
+
+test("mock box: venue context carries the games list, a second game and the announcement", async () => {
+  const { mockContext, MOCK_GAMES_PATH } = await import("./devbox.js");
+  const ctx = mockContext("pool", "Pool (mock)", "http://localhost:7080", { announcement: "Hi" });
+  assert.equal(ctx.venue.playUrl, `http://localhost:7080${MOCK_GAMES_PATH}`);
+  assert.deepEqual(ctx.venue.games?.map((g) => g.id), ["pool", "other-game"]);
+  assert.equal(ctx.venue.announcement?.text, "Hi");
+  assert.equal(mockContext("pool", "P", "http://localhost:7080").venue.announcement, undefined);
+});

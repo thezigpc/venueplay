@@ -26,7 +26,7 @@
       </section>
     </main>
     <script type="module">
-      import { getVenue, applyTheme, gameName } from "/sdk/client.js";
+      import { getVenue, applyTheme, gameName, gamesLink, announcementBanner, watchVenue } from "/sdk/client.js";
 
       const venue = await getVenue();
       if (venue) {
@@ -34,6 +34,14 @@
         document.getElementById("title").textContent = gameName(venue, "Hello Game");
         document.getElementById("tagline").textContent = venue.game.tagline ?? "";
       }
+      // SDK 0.4.0. On a box: "← All games" (+ "Also playing") on the landing page, and
+      // the staff's announcement. Standalone both add nothing.
+      const back = gamesLink(venue, { container: document.querySelector("main") });
+      const news = announcementBanner(venue);
+      watchVenue((ctx) => {
+        back.update(ctx);
+        news.update(ctx);
+      }, 30_000);
 
       const $ = (id) => document.getElementById(id);
       const post = (url, body) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) }).then((r) => r.json());
@@ -43,6 +51,7 @@
         code = c;
         await post(`/api/rooms/${code}/join`, { name: $("name").value });
         $("room").hidden = false;
+        back.remove(); // landing page only: not once you're in a room
         $("room-code").textContent = code;
         $("table-link").href = `/table?code=${code}`;
         refresh();
