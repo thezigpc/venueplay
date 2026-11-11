@@ -438,6 +438,11 @@ TV goes to the venue idle screen shortly after the room closes anyway.
   RUN mkdir -p /data && chown node:node /data
   USER node
   ```
+  **Existing self-hosted deployments:** once the image runs as `node` (uid 1000), a
+  `./data` bind mount that root created is no longer writable. Before their next rebuild,
+  run `sudo chown -R 1000:1000 ./data` on that host, and say so in the game's
+  release notes or deploy docs. (Named volumes on a box are created for the game: nothing
+  to do there.)
 - Test it, if Docker is available:
   ```bash
   docker build -t bargames/<id>:dev .
@@ -476,7 +481,12 @@ TV goes to the venue idle screen shortly after the room closes anyway.
    ```
    This starts a fake core on `:7199` and a fake gateway on `:7080` that forwards to
    your game. It prints the env vars to use, and then every event your game emits
-   and every cast to its two fake TVs. Add `--tv-pin 1234` to test the PIN prompt.
+   and every cast to its fake TVs. Add `--tv-pin 1234` to test the PIN prompt.
+   **If the manifest's port is already in use on your PC** (a live copy of the game, a
+   beta), run the test server on a spare port and point every command at it with
+   `--game http://127.0.0.1:<spare port>`. Otherwise `check`, `status` and `command`
+   talk to the other copy. A `venue.json` that "isn't the box's branding" or isn't JSON
+   usually means exactly that.
 2. Start the game server with those env vars:
    ```bash
    BG_GAME_ID=<id> BG_CORE_URL=http://127.0.0.1:7199 BG_GAME_TOKEN=dev-token PORT=<port> node server/dist/index.js
