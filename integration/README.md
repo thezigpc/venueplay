@@ -264,10 +264,21 @@ re-downloads a tag it already has. Any change you want on a box therefore needs 
    leave that out. For your own markup, `gamesListUrl(ctx)` and `otherGames(ctx)` give
    you the data (undefined / empty standalone).
 7. **Staff announcements (SDK 0.4.0).** Render `<VenueAnnouncement ctx={venue} />` once
-   at the root of the **phone** app (not the TV view), or call `announcementBanner(ctx)`
-   and feed it `update(ctx)` from `watchVenue`. It's a sticky strip at the top of the
-   page with a close button, and comes down on its own when it expires. Check that your
-   layout still works with it: no full-height `position: fixed` page that would hide it.
+   at the root of the **phone** app, or call `announcementBanner(ctx)` and feed it
+   `update(ctx)` from `watchVenue`. It's a sticky strip at the top of the page with a
+   close button, and comes down on its own when it expires.
+   - **Where:** every phone page, including pre-join pages (landing, join screen) and
+     the game's own admin pages. Never on a TV/shared screen: the box puts
+     announcements on idle TVs itself.
+   - **When only the room page knows it's a TV** (a table that joined a plain room URL),
+     pass `hidden` while it's a shared screen: `<VenueAnnouncement ctx={venue}
+     hidden={isSharedScreen} />` (`announcementBanner`: call `remove()`).
+   - **Layering:** it sits at `z-index: 2147483646`, above the game's modals and toasts,
+     on purpose (it's one line and dismissible). Don't try to layer over it. Check your
+     layout still works with it: no full-height `position: fixed` page that hides it.
+   - **Polling:** announcements arrive with the venue poll. On the snippet's `useVenue`,
+     pass `intervalMs: 30_000` to `watchVenue` (the current snippet does; older copies
+     poll every 60 s). The game kit's `useVenue` already polls every 30 s.
 
 ## Step 5: Events (level 2)
 

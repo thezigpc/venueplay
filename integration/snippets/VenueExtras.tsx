@@ -39,8 +39,12 @@ export function BackToGames({ ctx, label = "← All games", alsoPlaying = true }
 
 const DISMISSED = "bargames.dismissed";
 
-/** The staff's announcement: a sticky strip at the top with a close button. */
-export function VenueAnnouncement({ ctx }: { ctx: VenueContext | null }) {
+/**
+ * The staff's announcement: a sticky strip at the top with a close button. Pass `hidden`
+ * when the current screen is a shared/TV screen that only the page knows about (e.g. a
+ * table that joined a plain room URL): the box shows announcements on idle TVs itself.
+ */
+export function VenueAnnouncement({ ctx, hidden = false }: { ctx: VenueContext | null; hidden?: boolean }) {
   const [now, setNow] = useState(Date.now());
   const [dismissed, setDismissed] = useState(() => {
     try {
@@ -57,7 +61,7 @@ export function VenueAnnouncement({ ctx }: { ctx: VenueContext | null }) {
     const t = setTimeout(() => setNow(Date.now()), Math.min(until + 50, 2 ** 31 - 1));
     return () => clearTimeout(t);
   }, [a?.id, a?.until]);
-  if (!a || dismissed === a.id) return null;
+  if (hidden || !a || dismissed === a.id) return null;
   const dismiss = () => {
     try {
       sessionStorage.setItem(DISMISSED, a.id);
