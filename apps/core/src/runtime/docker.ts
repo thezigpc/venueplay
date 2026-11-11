@@ -36,7 +36,7 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
     const spec = containerSpec(game, { coreUrl: this.opts.coreUrl, publicUrl: this.opts.publicUrlFor(game) });
 
     // 1. Image.
-    await this.ensureImage(game.manifest.image);
+    const imageId = await this.ensureImage(game.manifest.image);
 
     // 2. Network, and attach core + gateway so they can reach the game.
     const net = await this.call("GET", `/networks/${spec.network.name}`, undefined, [404]);
@@ -53,25 +53,32 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
     }
 
     // 3. Container.
-    if (await this.ensureContainer(spec.name, spec.body)) this.opts.log.info("runtime", "game started", { game: game.id, image: game.manifest.image });
+    if (await this.ensureContainer(spec.name, spec.body, imageId)) this.opts.log.info("runtime", "game started", { game: game.id, image: game.manifest.image });
   }
 
-  /** Uses a local copy when present (versions are new tags/digests); otherwise pulls and waits. */
-  private async ensureImage(image: string): Promise<void> {
+  /**
+   * Uses a local copy when present (versions are new tags/digests); otherwise pulls and
+   * waits. Returns the image ID, so a container on an older build of the same tag is
+   * recreated.
+   */
+  private async ensureImage(image: string): Promise<string | undefined> {
     const local = await this.call("GET", `/images/${encodeURIComponent(image)}/json`, undefined, [404]);
-    if (local.status !== 404) return;
+    if (local.status !== 404) return ((await local.json()) as { Id?: string }).Id;
     const [repo, digestOrTag] = splitImage(image);
     const pull = await this.call("POST", `/images/create?fromImage=${encodeURIComponent(repo)}&tag=${encodeURIComponent(digestOrTag)}`);
     const progress = await pull.text();
     if (/"error"/.test(progress)) throw new Error(`pull ${image} failed: ${progress.slice(-300)}`);
+    const pulled = await this.call("GET", `/images/${encodeURIComponent(image)}/json`, undefined, [404]);
+    return pulled.status === 404 ? undefined : ((await pulled.json()) as { Id?: string }).Id;
   }
 
-  /** Starts the container, recreating it when the image or env changed. True when (re)created. */
-  private async ensureContainer(name: string, body: Record<string, unknown>): Promise<boolean> {
+  /** Starts the container, recreating it when the image (name or build) or env changed. True when (re)created. */
+  private async ensureContainer(name: string, body: Record<string, unknown>, imageId?: string): Promise<boolean> {
     const inspect = await this.call("GET", `/containers/${name}/json`, undefined, [404]);
     if (inspect.status !== 404) {
-      const info = (await inspect.json()) as { Config?: { Image?: string; Env?: string[] } };
-      if (info.Config?.Image === body.Image && sameEnv(info.Config?.Env, body.Env as string[])) {
+      const info = (await inspect.json()) as { Image?: string; Config?: { Image?: string; Env?: string[] } };
+      const sameBuild = !imageId || !info.Image || info.Image === imageId;
+      if (info.Config?.Image === body.Image && sameBuild && sameEnv(info.Config?.Env, body.Env as string[])) {
         await this.call("POST", `/containers/${name}/start`, undefined, [304]);
         return false;
       }
@@ -85,8 +92,8 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
   async ensureTunnel(token: string): Promise<void> {
     if (!this.opts.tunnel) throw new Error("tunnel connector not configured");
     const spec = tunnelSpec({ ...this.opts.tunnel, token });
-    await this.ensureImage(spec.image);
-    if (await this.ensureContainer(spec.name, spec.body)) this.opts.log.info("runtime", "tunnel connector started", { image: spec.image });
+    const imageId = await this.ensureImage(spec.image);
+    if (await this.ensureContainer(spec.name, spec.body, imageId)) this.opts.log.info("runtime", "tunnel connector started", { image: spec.image });
   }
 
   async removeTunnel(): Promise<void> {

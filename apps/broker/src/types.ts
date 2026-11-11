@@ -38,6 +38,18 @@ export interface ShowResult {
   ok: boolean;
   delivery?: DeliveryMethod;
   message?: string;
+  /** The TV shows a pairing code that staff must enter (AirPlay, once per TV). */
+  needsCode?: boolean;
+}
+
+/** What a display's stream is doing right now. */
+export interface StreamState {
+  delivery: DeliveryMethod;
+  url: string;
+  /** e.g. connecting, streaming, pin_required, dropped, error */
+  state: string;
+  needsCode: boolean;
+  detail?: string;
 }
 
 export interface Health {
@@ -55,8 +67,13 @@ export interface DisplayDriver {
   show(device: DisplayDevice, content: DisplayContent, delivery: DeliveryMethod): Promise<ShowResult>;
   stop(device: DisplayDevice): Promise<void>;
   health(device: DisplayDevice): Promise<Health>;
-  /** Optional one-time pairing (AirPlay PIN, ADB key, …). */
-  pair?(device: DisplayDevice, input?: Record<string, string>): Promise<{ ok: boolean; message?: string }>;
+  /**
+   * One-time pairing (AirPlay code, ADB key, …). Without a code it starts pairing (the
+   * TV shows its code); with one it completes it.
+   */
+  pair?(device: DisplayDevice, code?: string): Promise<ShowResult>;
+  /** Live stream state for the admin UI. */
+  streamState?(device: DisplayDevice): StreamState | undefined;
 }
 
 /**
@@ -65,6 +82,9 @@ export interface DisplayDriver {
  */
 export interface StreamService {
   startAirplay(device: DisplayDevice, content: { url: string }): Promise<ShowResult>;
+  /** Completes AirPlay pairing with the code the TV shows. */
+  pair?(device: DisplayDevice, code: string): Promise<ShowResult>;
+  state?(deviceId: string): StreamState | undefined;
   hlsUrl(content: { url: string }): Promise<string>;
   stopFor(deviceId: string): Promise<void>;
 }

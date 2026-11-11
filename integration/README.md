@@ -12,12 +12,41 @@ Bar Games support. Read this whole file before changing anything.
 | `snippets/bargames.ts` | Server module to copy and adapt |
 | `snippets/useVenue.ts` | React hook for branding |
 | `snippets/bargames.example.json` | An example manifest (Bingo) |
+| `snippets/publish-image.yml` | GitHub Actions workflow that publishes the image (step 10) |
 
 For the full API, see `C:\CodeProjects\GameBroker\docs\SDK.md`. For a complete working
 level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-game\`.
 
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
+
+## What's new in SDK 0.2.1 (for games already on 0.2.0)
+
+1. **Vendor the new tarball** (step 1, "Updating later"): `bargames-sdk-0.2.1.tgz`,
+   both `package.json` entries, `npm install`, and `"sdk": { "version": "0.2.1", … }`.
+2. **`confirm_claim` / `reject_claim`** (step 6, only for games with claims such as a
+   BINGO call): staff resolve a pending claim from the box's iPad. List pending claims
+   in status as `pendingClaims`.
+3. **The mock box has two fake TVs** (step 9): test the step 6b "TVs" control with
+   `npx bargames mock-box . --tv-pin 1234`.
+
+Nothing else changed; 0.2.0 games keep working on a 0.2.1 box.
+
+## What's new in SDK 0.2.0 (for games already on 0.1.0)
+
+1. **Vendor the new tarball** (step 1, "Updating later"):
+   the newest tarball (now `bargames-sdk-0.2.1.tgz`), both `package.json` entries, `npm install`, and set
+   `"sdk": { "version": "0.2.1", … }` in `bargames.json`.
+2. **`create_room`** (step 6): the box can start a venue room for the TVs.
+3. **Casting from inside the game** (step 6b, optional): the host's screen can put
+   the room on the venue's TVs, with the venue's TV PIN. It's box-only, so nothing
+   changes standalone.
+4. **Table view:** the box hides the mouse. Nothing on the TV may need a pointer
+   (step 7).
+5. Run `npx bargames check` again (it now tests `create_room`), bump the game's
+   `version` and `image` tag, and update `BARGAMES.md`.
+
+Everything from 0.1.0 still works unchanged.
 
 ---
 
@@ -57,6 +86,11 @@ that integrates with the SDK gets four things:
 5. **Don't refactor beyond what the integration needs.** Follow the repo's own
    CLAUDE.md conventions, and keep its tests passing. Add tests for what you add.
 6. **Don't deploy anything** to the user's production or dev sites as part of this work.
+   Adding the image-publishing workflow (step 10) is part of the work. Pushing to
+   GitHub, which triggers it, happens only when the user asks for it.
+7. **The box never builds your code from a working copy.** It gets the image from a
+   registry (step 10), so everything the image needs must be committed and the
+   Dockerfile must build from a clean checkout.
 
 ## Integration levels: aim for level 3
 
@@ -73,11 +107,11 @@ Work through them in order, and get each level fully working before starting the
 
 ## Step 1: Vendor the SDK
 
-1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.1.0.tgz` to
+1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.2.1.tgz` to
    `<repo>\vendor\` (create the folder).
 2. Add the dependency to **both** the `server` and `client` workspace `package.json`:
    ```json
-   "@bargames/sdk": "file:../vendor/bargames-sdk-0.1.0.tgz"
+   "@bargames/sdk": "file:../vendor/bargames-sdk-0.2.1.tgz"
    ```
 3. Run `npm install` at the repo root and commit the lockfile change along with it.
 4. **Dockerfile:** the `npm ci` layer needs the tarball. Next to the other
@@ -88,7 +122,7 @@ Work through them in order, and get each level fully working before starting the
 5. The CLI is now available as `npx bargames` (try `npx bargames` with no arguments).
 
 **Updating later:** a newer SDK arrives as a new file name, for example
-`bargames-sdk-0.2.0.tgz`. Replace the file, update both `package.json` entries, and run
+`bargames-sdk-0.2.1.tgz`. Replace the file, update both `package.json` entries, and run
 `npm install`. Never overwrite a tarball under the same name: the lockfile's integrity
 hash would then fail `npm ci`.
 
@@ -100,7 +134,7 @@ Start from `snippets/bargames.example.json`, then fill it in from the repo:
 |---|---|
 | `id` | A short lowercase slug: `bingo`, `cah`, `pool`. It's also the default hostname. |
 | `name`, `version` | The game's name, and the version from the root `package.json` (semver) |
-| `image` | `bargames/<id>:<version>`. For now the box builds images locally. |
+| `image` | `ghcr.io/<github owner, lowercase>/<id>:<version>`, e.g. `ghcr.io/thezigpc/bingo:0.1.0`. The tag **must equal `version`**. The box pulls this exact name, and step 10's workflow publishes it. |
 | `port` | The server's default `PORT` from `server/src/config.ts` |
 | `routes.player` | Where a guest starts (usually `/`) |
 | `routes.table` | **The TV view for a room, using `{code}`.** Requirements are in step 7. |
@@ -114,6 +148,10 @@ Start from `snippets/bargames.example.json`, then fill it in from the repo:
 
 Check it with `npx bargames validate .`. A warning about the image not being pinned by
 digest is expected for now.
+
+**Versions are immutable.** The box keeps a local copy of each image tag and never
+re-downloads a tag it already has. Any change you want on a box therefore needs a new
+`version`, with the `image` tag changed to match, in the same commit.
 
 ## Step 3: Server wiring (level 1)
 
@@ -197,8 +235,8 @@ bg.emit({ type: "winner", roomCode: room.code, sessionKind: room.kind, data: { n
 - **Privacy:** only display names that players typed. No IPs, no socket ids, no
   messages or card text.
 - **`sessionKind`:** add a `kind: "venue" | "patron" | "private"` field to the room,
-  defaulting to `"patron"`. The box will later create `"venue"` rooms, so keep the field
-  even though everything is `"patron"` today.
+  defaulting to `"patron"`. Rooms the box creates with `create_room` (step 6) are
+  `"venue"`.
 - **Declare** every type you emit in `bargames.json` `events`.
 
 ## Step 6: Commands and status (level 3)
@@ -224,12 +262,105 @@ bg.setStatusProvider(() => ({ rooms: [...] }));
   | `pause` / `resume` | Pause and resume automatic progress (auto-call, turn timers) |
   | `next_round` | Move on to the next game, round or rack, keeping the players |
   | `end` | End the session. Close the room the way the host's "close room" does. |
+  | `confirm_claim` / `reject_claim` | Accept or turn down a pending claim (SDK 0.2.1, see below) |
 - **Status:** one entry per room:
   - `code`;
   - `kind`;
   - `players` (players only, not tables or viewers);
   - `phase` (the game's own phase names);
-  - optional `title` and `hostConnected`.
+  - optional `title` and `hostConnected`;
+  - `pendingClaims` if the game has claims (below).
+
+### `create_room`: the box starts a room for the TVs (SDK 0.2.0)
+
+When staff choose **Put a game on the TVs → New room** on the iPad, the box asks the
+game for a room, then casts that room's table view. Without this, staff must first
+start a room on a phone and type its code.
+
+```ts
+bg.onCreateRoom(({ kind, title }) => {
+  const room = rooms.createVenueRoom({ kind, title }); // kind is "venue"
+  return { roomCode: room.code, hostUrl: `/join/${room.code}?key=${room.hostKey}` };
+});
+```
+
+- **The room has no host phone.** It must:
+  - stay alive with nobody hosting it. Don't idle-close it while a table (TV) client is
+    connected; `end` closes it;
+  - accept players joining by code, exactly like a normal room;
+  - be fully driven by the other commands (`start`, `pause`, `next_round`, `end`).
+- **`hostUrl` (optional):** a path or URL that gives the host controls for this room,
+  including any host key. The box shows it only to venue staff, as "Open the host
+  controls", so the iPad can run the room. Leave it out if the game has no such link.
+- **Refusing:** throw an `Error`; its message is shown to staff. Never return without a
+  `roomCode`.
+- **Status** must list the new room with `kind: "venue"`.
+- List `create_room` in the manifest's `commands`. `npx bargames check` then creates a
+  room, checks status and the table route, and closes it with `end`.
+
+### `confirm_claim` / `reject_claim`: staff resolve a claim (SDK 0.2.1)
+
+For games where a player's claim waits for a human (a BINGO call, a disputed score).
+Venue rooms have no host phone, so staff resolve claims from the box's iPad: the Home
+page's **Rooms** card shows each pending claim with **Confirm** and **Reject**.
+
+```ts
+import type { ClaimArgs } from "@bargames/sdk/server";
+
+bg.onCommand("confirm_claim", ({ roomCode, args }) => {
+  const room = roomCode ? rooms.get(roomCode) : undefined;
+  if (!room) return { ok: false, message: "no such room" };
+  const { claimId } = (args ?? {}) as ClaimArgs; // omitted: the oldest pending claim
+  return room.confirmClaimFromBox(claimId);      // same path as the host's "confirm" button
+});
+// reject_claim: the same shape; args.reason is an optional reason for the player.
+```
+
+- **Status** lists the waiting claims on each room, oldest first:
+  `pendingClaims: [{ id, player, detail, at }]`. `id` is any stable string your game
+  recognises (`player` and `detail` are what staff read, e.g. "Sam", "Line on row 3").
+  Leave it out or empty when nothing is waiting.
+- **Refuse** with `{ ok: false, message }` when the claim is gone or already decided
+  (a host on a phone may have got there first). Never throw.
+- Emit `claim_pending` when a claim starts waiting, and `winner` when one is confirmed,
+  as before.
+- List **both** commands in the manifest. `npx bargames check` warns if only one is
+  listed or `claim_pending` isn't declared, and checks the `pendingClaims` shape.
+
+## Step 6b: Casting from inside the game (SDK 0.2.0, optional)
+
+A game's own host can put their room on the venue's TVs from the game's host screen.
+**This only exists on a box.** Off a box, `bg.displays()` returns `enabled: false`, and
+`cast`/`stopCast` refuse without touching the network. Rule 1 still holds: nothing
+appears in a standalone game.
+
+The venue decides in the box admin (TVs → "Casting from games") whether hosts may
+cast, and whether they must enter the venue's **TV PIN**. Whoever pairs and sets up the
+TVs does that in the box admin, never in the game.
+
+```ts
+// server: only for the room's host (use the game's existing host check)
+const targets = await bg.displays();
+//   → { enabled, pinRequired, displays: [{ id, name, group, busy, showingThisGame, roomCode }] }
+const r = await bg.cast(room.code, ["roku:X123"], { pin });   // → { ok, message, results }
+await bg.stopCast(["roku:X123"], { pin });                    // only clears TVs showing this game
+```
+
+- **Wire it through the host's socket intents**, for example `listTvs` and
+  `castToTvs { ids, pin }`. Check the requester is the room's host first. Never expose
+  these calls to players.
+- **UI:** show a "TVs" control in the host screen **only when `targets.enabled`**. List
+  TVs by `name`, mark `busy` or `showingThisGame`, and ask for the PIN only when
+  `pinRequired`. Show `message` from failed results as-is (for example "Wrong TV PIN" or
+  "Too many wrong TV PINs").
+- `results[id].needsCode` means the TV hasn't been paired with the box yet. Tell the
+  host to ask staff; pairing happens in the box admin.
+- The box only casts rooms your status lists, and only this game's table route.
+- Refresh `displays()` when the host opens the control. Don't poll it.
+- **Test it with the mock box** (step 9): it has two fake TVs, `fake-bar` and
+  `fake-patio`, and follows the same rules as a real box (rooms must be in status,
+  wrong-PIN lockout). `--tv-pin 1234` requires a PIN; `--no-cast` acts like a venue
+  that turned casting from games off. Each cast prints the table URL the TV would show.
 
 ## Step 7: The table (TV) view
 
@@ -245,6 +376,9 @@ fix whatever fails:
 - [ ] It recovers on its own from a server restart or a dropped socket: it reconnects
       and shows the room again, or a clear "room closed" screen.
 - [ ] It's light on animation. A static board is cheaper to cast than constant motion.
+- [ ] Nothing assumes a pointer. The box hides the mouse, and staff control the room
+      from the iPad (commands) or the game's host screen. So there are no "click to…"
+      hints, hover effects, or on-screen buttons that the room needs.
 
 If the table route needs a key or role parameter, the `{code}` URL must still work
 display-only. If it can't, write that in your report.
@@ -271,6 +405,19 @@ display-only. If it can't, write that in your report.
   ```
 - Fonts and scripts loaded *by the browser* from CDNs still work. Anything the *server*
   fetches from the internet won't work on a box.
+- **It must build from a clean checkout.** Both the publishing workflow (step 10) and a
+  possible future build on the box run a plain `docker build .` at the repo root:
+  - no build args or secrets;
+  - target `linux/amd64`, because boxes are Intel PCs;
+  - nothing that exists only on your machine, such as an uncommitted `vendor/` tarball, a
+    local `.env`, or a prebuilt `dist/`.
+
+  Prove it:
+  ```bash
+  git clone <repo> /tmp/clean && cd /tmp/clean && docker build -t bargames/<id>:clean .
+  ```
+  Keep `.dockerignore` excluding `node_modules`, `dist`, `.env` and runtime data, so a
+  local build matches the CI build.
 
 ## Step 9: Test it like a box, then report
 
@@ -288,7 +435,8 @@ display-only. If it can't, write that in your report.
    npx bargames mock-box .
    ```
    This starts a fake core on `:7199` and a fake gateway on `:7080` that forwards to
-   your game. It prints the env vars to use, and then every event your game emits.
+   your game. It prints the env vars to use, and then every event your game emits
+   and every cast to its two fake TVs. Add `--tv-pin 1234` to test the PIN prompt.
 2. Start the game server with those env vars:
    ```bash
    BG_GAME_ID=<id> BG_CORE_URL=http://127.0.0.1:7199 BG_GAME_TOKEN=dev-token PORT=<port> node server/dist/index.js
@@ -314,6 +462,61 @@ browser, open the table route.
 - the table route and the result of each step 7 checklist item;
 - the container: the paths written to under `/data`, and the read-only test result;
 - what you changed in standalone code paths, and how you verified nothing changed;
+- **the image**:
+  - the `image` name;
+  - the result of the clean-checkout build;
+  - whether the workflow has run, and whether the package is public (step 10);
 - **SDK requests:** anything the SDK or platform should do differently.
 
 The Bar Games side uses that file to install and test the game on a real box.
+
+## Step 10: Publish the image
+
+A venue installs a game by pasting its GitHub URL into the box. The box reads
+`bargames.json` from the default branch and **pulls the `image` it names**. It does not
+build from source, and it has no registry credentials. So the image must be published
+to a **public** registry before anyone installs that version. If it isn't, the install
+looks like it worked, but the game's address returns 502.
+
+We publish to GitHub Container Registry (GHCR) with GitHub Actions. That needs no
+accounts or secrets beyond the repo's own `GITHUB_TOKEN`.
+
+1. Copy `snippets/publish-image.yml` to `.github/workflows/publish-image.yml`. It needs
+   no edits. It runs whenever `bargames.json` changes on `main`, and can also be started
+   from the Actions tab. It:
+   - reads `image` and `version` from `bargames.json`;
+   - fails if `image` isn't `ghcr.io/<owner>/<name>:<version>`;
+   - skips a version that's already published (they're immutable);
+   - builds `linux/amd64` from the checkout and pushes it, labeled with the repo, so the
+     package links to it.
+2. Make sure `image` in `bargames.json` follows step 2 (lowercase owner, tag ==
+   `version`). Run `npx bargames validate .`.
+3. **Stop and hand over to the user.** Pushing is their call (rule 6). Tell them:
+   - push `main`; the "Publish image" workflow should go green;
+   - **first publish only:** GHCR packages start out *private*. Open
+     `https://github.com/users/<owner>/packages/container/<name>/settings`, go to
+     "Danger Zone", choose "Change visibility", and select **Public**. Otherwise the box
+     gets "pull access denied".
+4. **Verify anonymously** that the box will be able to pull it. Expect `200`:
+   ```bash
+   img=<owner>/<name>; tag=<version>
+   tok=$(curl -s "https://ghcr.io/token?scope=repository:$img:pull" | node -pe 'JSON.parse(require("fs").readFileSync(0)).token')
+   curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $tok" \
+     -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json" \
+     "https://ghcr.io/v2/$img/manifests/$tag"
+   ```
+   Anything else (`401`, `403` or `404`) means the package is still private or hasn't been
+   published yet. GHCR answers both the same way, so check the Actions run first.
+
+**Releasing a new version later:**
+1. Bump `version` and the `image` tag together in one commit, and push.
+2. Wait for the workflow to go green.
+3. On the box, re-install from the same GitHub URL (it upgrades in place). Then turn
+   the game off and on so it restarts on the new image.
+
+Never re-publish an existing tag. The box would keep running its cached copy.
+
+**Build from source (not available yet):** the box may later build images itself from
+the GitHub source at a pinned commit, for games without a registry. Step 8's
+"clean checkout" rule already keeps a game ready for that. Until then, a published image
+is the only way a game reaches a box.

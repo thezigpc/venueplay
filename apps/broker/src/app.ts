@@ -76,6 +76,17 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
     }),
   );
 
+  /** {} starts pairing (the TV shows its code); { code } completes it. */
+  app.post(
+    "/displays/:id/pair",
+    h(async (req, res) => {
+      one(req.params.id);
+      const code = req.body?.code === undefined ? undefined : String(req.body.code).trim();
+      if (code !== undefined && !/^[ -~]{1,64}$/.test(code)) return void res.status(400).json({ error: "code: 1-64 printable characters" });
+      res.json(await d.registry.pair(req.params.id, code || undefined));
+    }),
+  );
+
   app.post(
     "/displays/:id/input",
     h(async (req, res) => {

@@ -1,5 +1,5 @@
 import type { JsonStore } from "@bargames/common";
-import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult } from "./types.js";
+import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamState } from "./types.js";
 
 export interface DisplayRecord extends DisplayDevice {
   /** Venue's own label, e.g. "Bar left". */
@@ -14,6 +14,17 @@ export interface DisplayRecord extends DisplayDevice {
 export interface DisplayView extends DisplayRecord {
   capabilities?: Capabilities;
   health?: Health;
+  stream?: StreamState;
+}
+
+/** The screen a TV shows while it pairs: self-contained, no network needed. */
+export function pairingScreen(tvName: string): string {
+  const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const html = `<!doctype html><meta charset="utf-8"><title>Pairing</title>
+<body style="margin:0;height:100vh;display:grid;place-items:center;background:#101528;color:#f4f6ff;font:600 4vh system-ui,sans-serif;text-align:center">
+<div><div style="font-size:9vh">&#128250;</div><p style="font-size:6vh;margin:2vh 0">${esc(tvName)} is connected</p>
+<p style="opacity:.7">Bar Games box &middot; paired over AirPlay</p></div></body>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
 export type Target = { displayIds?: string[]; group?: string };
@@ -44,7 +55,7 @@ export class DisplayRegistry {
         const drv = this.drivers.get(d.driver);
         if (!drv) return d;
         const [capabilities, health] = await Promise.all([drv.capabilities(d).catch(() => undefined), withHealth ? drv.health(d) : undefined]);
-        return { ...d, capabilities, health };
+        return { ...d, capabilities, health, stream: drv.streamState?.(d) };
       }),
     );
   }
@@ -117,6 +128,40 @@ export class DisplayRegistry {
       }),
     );
     return results;
+  }
+
+  /**
+   * Pairing. Without a code: shows the pairing screen, which makes the TV ask for its
+   * AirPlay code (or connects right away when it's already paired). With a code:
+   * completes it. Either way, once connected the TV goes back to what it was showing.
+   */
+  async pair(id: string, code?: string): Promise<ShowResult & { paired?: boolean }> {
+    const d = this.get(id);
+    if (!d) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    const drv = this.driverFor(d);
+    if (!drv.pair) return { ok: false, message: `${d.name} doesn't need pairing` };
+    const r = code ? await drv.pair(d, code) : await drv.show(d, { kind: "url", url: pairingScreen(d.label || d.name) }, "airplay");
+    if (r.ok && !r.message) {
+      this.afterPairing(d.id);
+      return { ...r, paired: true, message: code ? "Paired." : "Already paired: it connected without a code." };
+    }
+    return r;
+  }
+
+  private afterPairing(id: string) {
+    setTimeout(() => {
+      const d = this.get(id);
+      if (!d) return;
+      const back = d.content?.kind === "url" ? this.show({ displayIds: [id] }, d.content) : this.driverFor(d).stop(d);
+      void Promise.resolve(back).catch(() => undefined);
+    }, 8000).unref?.();
+  }
+
+  /** After a restart: put every TV back on what it was showing. */
+  async resume(): Promise<void> {
+    for (const d of this.list()) {
+      if (d.content?.kind === "url") await this.show({ displayIds: [d.id] }, d.content).catch(() => undefined);
+    }
   }
 
   private async setContent(id: string, content: DisplayContent) {

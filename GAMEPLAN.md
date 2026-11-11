@@ -272,6 +272,18 @@ from the earlier plan.
 - [ ] `roku` driver: ECP control plus AirPlay and HLS delivery
 - [ ] Renderer (Chromium per group, GPU-rendered), encoders, watchdog, idle screen
 
+**Status 2026-11-10 (AirPlay casting working on the bench):**
+- Xvfb → Chromium kiosk → doubletake v0.5.0 → QuickSync (`vah264enc`), 1080p30 at about 4 Mbps, mirrored to the Roku Express (3930RW).
+- One channel per page: TVs showing the same room share one encode.
+- Pairing from the TVs tab. The mouse is hidden.
+- Casts resume after a broker restart, and a watchdog restarts crashed processes and reconnects dropped TVs.
+- SDK 0.2.0 adds `create_room` ("New room" when casting) and casting from inside a game (venue switch plus TV PIN).
+- Still to do: the idle screen, `roku-hls`, and measuring two TVs at once.
+
+**Later (evolving):** deeper integration with the games.
+- Shared admin passwords/sign-in, and each game's admin pages opened from the box admin.
+- More common code moved from the games into the platform.
+
 ### Phase 4: Control page (`admin.`)
 - [ ] PIN login; TV grid; game picker; send to all / group / single TV; panic button
 - [ ] Game host view built in (the iPad is the remote and the game host)

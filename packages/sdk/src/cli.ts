@@ -2,7 +2,7 @@
 // bargames: developer CLI for game packages.
 //   bargames validate [dir|file]   check bargames.json
 //   bargames init [dir]            write a starter bargames.json
-//   bargames mock-box [dir] [--game URL] [--port N] [--core-port N] [--name S]
+//   bargames mock-box [dir] [--game URL] [--port N] [--core-port N] [--name S] [--tv-pin N] [--no-cast]
 //   bargames command <name> [--room CODE] [--args JSON] [--game URL]
 //   bargames status [--game URL]
 //   bargames check [dir] [--game URL]
@@ -81,7 +81,8 @@ switch (cmd) {
     const gatewayPort = Number(flags.port ?? 7080);
     const gameUrl = gameUrlFor(m?.port);
     const name = flags.name ?? `${m?.name ?? gameId} (mock)`;
-    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m });
+    const tvPin = flags["tv-pin"] ?? "";
+    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined });
     const gamePort = new URL(gameUrl).port;
     console.log(`mock box for "${gameId}"
 
@@ -93,7 +94,10 @@ switch (cmd) {
   3. In another terminal, from the game repo:
        npx bargames check     npx bargames status     npx bargames command start --room ABCD
 
-Events your game emits print below (✗ = would be rejected, or isn't declared in bargames.json).
+  4. Two fake TVs ("fake-bar", "fake-patio") answer bg.displays() / bg.cast()${tvPin ? `, TV PIN ${tvPin}` : ", no TV PIN (try --tv-pin 1234)"}.
+     Each cast prints the table URL: open it to see what that TV would show.
+
+Events and casts from your game print below (✗ = would be rejected, or isn't declared in bargames.json).
 `);
     break;
   }
@@ -131,6 +135,7 @@ Events your game emits print below (✗ = would be rejected, or isn't declared i
   bargames validate [dir|file]   check bargames.json
   bargames init [dir]            write a starter bargames.json
   bargames mock-box [dir]        pretend box: fake core on :7199 + fake gateway on :7080 in front of your game
+                                 --tv-pin 1234: require a TV PIN for casting · --no-cast: casting turned off
       [--game http://127.0.0.1:PORT] [--port 7080] [--core-port 7199] [--name "Display Name"]
   bargames check [dir]           conformance checks against your running game
   bargames status                room status, as the box's iPad sees it

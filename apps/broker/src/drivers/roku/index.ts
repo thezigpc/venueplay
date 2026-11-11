@@ -1,4 +1,4 @@
-import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamService } from "../../types.js";
+import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamService, StreamState } from "../../types.js";
 import { RokuEcp } from "./ecp.js";
 import { ssdpSearch } from "./ssdp.js";
 
@@ -88,8 +88,20 @@ export class RokuDriver implements DisplayDriver {
   }
 
   async stop(device: DisplayDevice): Promise<void> {
+    // Ending the AirPlay session returns the Roku to what it showed before. (The HLS
+    // app, when built, will need an ECP Home keypress here.)
     await this.streams.stopFor(device.id);
-    await this.ecp(device).keypress("Home");
+  }
+
+  /** AirPlay pairing: the screen to show while pairing is supplied by the registry. */
+  async pair(device: DisplayDevice, code?: string): Promise<ShowResult> {
+    if (!this.streams.pair) return { ok: false, message: "AirPlay isn't available on this box" };
+    if (!code) return { ok: false, message: "no code" };
+    return this.streams.pair(device, code);
+  }
+
+  streamState(device: DisplayDevice): StreamState | undefined {
+    return this.streams.state?.(device.id);
   }
 
   async health(device: DisplayDevice): Promise<Health> {

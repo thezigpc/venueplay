@@ -79,6 +79,10 @@ main { padding: 16px; max-width: 1200px; margin: 0 auto; }
 .warn { color: var(--warn); }
 .ok { color: var(--ok); }
 .note { white-space: pre-wrap; background: var(--surface-2); padding: 10px; border-radius: 8px; font: inherit; }
+.room { border-top: 1px solid var(--surface-2); padding: 10px 0; }
+.room:first-of-type { border-top: 0; }
+.claim { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: var(--surface-2); border-radius: 8px; padding: 8px 10px; margin: 6px 0; }
+.claim span { flex: 1 1 160px; }
 .switch { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text); }
 .switch input { width: 22px; height: 22px; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; }

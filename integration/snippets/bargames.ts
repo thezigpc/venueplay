@@ -4,7 +4,7 @@
 // Off a box (no BG_CORE_URL / BG_GAME_TOKEN env) every call here is a no-op and
 // the game behaves exactly as before. That's guaranteed by the SDK.
 
-import { createBarGames, type GameStatus } from "@bargames/sdk/server";
+import { createBarGames, type ClaimArgs, type GameStatus } from "@bargames/sdk/server";
 import type { IncomingMessage } from "node:http";
 
 export const bg = createBarGames({
@@ -40,6 +40,20 @@ export async function displayName(fallback: string): Promise<string> {
 //     return room.startFromBox();   // same code path as the host's "start" intent,
 //   });                              // including the broadcast; returns { ok, message }
 //
+//   // SDK 0.2.0: "Put a game on the TVs → New room" from the box. No host phone.
+//   bg.onCreateRoom(({ kind, title }) => {
+//     const room = rooms.createVenueRoom({ kind, title });   // stays open until "end"
+//     return { roomCode: room.code, hostUrl: `/join/${room.code}?key=${room.hostKey}` };
+//   });
+//
+//   // SDK 0.2.1, games with claims only: staff confirm/reject from the box's iPad.
+//   bg.onCommand("confirm_claim", ({ roomCode, args }) => {
+//     const room = roomCode ? rooms.get(roomCode) : undefined;
+//     if (!room) return { ok: false, message: "no such room" };
+//     return room.confirmClaimFromBox((args as ClaimArgs | undefined)?.claimId); // oldest when omitted
+//   });
+//   bg.onCommand("reject_claim", ({ roomCode, args }) => { /* same, with args.reason */ });
+//
 //   bg.setStatusProvider((): GameStatus => ({
 //     rooms: rooms.list().map((r) => ({
 //       code: r.code,
@@ -48,7 +62,16 @@ export async function displayName(fallback: string): Promise<string> {
 //       phase: r.phase,             // e.g. "lobby" | "playing"
 //       title: r.title,
 //       hostConnected: r.hostConnected,
+//       pendingClaims: r.pendingClaims.map((c) => ({ id: c.id, player: c.name, detail: c.summary, at: c.at })),
 //     })),
 //   }));
 // }
-export type { GameStatus };
+
+// ---------------------------------------------------------------- casting (SDK 0.2.0, box only)
+// For the HOST's socket intents only (check the requester hosts the room first).
+// Off a box: displays() → { enabled: false, … } (hide the TVs control), cast() refuses.
+//
+//   socket.on("tvs:list", async (_, ack) => ack(await bg.displays()));
+//   socket.on("tvs:cast", async ({ ids, pin }, ack) => ack(await bg.cast(room.code, ids, { pin })));
+//   socket.on("tvs:stop", async ({ ids, pin }, ack) => ack(await bg.stopCast(ids, { pin })));
+export type { ClaimArgs, GameStatus };

@@ -182,6 +182,24 @@ export function tableUrl(manifest: Pick<GameManifest, "routes">, roomCode: strin
   return manifest.routes.table?.replace("{code}", encodeURIComponent(roomCode));
 }
 
+/**
+ * The reverse of tableUrl: the room code in a table URL (path + query, origin
+ * removed), or undefined when the URL isn't this game's table route.
+ */
+export function roomFromTableUrl(manifest: Pick<GameManifest, "routes">, pathAndQuery: string): string | undefined {
+  const t = manifest.routes.table;
+  if (!t || !t.includes("{code}")) return undefined;
+  const [pre, post] = t.split("{code}");
+  if (!pathAndQuery.startsWith(pre) || !pathAndQuery.endsWith(post) || pathAndQuery.length < pre.length + post.length + 1) return undefined;
+  const raw = pathAndQuery.slice(pre.length, pathAndQuery.length - post.length);
+  if (/[/?&#]/.test(raw)) return undefined;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Compares semver strings (pre-release tags ignored). */
 export function compareVersions(a: string, b: string): number {
   const pa = a.split(/[-+]/)[0].split(".").map(Number);

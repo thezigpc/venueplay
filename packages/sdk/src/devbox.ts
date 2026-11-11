@@ -1,15 +1,15 @@
 // Node-only developer tools behind the `bargames` CLI: a pretend box for testing a
 // game's integration without the platform. Not exported to browsers.
 //
-//   mock-box: fake core (venue context + event sink) and a fake gateway in front of
-//             the game (adds the x-bargames-* headers, proxies HTTP and WebSockets).
+//   mock-box: fake core (venue context + event sink + two fake TVs) and a fake gateway
+//             in front of the game (adds the x-bargames-* headers, proxies HTTP and WebSockets).
 //   command / status: call the game the way the box's iPad does.
 //   check:    automated conformance checks.
 
 import { createServer, request, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { connect } from "node:net";
-import { MANIFEST_FILE, validateManifest, type GameManifest } from "./manifest.js";
-import { HEADERS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type VenueContext, type VenueTheme } from "./protocol.js";
+import { MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
+import { HEADERS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type CastDisplay, type CastTargets, type GameStatus, type VenueContext, type VenueTheme } from "./protocol.js";
 import { DEFAULT_THEME } from "./theme.js";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -65,11 +65,45 @@ export interface MockBoxOptions {
   corePort: number;
   gatewayPort: number;
   manifest?: GameManifest;
+  /** Fake venue TV PIN for casting from the game. Empty: no PIN. */
+  tvPin?: string;
+  /** false: act like a venue that turned "casting from games" off. */
+  castFromGames?: boolean;
 }
+
+/** The mock box's pretend venue TVs. */
+export const FAKE_TVS = [
+  { id: "fake-bar", name: "Bar (fake TV)", group: "Main room" },
+  { id: "fake-patio", name: "Patio (fake TV)", group: "Patio" },
+] as const;
 
 export function mockBox(o: MockBoxOptions) {
   const publicUrl = `http://localhost:${o.gatewayPort}`;
   const declared = new Set(o.manifest?.events ?? []);
+  /** fake TV id -> room code it shows. */
+  const showing = new Map<string, string>();
+  let pinFailures = 0;
+
+  const gameRooms = async (): Promise<GameStatus> =>
+    fetch(new URL(PATHS.status, o.gameUrl), { headers: { authorization: `Bearer ${DEV_TOKEN}` }, signal: AbortSignal.timeout(3000) })
+      .then((r) => r.json() as Promise<GameStatus>)
+      .catch(() => ({ rooms: [] }));
+
+  /** Same rules as the real box: casting on, the PIN when set, 5 wrong PINs -> 429. */
+  const castGate = (pin: unknown): [number, string] | undefined => {
+    if (o.castFromGames === false) return [403, "casting from games is turned off at this venue"];
+    if (!o.tvPin) return undefined;
+    if (pinFailures >= 5) return [429, "too many wrong PINs, try again in a minute"];
+    if (typeof pin !== "string" || !pin) return [403, "TV PIN required"];
+    if (pin !== o.tvPin) {
+      pinFailures++;
+      return [403, "wrong TV PIN"];
+    }
+    pinFailures = 0;
+    return undefined;
+  };
+  const pinReset = setInterval(() => (pinFailures = 0), 60_000);
+  pinReset.unref();
 
   // Fake core: what the SDK inside the game talks to (BG_CORE_URL).
   const core = createServer(async (req, res) => {
@@ -82,6 +116,48 @@ export function mockBox(o: MockBoxOptions) {
       return json(401, { error: "bad game token" });
     }
     if (req.url === "/internal/venue") return json(200, mockContext(o.gameId, o.displayName, publicUrl));
+    if (req.url === "/internal/displays" && req.method === "GET") {
+      if (o.castFromGames === false) return json(200, { enabled: false, pinRequired: false, displays: [] } satisfies CastTargets);
+      const displays: CastDisplay[] = FAKE_TVS.map((t) => ({ id: t.id, name: t.name, group: t.group, busy: showing.has(t.id), showingThisGame: showing.has(t.id), roomCode: showing.get(t.id) }));
+      return json(200, { enabled: true, pinRequired: Boolean(o.tvPin), displays } satisfies CastTargets);
+    }
+    if ((req.url === "/internal/cast" || req.url === "/internal/cast/stop") && req.method === "POST") {
+      const body = JSON.parse((await readBody(req)) || "{}") as { roomCode?: unknown; displayIds?: unknown; pin?: unknown };
+      const gate = castGate(body.pin);
+      if (gate) {
+        console.log(c.warn(`! cast refused: ${gate[1]}`));
+        return json(gate[0], { error: gate[1] });
+      }
+      const ids = Array.isArray(body.displayIds) ? body.displayIds.map(String) : [];
+      if (!ids.length) return json(400, { error: "pick at least one TV" });
+      const results: Record<string, { ok: boolean; message?: string }> = {};
+      if (req.url === "/internal/cast/stop") {
+        for (const id of ids) {
+          if (showing.delete(id)) console.log(`${c.ok("TV off")} ${id}`);
+          results[id] = { ok: true };
+        }
+        return json(200, { ok: true, results });
+      }
+      const room = body.roomCode;
+      if (typeof room !== "string" || !room) return json(400, { error: "roomCode required" });
+      if (!o.manifest?.routes.table) return json(400, { error: "this game has no TV view (routes.table in bargames.json)" });
+      if (!(await gameRooms()).rooms?.some((r) => r.code === room)) {
+        console.log(c.bad(`✗ cast: room ${room} isn't in your status; the box only casts rooms the game lists`));
+        return json(404, { error: `no room ${room}` });
+      }
+      const url = new URL(tableUrl(o.manifest, room)!, publicUrl).toString();
+      for (const id of ids) {
+        if (!FAKE_TVS.some((t) => t.id === id)) {
+          results[id] = { ok: false, message: "no such TV" };
+          continue;
+        }
+        showing.set(id, room);
+        results[id] = { ok: true };
+        console.log(`${c.ok("TV cast")} ${id} → ${url}`);
+      }
+      const failed = Object.values(results).filter((r) => !r.ok).length;
+      return json(200, { ok: failed === 0, message: failed ? `${failed} TV(s) didn't start` : undefined, results });
+    }
     if (req.url === "/internal/events" && req.method === "POST") {
       const evt = JSON.parse((await readBody(req)) || "{}") as { type?: string; roomCode?: string; sessionKind?: string; data?: unknown };
       const problems: string[] = [];
@@ -136,7 +212,8 @@ export function mockBox(o: MockBoxOptions) {
 
   core.listen(o.corePort, "127.0.0.1");
   gateway.listen(o.gatewayPort);
-  return { core, gateway, publicUrl };
+  core.on("close", () => clearInterval(pinReset));
+  return { core, gateway, publicUrl, showing };
 }
 
 // ---------------------------------------------------------------- command / status
@@ -207,15 +284,48 @@ export async function check(manifest: GameManifest, gameUrl: string): Promise<bo
           fail(`room summary ${JSON.stringify(r)} needs code (string), kind (venue|patron|private), players (number)`);
           break;
         }
+        if (r.pendingClaims !== undefined && (!Array.isArray(r.pendingClaims) || r.pendingClaims.some((x) => typeof (x as { id?: unknown })?.id !== "string"))) {
+          fail(`room ${String(r.code)}: pendingClaims must be an array of { id: string, player?, detail?, at? }`);
+          break;
+        }
       }
     } else fail(`status → ${st.status}`, "call bg.setStatusProvider(() => ({ rooms: [...] }))");
     const bogus = await callGame(gameUrl, PATHS.command, { command: "definitely-not-a-command" });
     bogus.status === 404 ? pass("unknown commands are rejected") : fail(`unknown command → ${bogus.status} (expected 404)`);
     if (!manifest.commands.length) fail("level 3 needs at least one command in bargames.json");
+    const claims = ["confirm_claim", "reject_claim"].filter((x) => manifest.commands.includes(x));
+    if (claims.length === 1) warn(`"${claims[0]}" without its partner: staff need both to resolve a claim`);
+    if (claims.length && !manifest.events.includes("claim_pending")) warn(`claim commands but no "claim_pending" event: the box won't know a claim is waiting`);
+    if (!manifest.commands.includes("create_room")) warn(`no "create_room" command: staff can't put this game on the TVs without a room code from a phone`);
     for (const cmd of manifest.commands) {
+      if (cmd === "create_room") continue; // creates instead of refusing; checked below
       const r = await callGame(gameUrl, PATHS.command, { command: cmd, roomCode: "ZZZZ-NO-SUCH-ROOM" });
       const ok = r.status === 200 && (r.body as { ok?: boolean })?.ok === false;
       ok ? pass(`command "${cmd}" is wired (and refuses a missing room)`) : fail(`command "${cmd}" → ${r.status} ${JSON.stringify(r.body)}`, `bg.onCommand("${cmd}", …) must return { ok: false, message } for an unknown room`);
+    }
+  }
+
+  if (level >= 3 && manifest.commands.includes("create_room")) {
+    const r = await callGame(gameUrl, PATHS.command, { command: "create_room", args: { kind: "venue", purpose: "display" } });
+    const res = r.body as { ok?: boolean; data?: { roomCode?: unknown; hostUrl?: unknown }; message?: string };
+    const code = res?.data?.roomCode;
+    if (r.status !== 200 || !res?.ok || typeof code !== "string" || !code) {
+      fail(`create_room → ${r.status} ${JSON.stringify(r.body)}`, "bg.onCreateRoom(() => ({ roomCode })) must create a room and return its code");
+    } else {
+      pass(`create_room → room ${code}${typeof res.data?.hostUrl === "string" ? " (with hostUrl)" : ""}`);
+      const st = await callGame(gameUrl, PATHS.status);
+      const listed = ((st.body as { rooms?: { code: string; kind: string }[] })?.rooms ?? []).find((x) => x.code === code);
+      if (!listed) fail(`room ${code} isn't in status`, "status must list rooms the box created");
+      else listed.kind === "venue" ? pass(`status lists ${code} as a venue room`) : fail(`room ${code} has kind "${listed.kind}" (expected "venue")`);
+      const table = tableUrl(manifest, code);
+      if (table) {
+        const page = await callGame(gameUrl, table, undefined, "").catch(() => ({ status: 0, body: "" }));
+        page.status === 200 ? pass(`table view ${table} → 200`) : fail(`table view ${table} → ${page.status}`);
+      }
+      if (manifest.commands.includes("end")) {
+        const end = await callGame(gameUrl, PATHS.command, { command: "end", roomCode: code });
+        (end.body as { ok?: boolean })?.ok ? pass(`end closes ${code}`) : fail(`end ${code} → ${JSON.stringify(end.body)}`);
+      }
     }
   }
 

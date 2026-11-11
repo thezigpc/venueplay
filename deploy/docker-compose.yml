@@ -6,7 +6,7 @@ name: bargames
 
 services:
   core:
-    build: { context: .., dockerfile: deploy/Dockerfile }
+    build: { context: .., dockerfile: deploy/Dockerfile, target: app }
     image: bargames:dev
     container_name: bargames-core
     restart: unless-stopped
@@ -53,7 +53,8 @@ services:
       core: { condition: service_healthy }
 
   broker:
-    image: bargames:dev
+    build: { context: .., dockerfile: deploy/Dockerfile, target: broker }
+    image: bargames-broker:dev
     container_name: bargames-broker
     restart: unless-stopped
     command: ["node", "apps/broker/dist/index.js"]
@@ -66,6 +67,9 @@ services:
       BROKER_TOKEN: ${BROKER_TOKEN}
       DRIVERS: ${DRIVERS:-roku}
       MOCK_DISPLAYS: ${MOCK_DISPLAYS:-0}
+      # AirPlay casting: auto picks the QuickSync encoder; vaapi forces it.
+      AIRPLAY_HWACCEL: ${AIRPLAY_HWACCEL:-auto}
+      CAST_FPS: ${CAST_FPS:-30}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes: ["./data/broker:/data"]
     devices: ["/dev/dri:/dev/dri"]

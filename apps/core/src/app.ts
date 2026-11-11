@@ -1,5 +1,19 @@
 import { bearer, GATEWAY_PROOF_HEADER, safeEqual, type Logger } from "@bargames/common";
-import { checkTheme, HEADERS, isHexColor, validateManifest, type GameEventInput } from "@bargames/sdk";
+import {
+  checkTheme,
+  HEADERS,
+  isHexColor,
+  roomFromTableUrl,
+  tableUrl,
+  validateManifest,
+  type CastDisplay,
+  type CastTargets,
+  type CommandRequest,
+  type CommandResult,
+  type CreatedRoom,
+  type GameEventInput,
+  type GameStatus,
+} from "@bargames/sdk";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -10,7 +24,7 @@ import { GameRegistry, HttpError } from "./games.js";
 import { certificateWarning, checkPattern, hostFor } from "./hostnames.js";
 import { fetchManifest } from "./manifestSource.js";
 import type { GameRuntime } from "./runtime/types.js";
-import type { AccessSettings, InstalledGame, State, VenueSettings } from "./state.js";
+import type { AccessSettings, CastSettings, InstalledGame, State, VenueSettings } from "./state.js";
 import { allHosts, buildContext, buildGatewayConfig, gameHost, gameTarget } from "./venue.js";
 
 export interface AppDeps {
@@ -36,6 +50,17 @@ const h =
   (fn: (req: Request, res: Response) => unknown): RequestHandler =>
   (req, res, next) =>
     Promise.resolve(fn(req, res)).catch(next);
+
+/** A game-supplied path or URL made absolute on its public origin; only http(s). */
+function absoluteHttpUrl(value: unknown, base: string): string | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  try {
+    const u = new URL(value, base);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function createApp(d: AppDeps) {
   const app = express();
@@ -69,6 +94,99 @@ export function createApp(d: AppDeps) {
         at: new Date().toISOString(),
       });
       res.status(204).end();
+    }),
+  );
+
+  // ---- casting from inside a game (bg.displays / bg.cast / bg.stopCast)
+
+  /** A broker display; games only ever see the CastDisplay subset. */
+  interface BrokerDisplay {
+    id: string;
+    name: string;
+    label?: string;
+    group?: string;
+    content?: { kind: string; url?: string };
+  }
+  const castFailures = new Map<string, { n: number; until: number }>();
+  const castGate = (game: InstalledGame, pin: unknown) => {
+    const s = d.state.cast.get();
+    if (!s.fromGames) throw new HttpError(403, "This venue doesn't allow casting from games.");
+    if (!game.enabled) throw new HttpError(403, "This game is turned off.");
+    if (!s.pin) return;
+    const f = castFailures.get(game.id);
+    if (f && f.n >= 5 && Date.now() < f.until) throw new HttpError(429, "Too many wrong TV PINs. Try again in a minute.");
+    if (typeof pin !== "string" || !safeEqual(pin, s.pin)) {
+      const n = f && Date.now() < f.until ? f.n + 1 : 1;
+      castFailures.set(game.id, { n, until: Date.now() + 60_000 });
+      throw new HttpError(403, "Wrong TV PIN.");
+    }
+    castFailures.delete(game.id);
+  };
+  /** The room a display shows for this game, or undefined when it shows something else. */
+  const roomOf = (game: InstalledGame, url?: string): string | undefined => {
+    if (!url) return undefined;
+    try {
+      const u = new URL(url);
+      if (u.origin !== new URL(buildContext(d.state.venue.get(), game).game.publicUrl!).origin) return undefined;
+      return roomFromTableUrl(game.manifest, u.pathname + u.search);
+    } catch {
+      return undefined;
+    }
+  };
+
+  app.get(
+    "/internal/displays",
+    h(async (req, res) => {
+      const game = gameAuth(req);
+      const s: CastSettings = d.state.cast.get();
+      if (!s.fromGames || !game.enabled) return void res.json({ enabled: false, pinRequired: false, displays: [] } satisfies CastTargets);
+      const list = (await brokerCall("GET", "/displays")) as BrokerDisplay[];
+      const displays: CastDisplay[] = list.map((x) => {
+        const url = x.content?.kind === "url" ? x.content.url : undefined;
+        const room = roomOf(game, url);
+        return { id: x.id, name: x.label || x.name, group: x.group, busy: Boolean(url), showingThisGame: room !== undefined, roomCode: room };
+      });
+      res.json({ enabled: true, pinRequired: Boolean(s.pin), displays } satisfies CastTargets);
+    }),
+  );
+
+  app.post(
+    "/internal/cast",
+    h(async (req, res) => {
+      const game = gameAuth(req);
+      const { roomCode, displayIds, pin } = (req.body ?? {}) as { roomCode?: string; displayIds?: string[]; pin?: string };
+      castGate(game, pin);
+      if (typeof roomCode !== "string" || !roomCode) throw new HttpError(400, "roomCode required");
+      if (!Array.isArray(displayIds) || !displayIds.length) throw new HttpError(400, "pick at least one TV");
+      if (!game.manifest.routes.table) throw new HttpError(400, "this game has no TV view");
+      // Only rooms the game really has, so a host can't cast arbitrary pages.
+      const st = await doFetch(`${gameTarget(game)}/__bargames/status`, { headers: { authorization: `Bearer ${game.token}` }, signal: AbortSignal.timeout(3000) })
+        .then((r) => r.json() as Promise<GameStatus>)
+        .catch(() => ({ rooms: [] }) as GameStatus);
+      if (!st.rooms?.some((r) => r.code === roomCode)) throw new HttpError(404, `no room ${roomCode}`);
+      const ctx = buildContext(d.state.venue.get(), game);
+      const url = new URL(tableUrl(game.manifest, roomCode)!, ctx.game.publicUrl!).toString();
+      const results = (await brokerCall("POST", "/show", { displayIds: displayIds.map(String), content: { kind: "url", url, title: `${ctx.game.displayName} · ${roomCode}` } })) as Record<
+        string,
+        { ok: boolean; message?: string; needsCode?: boolean }
+      >;
+      const failed = Object.values(results).filter((r) => !r.ok).length;
+      d.log.info("cast", "cast from game", { game: game.id, room: roomCode, displays: Object.keys(results).length, failed });
+      res.json({ ok: failed === 0, message: failed ? `${failed} TV(s) didn't start` : undefined, results });
+    }),
+  );
+
+  app.post(
+    "/internal/cast/stop",
+    h(async (req, res) => {
+      const game = gameAuth(req);
+      const { displayIds, pin } = (req.body ?? {}) as { displayIds?: string[]; pin?: string };
+      castGate(game, pin);
+      if (!Array.isArray(displayIds) || !displayIds.length) throw new HttpError(400, "pick at least one TV");
+      const list = (await brokerCall("GET", "/displays")) as BrokerDisplay[];
+      const mine = list.filter((x) => displayIds.includes(x.id) && roomOf(game, x.content?.url) !== undefined).map((x) => x.id);
+      const results = mine.length ? ((await brokerCall("POST", "/show", { displayIds: mine, content: { kind: "off" } })) as Record<string, { ok: boolean }>) : {};
+      res.json({ ok: true, message: mine.length < displayIds.length ? "TVs showing something else were left alone" : undefined, results });
     }),
   );
 
@@ -193,6 +311,22 @@ export function createApp(d: AppDeps) {
     }),
   );
 
+  // ------------------------------------------------------------ casting settings
+
+  app.get("/api/cast-settings", (_req, res) => res.json(d.state.cast.get()));
+  app.put(
+    "/api/cast-settings",
+    h(async (req, res) => {
+      const b = (req.body ?? {}) as Partial<CastSettings>;
+      const next: CastSettings = { ...d.state.cast.get(), ...pick(b, ["fromGames", "pin"]) };
+      next.fromGames = Boolean(next.fromGames);
+      next.pin = String(next.pin ?? "").trim();
+      if (next.pin && !/^\d{4,8}$/.test(next.pin)) throw new HttpError(400, "TV PIN must be 4-8 digits (or empty for none)");
+      await d.state.cast.set(next);
+      res.json(next);
+    }),
+  );
+
   // ------------------------------------------------------------ access
 
   app.get("/api/access", (_req, res) => res.json(d.state.access.get()));
@@ -224,7 +358,7 @@ export function createApp(d: AppDeps) {
 
   /** The venue settings a connect would produce: the zone becomes the domain, https, no port. */
   const venueFor = (zoneName: string, b: { hostnamePattern?: string }): VenueSettings => {
-    const next: VenueSettings = { ...d.state.venue.get(), domain: zoneName, publicScheme: "https", publicPort: undefined };
+    const next: VenueSettings = { ...d.state.venue.get(), domain: zoneName, publicScheme: "https", publicPort: null };
     if (b.hostnamePattern) next.hostnamePattern = b.hostnamePattern;
     const problems = checkPattern(next.hostnamePattern);
     if (problems.length) throw new HttpError(400, problems.join("; "));
@@ -282,6 +416,19 @@ export function createApp(d: AppDeps) {
   );
 
   // ------------------------------------------------------------ games
+
+  /** Calls a game's /__bargames/command with its token. */
+  async function gameCommand(game: InstalledGame, body: CommandRequest): Promise<{ status: number; result: CommandResult }> {
+    const r = await doFetch(`${gameTarget(game)}/__bargames/command`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${game.token}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {
+      throw new HttpError(502, `${game.id} isn't answering (is it running?)`);
+    });
+    return { status: r.status, result: (await r.json().catch(() => ({ ok: false, message: `HTTP ${r.status}` }))) as CommandResult };
+  }
 
   const gameView = async (g: InstalledGame) => {
     const v = d.state.venue.get();
@@ -343,13 +490,49 @@ export function createApp(d: AppDeps) {
       if (!game) throw new HttpError(404, "no such game");
       if (game.manifest.sdk.level < 3) throw new HttpError(400, `${game.id} does not accept commands (sdk level ${game.manifest.sdk.level})`);
       if (!game.manifest.commands.includes(req.body?.command)) throw new HttpError(400, `unknown command ${req.body?.command}`);
-      const r = await doFetch(`${gameTarget(game)}/__bargames/command`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${game.token}`, "content-type": "application/json" },
-        body: JSON.stringify(req.body),
-        signal: AbortSignal.timeout(5000),
-      });
-      res.status(r.status).json(await r.json().catch(() => ({ ok: false })));
+      const r = await gameCommand(game, req.body);
+      res.status(r.status).json(r.result);
+    }),
+  );
+
+  /**
+   * Puts a game's table view on TVs: { gameId, roomCode?, title?, displayIds? | group? }.
+   * Without a roomCode the game creates a venue room first (standard "create_room").
+   */
+  app.post(
+    "/api/cast",
+    h(async (req, res) => {
+      const { gameId, roomCode, title, displayIds, group } = (req.body ?? {}) as { gameId?: string; roomCode?: string; title?: string; displayIds?: string[]; group?: string };
+      const game = d.games.get(String(gameId ?? ""));
+      if (!game) throw new HttpError(404, "no such game");
+      const ctx = buildContext(d.state.venue.get(), game);
+      const name = ctx.game.displayName;
+      if (!game.enabled) throw new HttpError(400, `${name} is turned off`);
+      if (!game.manifest.routes.table) throw new HttpError(400, `${name} has no TV view`);
+      const target = Array.isArray(displayIds) && displayIds.length ? { displayIds: displayIds.map(String) } : typeof group === "string" && group ? { group } : undefined;
+      if (!target) throw new HttpError(400, "pick the TVs (displayIds or group)");
+      const publicUrl = ctx.game.publicUrl!;
+
+      let code = typeof roomCode === "string" && roomCode.trim() ? roomCode.trim().toUpperCase() : undefined;
+      let hostUrl: string | undefined;
+      if (!code) {
+        if (game.manifest.sdk.level < 3 || !game.manifest.commands.includes("create_room")) {
+          throw new HttpError(400, `${name} can't create rooms from the box yet. Start a room on a phone and enter its code.`);
+        }
+        const r = await gameCommand(game, { command: "create_room", args: { kind: "venue", purpose: "display", title: typeof title === "string" ? title : undefined } });
+        const created = r.result.data as CreatedRoom | undefined;
+        if (!r.result.ok || typeof created?.roomCode !== "string" || !created.roomCode) {
+          throw new HttpError(502, `${name} didn't create a room: ${r.result.message ?? `HTTP ${r.status}`}`);
+        }
+        code = created.roomCode;
+        hostUrl = absoluteHttpUrl(created.hostUrl, publicUrl);
+        d.log.info("cast", "room created", { game: game.id, room: code });
+      }
+
+      const url = new URL(tableUrl(game.manifest, code)!, publicUrl).toString();
+      const results = (await brokerCall("POST", "/show", { ...target, content: { kind: "url", url, title: `${name} · ${code}` } })) as Record<string, { ok: boolean; message?: string }>;
+      d.log.info("cast", "shown", { game: game.id, room: code, displays: Object.keys(results).length, failed: Object.values(results).filter((x) => !x.ok).length });
+      res.json({ roomCode: code, created: !roomCode, hostUrl, url, results });
     }),
   );
 
@@ -380,6 +563,20 @@ export function createApp(d: AppDeps) {
   });
 
   // ------------------------------------------------------------ broker (displays) passthrough
+
+  async function brokerCall(method: string, sub: string, body?: unknown): Promise<unknown> {
+    const r = await doFetch(`${d.config.brokerUrl}${sub}`, {
+      method,
+      headers: { authorization: `Bearer ${d.config.brokerToken}`, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    }).catch(() => {
+      throw new HttpError(502, "broker unreachable");
+    });
+    const json = (await r.json().catch(() => ({}))) as { error?: string };
+    if (!r.ok) throw new HttpError(r.status, json.error ?? `broker: HTTP ${r.status}`);
+    return json;
+  }
 
   app.all(
     "/api/broker/*",

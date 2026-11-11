@@ -31,7 +31,7 @@ export interface Venue {
   adminLabel: string;
   slug: string;
   publicScheme: "https" | "http";
-  publicPort?: number;
+  publicPort?: number | null;
 }
 export interface VenueView {
   venue: Venue;
@@ -69,7 +69,28 @@ export interface Display {
   delivery?: string;
   capabilities?: { delivery: string[]; power: boolean; inputs: string[] };
   health?: { online: boolean; powerMode?: string; detail?: string };
-  content?: { kind: string; url?: string };
+  content?: { kind: string; url?: string; title?: string };
+  stream?: { delivery: string; url: string; state: string; needsCode: boolean; detail?: string };
+}
+
+export interface ShowResult {
+  ok: boolean;
+  message?: string;
+  needsCode?: boolean;
+  paired?: boolean;
+}
+export interface CastSettings {
+  fromGames: boolean;
+  pin: string;
+}
+export interface RoomSummary {
+  code: string;
+  kind: string;
+  players: number;
+  phase?: string;
+  title?: string;
+  hostConnected?: boolean;
+  pendingClaims?: { id: string; player?: string; detail?: string; at?: string }[];
 }
 
 export interface CfZone {
@@ -114,6 +135,14 @@ export const api = {
   addRoku: (host: string) => call<Display>("POST", "/broker/displays/roku", { host }),
   patchDisplay: (id: string, patch: { label?: string; group?: string; delivery?: string }) => call<Display>("PATCH", `/broker/displays/${encodeURIComponent(id)}`, patch),
   power: (id: string, on: boolean) => call("POST", `/broker/displays/${encodeURIComponent(id)}/power`, { on }),
+  pair: (id: string, code?: string) => call<ShowResult>("POST", `/broker/displays/${encodeURIComponent(id)}/pair`, code ? { code } : {}),
+  command: (id: string, body: { command: string; roomCode?: string; args?: Record<string, unknown> }) =>
+    call<{ ok: boolean; message?: string; data?: unknown }>("POST", `/games/${encodeURIComponent(id)}/command`, body),
+  gameStatus: (id: string) => call<{ rooms: RoomSummary[] }>("GET", `/games/${encodeURIComponent(id)}/status`),
+  cast: (body: { gameId: string; roomCode?: string; displayIds?: string[]; group?: string }) =>
+    call<{ roomCode: string; created: boolean; hostUrl?: string; url: string; results: Record<string, ShowResult> }>("POST", "/cast", body),
+  castSettings: () => call<CastSettings>("GET", "/cast-settings"),
+  saveCastSettings: (s: CastSettings) => call<CastSettings>("PUT", "/cast-settings", s),
   cloudflare: () => call<CfStatus>("GET", "/cloudflare"),
   cloudflareToken: (token: string) => call<{ zones: CfZone[] }>("POST", "/cloudflare/token", { token }),
   cloudflareZones: () => call<CfZone[]>("GET", "/cloudflare/zones"),
@@ -121,5 +150,5 @@ export const api = {
   cloudflareConnect: (zoneId: string, hostnamePattern: string, adminRemote: boolean) => call<CfStatus>("POST", "/cloudflare/connect", { zoneId, hostnamePattern, adminRemote }),
   cloudflareSync: () => call("POST", "/cloudflare/sync"),
   cloudflareDisconnect: () => call("DELETE", "/cloudflare"),
-  show: (target: { displayIds?: string[]; group?: string }, content: { kind: string; url?: string }) => call<Record<string, { ok: boolean; message?: string }>>("POST", "/broker/show", { ...target, content }),
+  show: (target: { displayIds?: string[]; group?: string }, content: { kind: string; url?: string }) => call<Record<string, ShowResult>>("POST", "/broker/show", { ...target, content }),
 };

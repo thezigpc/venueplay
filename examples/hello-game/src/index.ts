@@ -27,6 +27,8 @@ const rooms = new Map<string, Room>();
 const newCode = () => Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
 
 // ---- level 3: commands from the box (iPad, schedules, Home Assistant)
+// "Cast -> New room": a venue room with no host phone; the box drives it with commands.
+bg.onCreateRoom(({ kind }) => ({ roomCode: createRoom(kind).code }));
 bg.onCommand("start", ({ roomCode }) => {
   const room = roomCode ? rooms.get(roomCode) : undefined;
   if (!room) return { ok: false, message: "no such room" };
@@ -61,12 +63,16 @@ app.use(express.static(path.resolve(here, "../public")));
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-app.post("/api/rooms", (req, res) => {
-  const kind: SessionKind = SESSION_KINDS.includes(req.body?.kind) ? req.body.kind : "patron";
+function createRoom(kind: SessionKind): Room {
   const room: Room = { code: newCode(), kind, players: new Set(), round: 0, phase: "lobby" };
   rooms.set(room.code, room);
   bg.emit({ type: "room_created", roomCode: room.code, sessionKind: kind });
-  res.json({ code: room.code });
+  return room;
+}
+
+app.post("/api/rooms", (req, res) => {
+  const kind: SessionKind = SESSION_KINDS.includes(req.body?.kind) ? req.body.kind : "patron";
+  res.json({ code: createRoom(kind).code });
 });
 
 app.post("/api/rooms/:code/join", (req, res) => {

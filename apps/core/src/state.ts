@@ -19,9 +19,13 @@ export interface VenueSettings {
   adminLabel: string;
   /** Short venue slug for the {venue} token. */
   slug: string;
-  /** Public scheme/port; https and none behind Cloudflare, http + 7080 in dev. */
+  /**
+   * Public scheme/port; https and none behind Cloudflare, http + 7080 in dev.
+   * "No port" is null, not undefined: undefined is dropped from the JSON file, and the
+   * default (7080) would come back on the next load.
+   */
   publicScheme: "https" | "http";
-  publicPort?: number;
+  publicPort?: number | null;
 }
 
 export type AccessSettings = GatewayAccess;
@@ -65,11 +69,20 @@ export const DEFAULT_ACCESS: AccessSettings = {
   adminRemote: false,
 };
 
+/** Whether game hosts may put their rooms on the venue's TVs (from inside the game). */
+export interface CastSettings {
+  fromGames: boolean;
+  /** Optional TV PIN a game host must enter to cast; empty = none. */
+  pin: string;
+}
+export const DEFAULT_CAST: CastSettings = { fromGames: false, pin: "" };
+
 export function openState(dataDir: string) {
   return {
     venue: new JsonStore<VenueSettings>(path.join(dataDir, "venue.json"), DEFAULT_VENUE),
     access: new JsonStore<AccessSettings>(path.join(dataDir, "access.json"), DEFAULT_ACCESS),
     games: new JsonStore<{ games: InstalledGame[] }>(path.join(dataDir, "games.json"), { games: [] }),
+    cast: new JsonStore<CastSettings>(path.join(dataDir, "cast.json"), DEFAULT_CAST),
     auth: new JsonStore<{ passwordHash?: string }>(path.join(dataDir, "auth.json"), {}),
     // Holds the Cloudflare API token and tunnel token: owner-only.
     cloudflare: new JsonStore<CloudflareSettings>(path.join(dataDir, "cloudflare.json"), {}, 0o600),

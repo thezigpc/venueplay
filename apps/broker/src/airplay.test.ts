@@ -1,0 +1,111 @@
+import { createLogger } from "@bargames/common";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { AirplayStreams, chromiumArgs, type CtlReply, type Proc, type ProcRunner } from "./airplay.js";
+import type { DisplayDevice } from "./types.js";
+
+/** Pretends to be Xvfb/Chromium/doubletake. TVs in `needCode` ask for "1234" until paired. */
+class FakeRunner implements ProcRunner {
+  procs: { tag: string; cmd: string; args: string[]; env: Record<string, string>; alive: boolean }[] = [];
+  daemons = new Map<string, Map<string, string>>(); // socket → ip → state
+  paired = new Set<string>();
+  ctlCalls: string[][] = [];
+  constructor(readonly needCode = new Set<string>()) {}
+
+  spawn(tag: string, cmd: string, args: string[], env: Record<string, string> = {}): Proc {
+    const p = { tag, cmd, args, env, alive: true };
+    this.procs.push(p);
+    if (cmd === "doubletake") this.daemons.set(args[args.indexOf("-socket") + 1], new Map());
+    return {
+      get alive() {
+        return p.alive;
+      },
+      tail: () => [],
+      kill: () => void (p.alive = false),
+    };
+  }
+  async ctl(socket: string, args: string[]): Promise<CtlReply> {
+    this.ctlCalls.push([socket, ...args]);
+    const d = this.daemons.get(socket);
+    const daemon = this.procs.findLast((p) => p.cmd === "doubletake" && p.args.includes(socket));
+    if (!d || !daemon?.alive) throw new Error("no daemon");
+    const [cmd, ip, code] = args;
+    if (cmd === "connect") {
+      if (code === "1234") this.paired.add(ip);
+      d.set(ip, this.needCode.has(ip) && !this.paired.has(ip) ? "pin_required" : "streaming");
+    }
+    if (cmd === "disconnect") d.delete(ip);
+    return { ok: true, streams: [...d].map(([device_ip, state]) => ({ device_ip, state })) };
+  }
+  async waitForDisplay() {}
+  cleanSlot() {}
+  async sleep() {}
+  alive(cmd: string) {
+    return this.procs.filter((p) => p.cmd === cmd && p.alive);
+  }
+}
+
+const tv = (n: number): DisplayDevice => ({ id: `roku:${n}`, driver: "roku", name: `TV ${n}`, address: `http://10.0.0.${n}:8060` });
+const make = (runner: FakeRunner) =>
+  new AirplayStreams({ runner, log: createLogger("test", "error"), runDir: "/run/cast", credsFile: "/data/creds.json", settleMs: 0, connectTimeoutMs: 0, hwaccel: "vaapi" });
+
+test("airplay: TVs on the same page share one channel; moving a TV opens another", async () => {
+  const runner = new FakeRunner();
+  const s = make(runner);
+  assert.deepEqual(await s.startAirplay(tv(1), { url: "https://bingo.x/join/AB?as=table" }), { ok: true, delivery: "airplay" });
+  assert.equal((await s.startAirplay(tv(2), { url: "https://bingo.x/join/AB?as=table" })).ok, true);
+  assert.equal(runner.alive("doubletake").length, 1, "one encoder for both TVs");
+  const dt = runner.alive("doubletake")[0];
+  assert.ok(dt.args.includes("-no-audio") && dt.args.includes("vaapi") && dt.args.includes("/data/creds.json"));
+  assert.equal(dt.env.DISPLAY, runner.alive("Xvfb")[0].args[0]);
+  assert.ok(runner.alive("chromium")[0].args.includes("https://bingo.x/join/AB?as=table"));
+  assert.deepEqual(runner.procs.find((p) => p.cmd === "xdotool")?.args, ["mousemove", "1919", "1079"], "the mouse is parked off-screen");
+  assert.equal(s.state("roku:1")?.state, "streaming");
+
+  await s.startAirplay(tv(2), { url: "https://pool.x/table/CD" });
+  assert.equal(runner.alive("doubletake").length, 2);
+  assert.equal(runner.alive("Xvfb")[1].args[0], ":91", "second channel gets the next display");
+  assert.equal(s.state("roku:2")?.url, "https://pool.x/table/CD");
+
+  await s.stopFor("roku:1");
+  assert.equal(runner.alive("doubletake").length, 1, "an empty channel is torn down");
+  assert.equal(runner.alive("chromium").length, 1);
+  assert.equal(s.state("roku:1"), undefined);
+});
+
+test("airplay: a TV that wants a code reports it, and pair() completes it", async () => {
+  const runner = new FakeRunner(new Set(["10.0.0.5"]));
+  const s = make(runner);
+  const r = await s.startAirplay(tv(5), { url: "https://x/t" });
+  assert.equal(r.ok, false);
+  assert.equal(r.needsCode, true);
+  assert.equal(s.state("roku:5")?.needsCode, true);
+  assert.deepEqual(await s.pair(tv(5), "1234"), { ok: true, delivery: "airplay" });
+  assert.ok(runner.ctlCalls.some((c) => c.slice(1).join(" ") === "connect 10.0.0.5 1234"));
+  assert.equal((await s.pair(tv(6), "1234")).ok, false, "pairing needs a cast in progress");
+});
+
+test("airplay: the watchdog restarts a dead channel and reconnects its TVs", async () => {
+  const runner = new FakeRunner();
+  const s = make(runner);
+  await s.startAirplay(tv(1), { url: "https://x/t" });
+  runner.alive("chromium")[0].alive = false; // Chromium crashed
+  await (s as unknown as { tick(): Promise<void> }).tick();
+  assert.equal(runner.alive("chromium").length, 1);
+  assert.equal(runner.alive("doubletake").length, 1);
+  assert.equal(runner.procs.filter((p) => p.cmd === "doubletake").length, 2, "a fresh daemon was started");
+  assert.equal(s.state("roku:1")?.state, "connecting");
+  assert.ok(runner.ctlCalls.at(-1)?.includes("connect"));
+
+  // A TV that dropped (e.g. turned off) is reconnected.
+  const socket = runner.alive("doubletake")[0].args[runner.alive("doubletake")[0].args.indexOf("-socket") + 1];
+  runner.daemons.get(socket)!.delete("10.0.0.1");
+  await (s as unknown as { tick(): Promise<void> }).tick();
+  assert.deepEqual(runner.ctlCalls.at(-1)?.slice(1), ["connect", "10.0.0.1"]);
+});
+
+test("chromium runs as a kiosk on the page", () => {
+  const args = chromiumArgs("https://x/t", "/run/p", 1920, 1080);
+  assert.equal(args.at(-1), "https://x/t");
+  assert.ok(args.includes("--kiosk") && args.includes("--window-size=1920,1080") && args.includes("--user-data-dir=/run/p"));
+});

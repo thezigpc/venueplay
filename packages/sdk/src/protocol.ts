@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.1.0";
+export const SDK_VERSION = "0.2.1";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -115,7 +115,7 @@ export interface BarGamesEvent<T = Record<string, unknown>> extends GameEventInp
 
 // ---------------------------------------------------------------- commands
 
-export const STANDARD_COMMANDS = ["start", "pause", "resume", "next_round", "end"] as const;
+export const STANDARD_COMMANDS = ["create_room", "start", "pause", "resume", "next_round", "end", "confirm_claim", "reject_claim"] as const;
 export type StandardCommand = (typeof STANDARD_COMMANDS)[number];
 
 export interface CommandRequest {
@@ -130,6 +130,83 @@ export interface CommandResult {
   data?: unknown;
 }
 
+/**
+ * args of the standard "create_room" command. The box sends it when staff put a game
+ * on the TVs without an existing room ("Cast → New room"). The new room has no host
+ * phone: the box runs it with commands, and staff can open `hostUrl` on the iPad.
+ */
+export interface CreateRoomArgs {
+  /** "venue" when the box creates it. */
+  kind: SessionKind;
+  /** Why: "display" = its table view is about to be cast to TVs. */
+  purpose?: "display";
+  /** Optional title, e.g. "Friday Bingo". */
+  title?: string;
+}
+
+/** `data` of a successful "create_room". */
+export interface CreatedRoom {
+  roomCode: string;
+  /**
+   * Where staff control the room, as a path on the game's origin ("/join/ABCD?key=…")
+   * or a full URL. It may carry a host secret: the box only shows it to admins.
+   */
+  hostUrl?: string;
+}
+
+// ---------------------------------------------------------------- casting from a game
+
+/** A venue TV a game host can cast to. */
+export interface CastDisplay {
+  id: string;
+  /** The venue's name for it, e.g. "Bar left". */
+  name: string;
+  group?: string;
+  /** Showing something right now. */
+  busy: boolean;
+  /** Showing a room of this game; `roomCode` says which. */
+  showingThisGame: boolean;
+  roomCode?: string;
+}
+
+/** What bg.displays() returns. Off a box, or when the venue turned it off: enabled false. */
+export interface CastTargets {
+  enabled: boolean;
+  /** The venue requires its TV PIN for casting. */
+  pinRequired: boolean;
+  displays: CastDisplay[];
+}
+
+export interface CastResult {
+  ok: boolean;
+  message?: string;
+  /** Per TV id. needsCode: the TV wants AirPlay pairing; staff do that in the box admin. */
+  results?: Record<string, { ok: boolean; message?: string; needsCode?: boolean }>;
+}
+
+/**
+ * A win/claim waiting for a human decision (e.g. a BINGO call). List it in the room's
+ * status so staff can resolve it from the box's iPad with "confirm_claim" / "reject_claim".
+ */
+export interface PendingClaim {
+  /** Stable id the game recognises in ClaimArgs. */
+  id: string;
+  /** Who claimed, as shown to staff. */
+  player?: string;
+  /** Short text for staff, e.g. "Line on row 3". */
+  detail?: string;
+  /** ISO time the claim was made. */
+  at?: string;
+}
+
+/** args of the standard "confirm_claim" / "reject_claim" commands (roomCode is on the request). */
+export interface ClaimArgs {
+  /** Which claim. Omitted: the room's oldest pending claim. */
+  claimId?: string;
+  /** reject_claim: optional reason shown to the player. */
+  reason?: string;
+}
+
 export interface RoomSummary {
   code: string;
   kind: SessionKind;
@@ -137,6 +214,8 @@ export interface RoomSummary {
   phase?: string;
   title?: string;
   hostConnected?: boolean;
+  /** Claims waiting for a decision. Games with confirm_claim / reject_claim should list them. */
+  pendingClaims?: PendingClaim[];
 }
 
 export interface GameStatus {

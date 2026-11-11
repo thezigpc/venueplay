@@ -9,7 +9,7 @@ import { createApp } from "./app.js";
 import { AdminAuth } from "./auth.js";
 import { EventBus } from "./events.js";
 import { GameRegistry } from "./games.js";
-import { certificateWarning, checkPattern, renderHostname } from "./hostnames.js";
+import { certificateWarning, checkPattern, hostFor, publicUrl, renderHostname } from "./hostnames.js";
 import { resolveManifestUrl } from "./manifestSource.js";
 import { splitImage } from "./runtime/docker.js";
 import { containerSpec, parseMemory } from "./runtime/spec.js";
@@ -59,6 +59,14 @@ test("container spec is sandboxed", () => {
   assert.equal(parseMemory("1g"), 1024 ** 3);
   assert.deepEqual(splitImage("ghcr.io/x/pool:1.0@sha256:abc"), ["ghcr.io/x/pool", "sha256:abc"]);
   assert.deepEqual(splitImage("localhost:5000/pool"), ["localhost:5000/pool", "latest"]);
+});
+
+test("venue: a cleared public port stays cleared after a restart", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "bg-core-"));
+  await openState(dir).venue.update((v) => Object.assign(v, { domain: "example.com", publicScheme: "https", publicPort: null }));
+  const venue = openState(dir).venue.get();
+  assert.equal(venue.publicPort, null);
+  assert.equal(publicUrl(venue, hostFor(venue, "bingo")), "https://bingo.example.com");
 });
 
 test("api: setup, install, brand, events, gateway config", async () => {
@@ -137,6 +145,99 @@ test("api: setup, install, brand, events, gateway config", async () => {
     assert.equal(badVenue.status, 400);
     const deep = (await (await json("PUT", "/api/venue", { domain: "example.com", hostnamePattern: "{game}.internal.{domain}" }, authed)).json()) as { warnings: string[] };
     assert.ok(deep.warnings.some((w) => w.includes("Advanced Certificate Manager")));
+  } finally {
+    server.close();
+  }
+});
+
+test("casting: new room from the admin, and casting from inside a game (gated, PIN)", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "bg-core-"));
+  const state = openState(dir);
+  const games = new GameRegistry(state.games);
+  const shows: { displayIds?: string[]; content: { kind: string; url?: string } }[] = [];
+  const displays = [
+    { id: "tv1", name: "Roku 1", label: "Bar left", content: undefined as undefined | { kind: string; url?: string } },
+    { id: "tv2", name: "Roku 2", content: { kind: "url", url: "https://other.example.com/x" } },
+  ];
+  const rooms = ["ROOM1"];
+  const reply = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (url === "http://broker/displays") return reply(displays);
+    if (url === "http://broker/show") {
+      shows.push(body);
+      for (const id of body.displayIds ?? []) {
+        const disp = displays.find((x) => x.id === id);
+        if (disp) disp.content = body.content.kind === "off" ? undefined : body.content;
+      }
+      return reply(Object.fromEntries((body.displayIds ?? []).map((id: string) => [id, { ok: true }])));
+    }
+    if (url === "http://game/__bargames/status") return reply({ rooms: rooms.map((code) => ({ code, kind: "venue", players: 0 })) });
+    if (url === "http://game/__bargames/command" && body.command === "create_room") {
+      rooms.push("NEW1");
+      return reply({ ok: true, data: { roomCode: "NEW1", hostUrl: "/host/NEW1?key=s3cret" } });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+  const app = createApp({
+    state,
+    games,
+    runtime: new NoopRuntime(),
+    bus: new EventBus(),
+    auth: new AdminAuth(state.auth, "secret"),
+    cloudflare: new CloudflareService({ store: state.cloudflare, connector: new NoopRuntime(), desiredHosts: () => [], tunnelName: () => "t", origin: "http://gw", log: createLogger("test", "error") }),
+    log: createLogger("test", "error"),
+    config: { gatewayToken: "gw", brokerUrl: "http://broker", brokerToken: "b", internalUrl: "http://core:7100", adminDist: path.join(dir, "none"), boxVersion: "0.2.0" },
+    fetch: fakeFetch,
+  });
+  const server = app.listen(0);
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const json = (method: string, p: string, body?: unknown, headers: Record<string, string> = {}) =>
+    fetch(base + p, { method, headers: { "content-type": "application/json", ...headers }, body: body ? JSON.stringify(body) : undefined });
+  try {
+    const cookie = (await json("POST", "/api/auth/setup", { password: "correct horse" })).headers.get("set-cookie")!.split(";")[0];
+    const authed = { cookie };
+    const m = { ...manifest, sdk: { version: "0.2.0", level: 3 }, commands: ["create_room", "start"] };
+    assert.equal((await json("POST", "/api/games/install", { manifest: m, devTarget: "http://game" }, authed)).status, 200);
+    await json("PATCH", "/api/games/bingo", { enabled: true }, authed);
+
+    // Admin: "New room" → the game creates it, its table view goes on the TV.
+    const cast = (await (await json("POST", "/api/cast", { gameId: "bingo", displayIds: ["tv1"] }, authed)).json()) as { roomCode: string; created: boolean; hostUrl: string; url: string };
+    assert.equal(cast.roomCode, "NEW1");
+    assert.equal(cast.created, true);
+    assert.equal(cast.url, "http://bingo.localhost:7080/room/NEW1?role=table");
+    assert.equal(cast.hostUrl, "http://bingo.localhost:7080/host/NEW1?key=s3cret");
+    assert.equal(shows.at(-1)!.content.url, cast.url);
+
+    // From the game: off until the venue allows it.
+    const g = { authorization: `Bearer ${games.get("bingo")!.token}` };
+    assert.deepEqual(await (await json("GET", "/internal/displays", undefined, g)).json(), { enabled: false, pinRequired: false, displays: [] });
+    assert.equal((await json("POST", "/internal/cast", { roomCode: "ROOM1", displayIds: ["tv1"] }, g)).status, 403);
+    assert.equal((await json("PUT", "/api/cast-settings", { fromGames: true, pin: "12" }, authed)).status, 400);
+    await json("PUT", "/api/cast-settings", { fromGames: true, pin: "4321" }, authed);
+
+    const targets = (await (await json("GET", "/internal/displays", undefined, g)).json()) as { enabled: boolean; pinRequired: boolean; displays: { id: string; name: string; showingThisGame: boolean; roomCode?: string; busy: boolean }[] };
+    assert.equal(targets.pinRequired, true);
+    assert.deepEqual(targets.displays[0], { id: "tv1", name: "Bar left", busy: true, showingThisGame: true, roomCode: "NEW1" });
+    assert.equal(targets.displays[1].showingThisGame, false);
+    assert.equal(JSON.stringify(targets).includes("other.example.com"), false, "games never see what other games show");
+
+    assert.equal((await json("POST", "/internal/cast", { roomCode: "ROOM1", displayIds: ["tv2"], pin: "0000" }, g)).status, 403);
+    assert.equal((await json("POST", "/internal/cast", { roomCode: "NOPE", displayIds: ["tv2"], pin: "4321" }, g)).status, 404, "only rooms the game has");
+    const ok = (await (await json("POST", "/internal/cast", { roomCode: "ROOM1", displayIds: ["tv2"], pin: "4321" }, g)).json()) as { ok: boolean };
+    assert.equal(ok.ok, true);
+    assert.equal(displays[1].content?.url, "http://bingo.localhost:7080/room/ROOM1?role=table");
+
+    // Stop only clears TVs showing this game.
+    displays[0].content = { kind: "url", url: "https://other.example.com/y" };
+    await json("POST", "/internal/cast/stop", { displayIds: ["tv1", "tv2"], pin: "4321" }, g);
+    assert.deepEqual(shows.at(-1), { displayIds: ["tv2"], content: { kind: "off" } });
+    assert.equal(displays[0].content?.url, "https://other.example.com/y");
+
+    // Wrong PINs get rate limited.
+    for (let i = 0; i < 5; i++) await json("POST", "/internal/cast", { roomCode: "ROOM1", displayIds: ["tv2"], pin: "1111" }, g);
+    assert.equal((await json("POST", "/internal/cast", { roomCode: "ROOM1", displayIds: ["tv2"], pin: "4321" }, g)).status, 429);
   } finally {
     server.close();
   }

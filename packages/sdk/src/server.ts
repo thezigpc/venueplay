@@ -15,6 +15,10 @@ import {
   type BarGamesEvent,
   type CommandRequest,
   type CommandResult,
+  type CastResult,
+  type CastTargets,
+  type CreateRoomArgs,
+  type CreatedRoom,
   type GameEventInput,
   type GameStatus,
   type VenueContext,
@@ -52,7 +56,27 @@ export interface BarGames {
   /** Fire-and-forget; queued and retried briefly if the box is busy. */
   emit<T extends Record<string, unknown>>(event: GameEventInput<T>): void;
   onCommand(name: string, handler: CommandHandler): void;
+  /**
+   * Handles the standard "create_room" command: create a room with no host phone
+   * (kind "venue"), return its code (and optionally a host URL). Throw an Error to
+   * refuse; its message is shown to staff. Same as onCommand("create_room", …) with
+   * the result wrapped for you.
+   */
+  onCreateRoom(handler: (args: CreateRoomArgs) => CreatedRoom | Promise<CreatedRoom>): void;
   setStatusProvider(fn: () => GameStatus | Promise<GameStatus>): void;
+  /**
+   * Casting from the game: the venue TVs a host may put this game on. Off a box, or when
+   * the venue hasn't allowed it, `enabled` is false: hide the casting UI.
+   */
+  displays(): Promise<CastTargets>;
+  /**
+   * Puts a room's table view on venue TVs. Only call it for a room's host (your own
+   * check). The room must be listed by your status provider. `pin`: the venue's TV PIN
+   * when `pinRequired`.
+   */
+  cast(roomCode: string, displayIds: string[], opts?: { pin?: string }): Promise<CastResult>;
+  /** Clears TVs that show this game (TVs showing anything else are left alone). */
+  stopCast(displayIds: string[], opts?: { pin?: string }): Promise<CastResult>;
   /** Connect/Express-style middleware for the reserved /__bargames/* paths. */
   middleware(): (req: IncomingMessage, res: ServerResponse, next?: Next) => void;
   gateway(req: IncomingMessage): GatewayInfo;
@@ -213,12 +237,51 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
     };
   }
 
+  function core(method: string, p: string, body?: unknown): Promise<Response> {
+    return doFetch(`${coreUrl}${p}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, ...(body ? { "content-type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(30_000),
+    });
+  }
+
+  async function castCall(p: string, body: unknown): Promise<CastResult> {
+    if (!connected) return { ok: false, message: "not running on a Bar Games box" };
+    try {
+      const r = await core("POST", p, body);
+      const json = (await r.json().catch(() => ({}))) as CastResult & { error?: string };
+      return r.ok ? json : { ok: false, message: json.message ?? json.error ?? `HTTP ${r.status}` };
+    } catch (err) {
+      return { ok: false, message: `box unreachable: ${String(err)}` };
+    }
+  }
+
   return {
     gameId,
     connected,
     venue,
     emit,
     onCommand: (name, handler) => void commands.set(name, handler),
+    displays: async () => {
+      const off: CastTargets = { enabled: false, pinRequired: false, displays: [] };
+      if (!connected) return off;
+      const r = await core("GET", "/internal/displays").catch(() => undefined);
+      return r?.ok ? ((await r.json()) as CastTargets) : off;
+    },
+    cast: (roomCode, displayIds, opts) => castCall("/internal/cast", { roomCode, displayIds, pin: opts?.pin }),
+    stopCast: (displayIds, opts) => castCall("/internal/cast/stop", { displayIds, pin: opts?.pin }),
+    onCreateRoom: (handler) =>
+      void commands.set("create_room", async ({ args }) => {
+        const a = (args ?? {}) as Partial<CreateRoomArgs>;
+        try {
+          const room = await handler({ kind: a.kind ?? "venue", purpose: a.purpose, title: typeof a.title === "string" ? a.title : undefined });
+          if (!room || typeof room.roomCode !== "string" || !room.roomCode) return { ok: false, message: "create_room handler returned no roomCode" };
+          return { ok: true, data: room };
+        } catch (err) {
+          return { ok: false, message: err instanceof Error ? err.message : String(err) };
+        }
+      }),
     setStatusProvider: (fn) => void (statusProvider = fn),
     middleware,
     gateway,
@@ -229,4 +292,4 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
   };
 }
 
-export type { CommandRequest, CommandResult, GameEventInput, GameStatus, VenueContext } from "./protocol.js";
+export type { CastDisplay, CastResult, CastTargets, ClaimArgs, CommandRequest, CommandResult, CreateRoomArgs, CreatedRoom, GameEventInput, GameStatus, PendingClaim, RoomSummary, VenueContext } from "./protocol.js";
