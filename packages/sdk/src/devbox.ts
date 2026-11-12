@@ -279,7 +279,8 @@ export function mockBox(o: MockBoxOptions) {
       const evt = JSON.parse((await readBody(req)) || "{}") as { type?: string; roomCode?: string; sessionKind?: string; data?: unknown };
       const problems: string[] = [];
       if (!evt.type || !(STANDARD_EVENTS as readonly string[]).includes(evt.type) && !/^x-[a-z0-9-]+$/.test(evt.type)) problems.push("type must be a standard event or start with x-");
-      if (evt.type && o.manifest && !declared.has(evt.type)) problems.push(`"${evt.type}" isn't listed in bargames.json "events"`);
+      // game_result comes from bg.reportResults() itself, so it needn't be declared (SDK 0.11.4).
+      if (evt.type && evt.type !== "game_result" && o.manifest && !declared.has(evt.type)) problems.push(`"${evt.type}" isn't listed in bargames.json "events"`);
       if (evt.roomCode !== undefined && typeof evt.roomCode !== "string") problems.push("roomCode must be a string");
       if (evt.sessionKind && !["venue", "patron", "private"].includes(evt.sessionKind)) problems.push("sessionKind must be venue|patron|private");
       const line = `${evt.type} ${c.dim(`room=${evt.roomCode ?? "-"} kind=${evt.sessionKind ?? "-"}`)} ${evt.data ? JSON.stringify(evt.data) : ""}`;

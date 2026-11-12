@@ -1,6 +1,6 @@
 {
   "name": "@bargames/sdk",
-  "version": "0.11.3",
+  "version": "0.11.4",
   "description": "Game SDK for the Bar Games platform: venue branding, events, commands and the bargames.json manifest.",
   "type": "module",
   "license": "MIT",
