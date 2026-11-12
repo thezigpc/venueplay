@@ -23,6 +23,8 @@ the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
 ## What's new in SDK 0.9.0 (results, countdowns, attention, media apps)
 
+**Use 0.9.1:** `bargames check` now runs the media checks for apps too (0.9.0 skipped them), and `validate` no longer warns about level 3 on media apps.
+
 All optional; a game on 0.8.0 keeps working. Off a box every new call is a no-op. Full plan:
 `C:\CodeProjects\GameBroker\docs\SDK-0.9.md`. Vendor `bargames-sdk-0.9.0.tgz` (kit 0.5.1
 still fits).
@@ -310,7 +312,7 @@ Work through them in order, and get each level fully working before starting the
    `<repo>\vendor\` (create the folder).
 2. Add the dependency to **both** the `server` and `client` workspace `package.json`:
    ```json
-   "@bargames/sdk": "file:../vendor/bargames-sdk-0.9.0.tgz"
+   "@bargames/sdk": "file:../vendor/bargames-sdk-0.9.1.tgz"
    ```
 3. Run `npm install` at the repo root and commit the lockfile change along with it.
 4. **Dockerfile:** the `npm ci` layer needs the tarball. Next to the other
@@ -321,7 +323,7 @@ Work through them in order, and get each level fully working before starting the
 5. The CLI is now available as `npx bargames` (try `npx bargames` with no arguments).
 
 **Updating later:** a newer SDK arrives as a new file name, for example
-`bargames-sdk-0.9.0.tgz`. Replace the file, update both `package.json` entries, and run
+`bargames-sdk-0.9.1.tgz`. Replace the file, update both `package.json` entries, and run
 `npm install`. Never overwrite a tarball under the same name: the lockfile's integrity
 hash would then fail `npm ci`.
 

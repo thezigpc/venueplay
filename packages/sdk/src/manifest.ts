@@ -123,7 +123,7 @@ export function validateManifest(input: unknown): ManifestResult {
     warnings.push(display ? "routes.table: no TV view; this app can't be cast to TVs or used on idle TVs" : "routes.table: no big-screen view; this game cannot be cast to TVs");
   }
   if (display && routes && isStr(routes.table) && routes.table.includes("{code}")) errors.push("routes.table: apps have no rooms, so no {code}");
-  if (display && level >= 2) warnings.push("sdk.level: apps have no rooms; level 2+ room events and commands won't be used");
+  if (display && level >= 2 && m.media === undefined) warnings.push("sdk.level: apps have no rooms; level 2+ room events and commands won't be used");
 
   const health = m.health === undefined ? "/health" : m.health;
   if (!isStr(health) || !health.startsWith("/")) errors.push("health: path starting with /");

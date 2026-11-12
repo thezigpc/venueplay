@@ -421,6 +421,7 @@ export async function check(manifest: GameManifest, gameUrl: string, opts: { roo
 
   if (isApp(manifest)) {
     // Apps: a phone page and (usually) a TV view, no rooms. Room checks don't apply.
+    if (manifest.media && level >= 3) await checkMedia();
     for (const [what, p] of [["phone page (routes.player)", manifest.routes.player], ["TV view (routes.table)", manifest.routes.table]] as const) {
       if (!p) continue;
       const page = await callGame(gameUrl, p, undefined, "").catch(() => ({ status: 0, body: "" }));
@@ -477,8 +478,8 @@ export async function check(manifest: GameManifest, gameUrl: string, opts: { roo
     }
   }
 
-  // SDK 0.9.0: media providers.
-  if (manifest.media && level >= 3) {
+  // SDK 0.9.0: media providers (games and apps).
+  async function checkMedia() {
     const st = await callGame(gameUrl, PATHS.status);
     const media = (st.body as { media?: { targets?: unknown } })?.media;
     if (media === undefined) warn("media provider: status has no media.targets yet (fine until a TV is mapped)");
@@ -490,6 +491,7 @@ export async function check(manifest: GameManifest, gameUrl: string, opts: { roo
     else fail(`media_list → ${list.status} ${JSON.stringify(list.body).slice(0, 120)}`, "bg.onMediaList(() => [{ id, name, kind: \"list\" | \"plan\" }])");
     for (const cmd of ["media_play", "media_stop"]) if (!manifest.commands.includes(cmd)) fail(`"${cmd}" isn't in bargames.json "commands"`);
   }
+  if (manifest.media && level >= 3 && !isApp(manifest)) await checkMedia();
 
   // Creating rooms on a live game by mistake: only against the mock box's game unless --live.
   const roomsOk = onMock || opts.live === true;
