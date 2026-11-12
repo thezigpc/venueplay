@@ -24,7 +24,29 @@ type Tab = (typeof TABS)[number]["id"];
 
 export function App() {
   const [auth, setAuth] = useState<{ setup: boolean; loggedIn: boolean; canSetup: boolean } | null>(null);
-  const [tab, setTab] = useState<Tab>(() => (localStorage.getItem("bg-tab") as Tab) || "home");
+  // The tab lives in the address (#rooms), so the browser's Back/Forward move between tabs and a
+  // tab can be bookmarked; without one, the last tab used.
+  const fromHash = (): Tab | undefined => TABS.find((t) => `#${t.id}` === window.location.hash)?.id;
+  const [tab, setTabState] = useState<Tab>(() => {
+    try {
+      return fromHash() ?? ((localStorage.getItem("bg-tab") as Tab) || "home");
+    } catch {
+      return fromHash() ?? "home";
+    }
+  });
+  const setTab = (t: Tab) => {
+    if (window.location.hash !== `#${t}`) window.location.hash = t;
+    setTabState(t);
+  };
+  useEffect(() => {
+    const onHash = () => {
+      const t = fromHash();
+      if (t) setTabState(t);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const refreshAuth = useCallback(() => api.authStatus().then(setAuth).catch(() => setAuth({ setup: true, loggedIn: false, canSetup: false })), []);
   useEffect(() => void refreshAuth(), [refreshAuth]);
@@ -49,7 +71,9 @@ export function App() {
   return (
     <div className="shell">
       <nav className="tabs">
-        <strong className="brand">Bar Games</strong>
+        <button type="button" className="brand" onClick={() => setTab("home")} title="Home">
+          Bar Games
+        </button>
         {TABS.map((t) => (
           <button key={t.id} className={t.id === tab ? "active" : ""} onClick={() => setTab(t.id)}>
             {t.label}

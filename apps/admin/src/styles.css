@@ -59,7 +59,7 @@ label.check { display: flex; align-items: center; gap: 10px; color: var(--text);
   background: rgba(15, 19, 36, 0.92); backdrop-filter: blur(8px);
   border-bottom: 1px solid #252c55;
 }
-.tabs .brand { margin-right: 8px; white-space: nowrap; color: var(--primary); }
+.tabs .brand { margin-right: 8px; white-space: nowrap; color: var(--primary); background: none; border: 0; font-weight: 700; font-size: inherit; padding: 0; cursor: pointer; }
 .tabs button { background: none; border-color: transparent; white-space: nowrap; }
 .tabs button.active { background: var(--surface-2); border-color: #343d70; }
 .tabs .ghost { margin-left: auto; }

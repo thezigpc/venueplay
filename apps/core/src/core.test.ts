@@ -148,6 +148,13 @@ test("api: setup, install, brand, events, gateway config", async () => {
     assert.equal(withNews.venue.announcement?.text, "Last call at 1:30");
     const gwNews = (await (await json("GET", "/internal/gateway-config", undefined, { authorization: "Bearer gw" })).json()) as { contexts: Record<string, { venue: { announcement?: unknown } }> };
     assert.ok(gwNews.contexts._hub.venue.announcement && gwNews.contexts.bingo.venue.announcement);
+    // 0.12.0: where and position.
+    assert.equal((await json("PUT", "/api/announcement", { text: "x", show: "ceiling" }, authed)).status, 400);
+    const placed = (await (await json("PUT", "/api/announcement", { text: "TVs only", show: "tvs", position: "bottom" }, authed)).json()) as { show?: string; position?: string };
+    assert.deepEqual([placed.show, placed.position], ["tvs", "bottom"]);
+    const placedCtx = (await (await json("GET", "/internal/venue", undefined, { authorization: `Bearer ${token}` })).json()) as { venue: { announcement?: { show?: string; position?: string }; adminUrl?: string } };
+    assert.deepEqual([placedCtx.venue.announcement?.show, placedCtx.venue.announcement?.position], ["tvs", "bottom"]);
+    assert.match(placedCtx.venue.adminUrl ?? "", /\/admin$/, "games get the box admin's address");
     assert.equal((await json("DELETE", "/api/announcement", undefined, authed)).status, 200);
     assert.equal(await (await json("GET", "/api/announcement", undefined, authed)).json(), null);
 

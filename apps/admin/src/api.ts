@@ -230,6 +230,8 @@ export interface Announcement {
   id: string;
   text: string;
   until?: string;
+  show?: "everywhere" | "phones" | "tvs";
+  position?: "top" | "bottom";
 }
 
 export const api = {
@@ -301,7 +303,7 @@ export const api = {
     call<{ ok: boolean; message?: string; data?: unknown }>("POST", `/games/${encodeURIComponent(id)}/command`, body),
   rooms: () => call<RoomsOverview>("GET", "/rooms"),
   announcement: () => call<Announcement | null>("GET", "/announcement"),
-  announce: (text: string, minutes?: number) => call<Announcement>("PUT", "/announcement", { text, minutes }),
+  announce: (text: string, minutes?: number, where: { show?: "everywhere" | "phones" | "tvs"; position?: "top" | "bottom" } = {}) => call<Announcement>("PUT", "/announcement", { text, minutes, ...where }),
   clearAnnouncement: () => call<null>("DELETE", "/announcement"),
   idleTvs: (target: { displayIds?: string[]; group?: string } = {}) => call<Record<string, ShowResult>>("POST", "/tvs/idle", target),
   gameStatus: (id: string) => call<{ rooms: RoomSummary[] }>("GET", `/games/${encodeURIComponent(id)}/status`),

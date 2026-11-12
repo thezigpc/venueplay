@@ -21,6 +21,20 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.11.0 (announcements anywhere, quickly; a way back to the box admin)
+
+- **Venue changes arrive in seconds.** On box 0.12.0 the gateway holds `watchVenue()`'s
+  request until the venue changes, so an announcement goes up and comes down within a few
+  seconds (it was up to a minute). Nothing to change: update the SDK. Off a box, it polls as before.
+- **Announcements say where they show:** `announcement.show` is `"everywhere"` (default),
+  `"phones"` or `"tvs"`, and `announcement.position` is `"top"` (default) or `"bottom"`.
+  `announcementBanner()` (and kit 0.7.0's `VenueAnnouncement`) follow both. **Use it on your TV
+  view too** (after `tableMode()`/`markSharedScreen()`): it hides itself where it doesn't belong.
+  Drawing your own? Respect `show` against your page being shared or not.
+- **"← Box admin":** `venue.adminUrl` is the box admin's address; `boxAdminUrl(ctx)` returns it
+  on a box (undefined standalone). Put a link at the top of your admin pages (kit 0.7.0:
+  `<BoxAdminLink ctx={venue} />`), so staff who opened your settings from the box get back.
+
 ## What's new in SDK 0.10.0 (games under a path: venue.example.com/bingo)
 
 The box is moving to one hostname per venue: the games list at `https://<venue host>/`, each

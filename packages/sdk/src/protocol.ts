@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.10.4";
+export const SDK_VERSION = "0.11.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -54,6 +54,8 @@ export interface VenueInfo {
   wifi?: WifiInfo;
   /** The venue's games list (landing page), e.g. https://play.example.com */
   playUrl?: string;
+  /** SDK 0.11.0: the box admin's address (e.g. https://play.example.com/admin), for a "Box admin" link on staff pages. */
+  adminUrl?: string;
   /** Every game that's on tonight, this one included (SDK 0.4.0+ boxes). */
   games?: VenueGameLink[];
   /** A message from the staff for every game page ("Last call at 1:30"), if one is up. */
@@ -97,6 +99,13 @@ export interface Announcement {
   text: string;
   /** ISO time it comes down on its own, if set. */
   until?: string;
+  /**
+   * SDK 0.11.0: where it shows. "everywhere" (default): phones and TVs; "phones": players'
+   * own screens only; "tvs": shared screens (TV views, idle TVs) only.
+   */
+  show?: "everywhere" | "phones" | "tvs";
+  /** SDK 0.11.0: "top" (default) or "bottom" of the page. */
+  position?: "top" | "bottom";
 }
 
 /** What a venue may override per game (only slots the manifest marks brandable). */
@@ -317,6 +326,8 @@ export const PATHS = {
   pin: "/__bargames/pin",
   /** Staff sign-in hand-off from the box admin (the gateway handles it; SDK 0.7.0). */
   staff: "/__bargames/staff",
+  /** SDK 0.11.0: the announcement and countdown only, for idle screens (no PIN; CORS). */
+  live: "/__bargames/live.json",
 } as const;
 
 /** Headers the gateway adds to every proxied request. */

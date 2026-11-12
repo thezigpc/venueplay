@@ -71,3 +71,11 @@ export function formatCountdown(seconds: number): string {
   const s = Math.max(0, Math.ceil(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
+
+/**
+ * SDK 0.11.0: the box admin's address, for a "← Box admin" link on your admin pages (staff
+ * open them from the box). Undefined off a box, so show the link only when there is one.
+ */
+export function boxAdminUrl(ctx: VenueContext | null | undefined): string | undefined {
+  return onBox(ctx) ? ctx.venue.adminUrl : undefined;
+}

@@ -573,3 +573,40 @@ test("0.10.0: the mock box serves a game under a prefix (strip, redirect, Locati
     game.close();
   }
 });
+
+test("0.11.0: announcement where/position, boxAdminUrl, and watchVenue follows a held venue.json", async () => {
+  const { announcementBanner, watchVenue, boxAdminUrl } = await import("./client.js");
+  const { doc, added } = fakeDoc();
+  const ctl = announcementBanner(boxCtx({ announcement: { id: "b1", text: "TVs only", show: "tvs", position: "bottom" } }), { doc });
+  const bar = added[1];
+  assert.deepEqual([bar.dataset.show, bar.dataset.position], ["tvs", "bottom"]);
+  ctl.update(boxCtx({ announcement: { id: "b2", text: "Plain" } }));
+  assert.deepEqual([bar.dataset.show, bar.dataset.position], ["everywhere", "top"], "defaults");
+  ctl.remove();
+  assert.equal(boxAdminUrl(boxCtx({ adminUrl: "https://play.example.com/admin" })), "https://play.example.com/admin");
+  assert.equal(boxAdminUrl(null), undefined);
+
+  // A gateway that holds ?wait=<tag>: the change arrives without waiting out intervalMs.
+  const realFetch = globalThis.fetch;
+  const asked: string[] = [];
+  let version = 1;
+  const ctxV = () => boxCtx({ announcement: version > 1 ? { id: "n", text: "New" } : undefined });
+  globalThis.fetch = (async (url: string) => {
+    asked.push(String(url));
+    if (String(url).includes("wait=v1")) {
+      await new Promise((r) => setTimeout(r, 50));
+      version = 2;
+    }
+    return new Response(JSON.stringify(ctxV()), { headers: { "x-bargames-etag": `v${version}`, "x-bargames-wait": "1" } });
+  }) as typeof fetch;
+  try {
+    const seen: (string | undefined)[] = [];
+    const stop = watchVenue((c) => seen.push(c.venue.announcement?.text), { intervalMs: 60_000, base: "http://box.test" });
+    await new Promise((r) => setTimeout(r, 1500));
+    stop();
+    assert.deepEqual(seen, [undefined, "New"], "the change arrived in well under intervalMs");
+    assert.ok(asked.some((u) => u.includes("?wait=v1")), "held requests carry the last tag");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

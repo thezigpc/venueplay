@@ -14,7 +14,7 @@ export interface VenueExtras {
 }
 
 export function venueInfo(v: VenueSettings, extras: VenueExtras = {}): VenueInfo {
-  const info: VenueInfo = { name: v.name, theme: v.theme, wifi: v.wifi, playUrl: publicUrl(v, hostFor(v, v.playLabel)) };
+  const info: VenueInfo = { name: v.name, theme: v.theme, wifi: v.wifi, playUrl: publicUrl(v, hostFor(v, v.playLabel)), adminUrl: adminUrl(v) };
   if (extras.games) {
     const on = extras.games.filter((g) => g.enabled);
     // Apps (menus…) are listed apart, so games' "Also playing" skips them.
@@ -37,7 +37,7 @@ export function venueInfo(v: VenueSettings, extras: VenueExtras = {}): VenueInfo
 export function liveAnnouncement(a: Partial<Announcement> | undefined, now = Date.now()): Announcement | undefined {
   if (!a?.id || !a.text) return undefined;
   if (a.until && Date.parse(a.until) <= now) return undefined;
-  return { id: a.id, text: a.text, ...(a.until ? { until: a.until } : {}) };
+  return { id: a.id, text: a.text, ...(a.until ? { until: a.until } : {}), ...(a.show ? { show: a.show } : {}), ...(a.position ? { position: a.position } : {}) };
 }
 
 function gameLink(v: VenueSettings, g: InstalledGame): VenueGameLink {

@@ -357,3 +357,58 @@ test("path routing (SDK 0.10.0): a game under /<id> on the venue hostname, WebSo
     upstream.close();
   }
 });
+
+test("0.12.0: venue.json is held until the venue changes; live.json answers without a PIN, with CORS", async () => {
+  const { contentTag } = await import("./server.js");
+  const venue = { name: "Kava", theme: DEFAULT_THEME, playUrl: "https://play.example.com" } as GatewayConfig["venue"];
+  const ctx = (v: GatewayConfig["venue"], at: string) => ({ protocol: 1, venue: v, game: { id: "_hub", displayName: "Kava", theme: DEFAULT_THEME }, standalone: false, generatedAt: at });
+  let cfg: GatewayConfig = {
+    boxVersion: "0.1.0",
+    domain: "example.com",
+    venue,
+    routes: [{ host: "play.example.com", kind: "hub", enabled: true, injectTheme: false }],
+    access: { pinEnabled: true, pin: "4321", whitelist: [], autoVenueIp: true, venueCidrs: [], adminRemote: false },
+    contexts: { _hub: ctx(venue, "a") },
+    hub: { games: [] },
+    setupRequired: false,
+    adminUrl: "https://play.example.com/admin",
+  };
+  assert.equal(contentTag(ctx(venue, "a")), contentTag(ctx(venue, "b")), "generatedAt doesn't change the tag");
+  const gw = createGateway({ config: () => cfg, detectedCidrs: () => [], secret: "s", coreToken: "core-tok", log: createLogger("t", "error") });
+  await new Promise<void>((r) => gw.listen(0, "127.0.0.1", r));
+  const port = (gw.address() as AddressInfo).port;
+  const get = (p: string) =>
+    new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string; ms: number }>((resolve, reject) => {
+      const t0 = Date.now();
+      const req = request(`http://127.0.0.1:${port}${p}`, { headers: { host: "play.example.com" } }, (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c)).on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body, ms: Date.now() - t0 }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  try {
+    // live.json: no PIN needed (the venue PIN is on), CORS for the data: idle page.
+    let r = await get("/__bargames/live.json");
+    assert.equal(r.status, 200);
+    assert.equal(r.headers["access-control-allow-origin"], "*");
+    assert.deepEqual(JSON.parse(r.body), { announcement: null, countdown: null });
+    const liveTag = String(r.headers["x-bargames-etag"]);
+    // Held: an announcement posted 1.2 s later answers the waiting request.
+    setTimeout(() => {
+      const v = { ...venue, announcement: { id: "a1", text: "Last call", show: "tvs" as const } };
+      cfg = { ...cfg, venue: v, contexts: { _hub: ctx(v, "c") } };
+    }, 1200);
+    r = await get(`/__bargames/live.json?wait=${liveTag}`);
+    assert.ok(r.ms >= 1000 && r.ms < 5000, `held ${r.ms} ms`);
+    assert.equal(JSON.parse(r.body).announcement.text, "Last call");
+    assert.notEqual(r.headers["x-bargames-etag"], liveTag);
+    // venue.json: a stale tag answers at once (LAN requests skip the PIN anyway).
+    r = await get("/__bargames/venue.json?wait=stale");
+    assert.ok(r.ms < 500);
+    assert.equal(r.headers["x-bargames-wait"], "1");
+    assert.equal(JSON.parse(r.body).venue.announcement.text, "Last call");
+  } finally {
+    gw.close();
+  }
+});

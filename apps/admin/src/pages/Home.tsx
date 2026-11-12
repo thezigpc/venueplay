@@ -93,7 +93,10 @@ function AnnouncementCard() {
   const { busy, run } = useAction(current.reload, current.setError);
   const [text, setText] = useState("");
   const [minutes, setMinutes] = useState(0);
+  const [show, setShow] = useState<"everywhere" | "phones" | "tvs">("everywhere");
+  const [position, setPosition] = useState<"top" | "bottom">("top");
   const a = current.data;
+  const WHERE = { everywhere: "Phones and TVs", phones: "Phones only", tvs: "TVs only" } as const;
   return (
     <section className="card">
       <h2>Announcement</h2>
@@ -103,7 +106,10 @@ function AnnouncementCard() {
           <p>
             <b>{a.text}</b>
           </p>
-          <small className="muted">{a.until ? `Comes down at ${new Date(a.until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Up until you take it down"}</small>
+          <small className="muted">
+            {WHERE[a.show ?? "everywhere"]} · {a.position === "bottom" ? "bottom" : "top"} ·{" "}
+            {a.until ? `comes down at ${new Date(a.until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "up until you take it down"}
+          </small>
           <div className="buttons">
             <button disabled={busy} onClick={() => run(() => api.clearAnnouncement())}>
               Take it down
@@ -111,14 +117,14 @@ function AnnouncementCard() {
           </div>
         </div>
       ) : (
-        <p className="muted">Shown across the top of every game, on the players' page and on idle TVs.</p>
+        <p className="muted">Shown on every game's pages and on idle TVs: pick phones, TVs or both, and the top or bottom of the screen. Taking it down clears it within a few seconds.</p>
       )}
       <form
         onSubmit={(e) => {
           e.preventDefault();
           if (!text.trim()) return;
           void run(async () => {
-            await api.announce(text, minutes || undefined);
+            await api.announce(text, minutes || undefined, { show, position });
             setText("");
           });
         }}
@@ -133,6 +139,19 @@ function AnnouncementCard() {
             ))}
           </select>
           <button className="primary" disabled={busy || !text.trim()}>{a ? "Replace" : "Post"}</button>
+        </div>
+        <div className="inline">
+          <select value={show} onChange={(e) => setShow(e.target.value as typeof show)} aria-label="Where it shows">
+            {Object.entries(WHERE).map(([k, label]) => (
+              <option key={k} value={k}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <select value={position} onChange={(e) => setPosition(e.target.value as typeof position)} aria-label="Top or bottom">
+            <option value="top">Top of the screen</option>
+            <option value="bottom">Bottom of the screen</option>
+          </select>
         </div>
       </form>
     </section>

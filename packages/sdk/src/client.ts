@@ -60,8 +60,9 @@ export function watchVenue(fn: (ctx: VenueContext) => void, opts: number | (Venu
   const { intervalMs = 60_000, base } = typeof opts === "number" ? { intervalMs: opts, base: undefined } : opts;
   let last = "";
   let stopped = false;
-  const tick = async (refresh: boolean) => {
-    const ctx = await getVenue({ refresh, base });
+  let ctrl: AbortController | undefined;
+  let wake: (() => void) | undefined;
+  const deliver = (ctx: VenueContext | null) => {
     if (stopped || !isOnBox(ctx)) return;
     const key = JSON.stringify({ v: ctx.venue, g: ctx.game });
     if (key !== last) {
@@ -69,11 +70,46 @@ export function watchVenue(fn: (ctx: VenueContext) => void, opts: number | (Venu
       fn(ctx);
     }
   };
-  void tick(false);
-  const timer = setInterval(() => void tick(true), intervalMs);
+  const pause = (ms: number) =>
+    new Promise<void>((r) => {
+      const t = setTimeout(r, ms);
+      wake = () => {
+        clearTimeout(t);
+        r();
+      };
+    });
+  const url = (wait: string) => {
+    const u = base ? new URL(basePath() + PATHS.venue, base).toString() : bgUrl(PATHS.venue);
+    return wait ? `${u}?wait=${encodeURIComponent(wait)}` : u;
+  };
+  void (async () => {
+    deliver(await getVenue({ base }));
+    let etag = "";
+    while (!stopped) {
+      let held = false;
+      try {
+        // SDK 0.11.0: a box gateway holds the request until the venue changes (x-bargames-wait),
+        // so an announcement comes down in seconds; anything else is polled every intervalMs.
+        ctrl = new AbortController();
+        const r = await fetch(url(etag), { cache: "no-store", signal: ctrl.signal });
+        const ctx = r.ok ? ((await r.json()) as VenueContext) : null;
+        if (ctx) {
+          cache = Promise.resolve(ctx);
+          deliver(ctx);
+        }
+        const tag = r.headers.get("x-bargames-etag") ?? "";
+        held = r.headers.get("x-bargames-wait") === "1" && Boolean(tag);
+        if (held) etag = tag;
+      } catch {
+        if (stopped) return;
+      }
+      await pause(held ? 500 : intervalMs);
+    }
+  })();
   return () => {
     stopped = true;
-    clearInterval(timer);
+    ctrl?.abort();
+    wake?.();
   };
 }
 
@@ -267,7 +303,9 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
       style.textContent =
         "#bargames-announcement{position:sticky;z-index:2147483646;top:0;margin:0;display:flex;gap:12px;align-items:center;justify-content:center;padding:10px 48px 10px 16px;" +
         "background:var(--venue-primary,#f2b33d);color:var(--venue-on-primary,#111);font:600 15px/1.4 var(--venue-font,system-ui,sans-serif);text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.3)}" +
-        "#bargames-announcement[hidden],html[data-bargames-screen=shared] #bargames-announcement{display:none}#bargames-announcement button{all:unset;box-sizing:border-box;position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:50%;color:inherit;font:400 24px/1 system-ui,sans-serif;cursor:pointer}#bargames-announcement button:focus-visible{outline:2px solid currentColor}";
+        "#bargames-announcement[data-position=bottom]{position:fixed;top:auto;bottom:0;left:0;right:0;box-shadow:0 -2px 8px rgba(0,0,0,.3)}" +
+        // SDK 0.11.0: where it shows. Shared screens (TV views) are marked by tableMode()/markSharedScreen().
+        "#bargames-announcement[hidden],html[data-bargames-screen=shared] #bargames-announcement[data-show=phones],html:not([data-bargames-screen=shared]) #bargames-announcement[data-show=tvs]{display:none}#bargames-announcement button{all:unset;box-sizing:border-box;position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:50%;color:inherit;font:400 24px/1 system-ui,sans-serif;cursor:pointer}#bargames-announcement button:focus-visible{outline:2px solid currentColor}";
       doc.head.appendChild(style);
       el = doc.createElement("div");
       el.id = "bargames-announcement";
@@ -277,6 +315,8 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
       else doc.body.appendChild(el);
     }
     el.hidden = false;
+    el.dataset.show = a.show ?? "everywhere";
+    el.dataset.position = a.position ?? "top";
     el.textContent = a.text;
     const close = doc.createElement("button");
     close.type = "button";
@@ -309,7 +349,7 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
 }
 
 export { BASE_META, basePath, bgUrl, normalizeBasePath, socketIoPath } from "./base.js";
-export { activeAnnouncement, activeCountdown, ANNOUNCEMENT_HIDE_CSS, formatCountdown, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
+export { activeAnnouncement, activeCountdown, ANNOUNCEMENT_HIDE_CSS, boxAdminUrl, formatCountdown, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
 export type { Announcement, Countdown, LeaderboardSummary, PlayerProfile, VenueGameLink, VenueLocation } from "./protocol.js";
 
 export interface CountdownController {

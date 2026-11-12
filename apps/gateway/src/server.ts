@@ -1,7 +1,7 @@
 import { ADMIN_COOKIE, GATEWAY_PROOF_HEADER, signToken, STAFF_COOKIE, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
 import { GAMES_LINK_CSS, gamesLinkHtml, HEADERS, PATHS, themeToCss, type VenueContext } from "@bargames/sdk";
 import httpProxy from "http-proxy";
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { checkAccess, type AccessDecision } from "./ipgate.js";
@@ -150,6 +150,12 @@ export function createGateway(d: GatewayDeps) {
     const decision = decide(req, cfg, route);
     if (!decision.allowed) return send(res, 403, joinWifiPage(cfg.venue));
 
+    // The announcement and countdown only: idle TV pages (a data: page, so CORS) follow it.
+    // Public text, so no PIN; still behind the venue's access rules above.
+    if (url.pathname === PATHS.live && req.method === "GET") {
+      return held(req, res, url, () => { const v = d.config()?.venue; return v ? { announcement: v.announcement ?? null, countdown: v.countdown ?? null } : undefined; }, { "access-control-allow-origin": "*", "access-control-expose-headers": "x-bargames-etag, x-bargames-wait" });
+    }
+
     if (url.pathname === PATHS.pin && req.method === "POST") return handlePin(req, res, cfg);
     if (url.pathname === PATHS.staff && req.method === "GET" && route.kind === "game") return handleStaff(req, res, cfg, url, route);
     if (!pinOk(req, cfg, decision, route)) {
@@ -158,7 +164,12 @@ export function createGateway(d: GatewayDeps) {
     }
 
     const ctx: VenueContext | undefined = cfg.contexts[route.gameId ?? "_hub"];
-    if (url.pathname === PATHS.venue && ctx) return send(res, 200, JSON.stringify(ctx), "application/json");
+    if (url.pathname === PATHS.venue && ctx) {
+      // SDK 0.11.0: ?wait=<etag> is held until the context changes (or 25 s), so pages
+      // hear about an announcement in seconds instead of polling.
+      const key = route.gameId ?? "_hub";
+      return held(req, res, url, () => d.config()?.contexts[key], {});
+    }
     if (url.pathname === PATHS.themeCss && ctx) return send(res, 200, themeToCss(ctx.game.theme), "text/css");
 
     if (route.kind === "hub") {
@@ -175,6 +186,29 @@ export function createGateway(d: GatewayDeps) {
     prepare(req, decision, route);
     if (route.injectTheme) (req as IncomingMessage & { bgContext?: VenueContext }).bgContext = ctx;
     (route.injectTheme ? injecting : proxy).web(req, res, { target: route.target });
+  }
+
+  /**
+   * Answers `read()` as JSON with an etag; with ?wait=<that etag> the answer is held until
+   * it changes (checked every second, as config refreshes) or 25 s pass.
+   */
+  async function held(req: IncomingMessage, res: ServerResponse, url: URL, read: () => unknown, headers: Record<string, string>): Promise<void> {
+    const wait = url.searchParams.get("wait");
+    let body = read();
+    if (body === undefined) return send(res, 404, "{}", "application/json");
+    if (wait && contentTag(body) === wait) {
+      let gone = false;
+      res.on("close", () => (gone = true));
+      const until = Date.now() + 25_000;
+      while (!gone && Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 1000));
+        body = read() ?? body;
+        if (contentTag(body) !== wait) break;
+      }
+      if (gone) return;
+    }
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-bargames-etag": contentTag(body), "x-bargames-wait": "1", ...headers });
+    res.end(JSON.stringify(body));
   }
 
   async function handlePin(req: IncomingMessage, res: ServerResponse, cfg: GatewayConfig): Promise<void> {
@@ -233,6 +267,12 @@ export function injectTheme(html: string, landingCtx?: VenueContext): string {
 }
 
 type PrefixedRequest = IncomingMessage & { bgPrefix?: string };
+
+/** A short tag of a JSON body, ignoring generatedAt (it changes on every config refresh). */
+export function contentTag(body: unknown): string {
+  const text = JSON.stringify(body, (k, v) => (k === "generatedAt" ? undefined : v));
+  return createHash("sha1").update(text).digest("base64url").slice(0, 16);
+}
 
 /** "/bingo/x?y" under "/bingo" → "/x?y"; "/bingo?y" → redirect to "/bingo/?y". */
 export function stripPrefix(prefix: string, asked: string): { url?: string; redirect?: string } {

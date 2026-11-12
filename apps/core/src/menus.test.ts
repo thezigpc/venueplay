@@ -615,7 +615,9 @@ test("0.9.0: attention, TV health, countdown, results and leaderboards, profiles
     assert.deepEqual(lb.games[0].allTime[0], { name: "Ann", wins: 2, games: 2 });
     const html = await idleScreenHtml({ venue: (await (await b.json("GET", "/internal/venue", undefined, g)).json() as { venue: Parameters<typeof idleScreenHtml>[0]["venue"] }).venue, games: ["Bingo"] });
     assert.match(html, /Tonight's winners: Bingo: <b>Ann<\/b> ×2/);
-    assert.match(html, /Trivia at <b id="cd" data-ends="\d+"><\/b>/, "the staff countdown ticks on idle TVs");
+    // 0.12.0: the countdown and announcement follow the live feed; the page doesn't carry them.
+    assert.match(html, /data-live="[^"]+\/__bargames\/live\.json"/, "the idle TV follows the live feed");
+    assert.doesNotMatch(html, /Trivia at/);
     await b.json("DELETE", "/api/leaderboards", undefined, b.authed);
     assert.equal(((await (await b.json("GET", "/api/leaderboards", undefined, b.authed)).json()) as { games: unknown[] }).games.length, 0);
 

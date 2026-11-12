@@ -19,6 +19,7 @@ import {
   type GameEventInput,
   type GameStatus,
   type Countdown,
+  type Announcement,
   adminPath,
   compareVersions,
   PATHS,
@@ -208,8 +209,11 @@ export function createApp(d: AppDeps) {
   const refreshIdleTvs = async (force = false) => {
     if (!force && idleModuleOf()) return;
     const list = ((await brokerCall("GET", "/displays").catch(() => [])) as BrokerDisplay[]) ?? [];
-    const ids = list.filter((x) => x.content?.kind === "idle").map((x) => x.id);
-    if (ids.length) await brokerCall("POST", "/show", { displayIds: ids, content: await idleContent() });
+    const content = await idleContent();
+    // Box 0.12.0: the idle page follows announcements and countdowns by itself, so its address
+    // usually doesn't change; a TV already on it is left alone (no stream restart, no blink).
+    const ids = list.filter((x) => x.content?.kind === "idle" && x.content.url !== content.url).map((x) => x.id);
+    if (ids.length) await brokerCall("POST", "/show", { displayIds: ids, content });
   };
   /**
    * A display module was turned off or removed: TVs showing it (cast on purpose or as the
@@ -1087,8 +1091,14 @@ export function createApp(d: AppDeps) {
   scheduleExpiry(liveAnnouncement(d.state.announcement.get())?.until);
 
   app.get("/api/announcement", (_req, res) => res.json(liveAnnouncement(d.state.announcement.get()) ?? null));
-  const postAnnouncement = async (text: string, minutes?: number) => {
-    const a = { id: Date.now().toString(36), text, ...(minutes ? { until: new Date(Date.now() + minutes * 60_000).toISOString() } : {}) };
+  const postAnnouncement = async (text: string, minutes?: number, show?: Announcement["show"], position?: Announcement["position"]) => {
+    const a = {
+      id: Date.now().toString(36),
+      text,
+      ...(minutes ? { until: new Date(Date.now() + minutes * 60_000).toISOString() } : {}),
+      ...(show && show !== "everywhere" ? { show } : {}),
+      ...(position === "bottom" ? { position } : {}),
+    };
     await d.state.announcement.set(a);
     scheduleExpiry(a.until);
     d.log.info("announcement", "posted", { minutes: minutes ?? null });
@@ -1099,13 +1109,15 @@ export function createApp(d: AppDeps) {
   app.put(
     "/api/announcement",
     h(async (req, res) => {
-      const { text, minutes } = (req.body ?? {}) as { text?: unknown; minutes?: unknown };
+      const { text, minutes, show, position } = (req.body ?? {}) as { text?: unknown; minutes?: unknown; show?: unknown; position?: unknown };
+      if (show !== undefined && !["everywhere", "phones", "tvs"].includes(String(show))) throw new HttpError(400, "show: everywhere, phones or tvs");
+      if (position !== undefined && !["top", "bottom"].includes(String(position))) throw new HttpError(400, "position: top or bottom");
       const t = typeof text === "string" ? text.trim().replace(/\s+/g, " ") : "";
       if (!t) throw new HttpError(400, "text required");
       if (t.length > 200) throw new HttpError(400, "keep it under 200 characters");
       const mins = minutes === undefined || minutes === null || minutes === "" ? undefined : Number(minutes);
       if (mins !== undefined && !(Number.isFinite(mins) && mins > 0 && mins <= 24 * 60)) throw new HttpError(400, "minutes must be between 1 and 1440");
-      res.json(await postAnnouncement(t, mins));
+      res.json(await postAnnouncement(t, mins, show as Announcement["show"], position as Announcement["position"]));
     }),
   );
   app.delete(

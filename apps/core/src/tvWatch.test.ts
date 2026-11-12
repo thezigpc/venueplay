@@ -68,3 +68,17 @@ test("idle screen: escapes the venue name and includes the Play QR", async () =>
   assert.match(html, /play\.example\.com/);
   assert.match(html, /Tonight: Bingo/);
 });
+
+test("idle screen 0.12.0: live when there's a play address; written in (and show-aware) without one", async () => {
+  const theme = { colors: { background: "#000", surface: "#111", text: "#fff", primary: "#f0f", accent: "#ff0" } };
+  const announcement = { id: "a", text: "Last call" };
+  const live = await idleScreenHtml({ venue: { name: "Kava", theme, playUrl: "https://play.example.com", announcement }, games: [] });
+  assert.match(live, /data-live="https:\/\/play\.example\.com\/__bargames\/live\.json"/);
+  assert.doesNotMatch(live, /Last call/, "the live page fills it in; the page stays the same");
+  const again = await idleScreenHtml({ venue: { name: "Kava", theme, playUrl: "https://play.example.com", announcement: { id: "b", text: "Other" } }, games: [] });
+  assert.equal(live, again, "an announcement doesn't change the page (no stream restart)");
+  const local = await idleScreenHtml({ venue: { name: "Kava", theme, announcement: { ...announcement, position: "bottom" as const } }, games: [] });
+  assert.match(local, /<p id="news" class="news bottom">Last call<\/p>/);
+  const phones = await idleScreenHtml({ venue: { name: "Kava", theme, announcement: { ...announcement, show: "phones" as const } }, games: [] });
+  assert.match(phones, /<p id="news" class="news" hidden><\/p>/, "phones-only stays off TVs");
+});
