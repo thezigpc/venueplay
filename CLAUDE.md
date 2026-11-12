@@ -22,6 +22,7 @@ Repo: https://github.com/thezigpc/venueplay (public, branch `main`). Commits use
 - Python edits on this Windows box: use `encoding="utf8", newline=""`. Otherwise text mode writes CRLF and cp1252, and multi-line matches on CRLF files fail silently.
 
 ## The dev box
+- **Releasing the box:** bump `VERSION`, push to main; the "Box images" workflow builds `ghcr.io/thezigpc/bargames` + `bargames-broker` and tags `v<VERSION>` (the packages are public). Then on the box: `bgctl self-update` (snapshot, pull, health check, rollback on failure), or the System page's Update button. Don't copy source onto a box that pins `BARGAMES_VERSION`: a local build would be tagged as that release.
 - Its address, login and bench devices are in `CLAUDE.local.md` (git-ignored, this machine only). Never put them in committed files: this repo is public.
 - **Install only what's needed on the box host.** Everything else goes in containers.
 - Don't send power, input or launch commands to the user's devices without asking. Read-only discovery is fine.
