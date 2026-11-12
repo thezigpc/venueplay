@@ -125,3 +125,11 @@ details.remote, details.stream-settings { margin-top: 10px; }
 details summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 .dpad { display: grid; grid-template-columns: repeat(3, 64px); grid-auto-rows: 52px; gap: 6px; justify-content: center; margin: 8px 0; }
 .dpad button { font-size: 1.2rem; }
+.bar { height: 10px; background: var(--surface-2); border-radius: 5px; overflow: hidden; margin: 6px 0 10px; }
+.bar .fill { height: 100%; background: var(--ok); }
+.bar .fill.warn { background: #f2b33d; }
+.bar .fill.error { background: var(--danger); }
+ul.plain { list-style: none; padding: 0; margin: 6px 0; }
+ul.plain li { padding: 3px 0; }
+table.stats { width: 100%; border-collapse: collapse; }
+table.stats th, table.stats td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #252c55; }

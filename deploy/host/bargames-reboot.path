@@ -1,0 +1,10 @@
+# Bar Games: reboot the box when the admin asks (core writes reboot.request in its data folder).
+# Installed by deploy/host/install.sh, which fills in the real path.
+[Unit]
+Description=Bar Games reboot request watcher
+
+[Path]
+PathExists=@DATA@/reboot.request
+
+[Install]
+WantedBy=multi-user.target

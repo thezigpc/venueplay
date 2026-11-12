@@ -1,4 +1,5 @@
 import { bearer, safeEqual, type Logger } from "@bargames/common";
+import { readFileSync } from "node:fs";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import type { AirplayDriver } from "./drivers/airplay/index.js";
 import type { RokuDriver } from "./drivers/roku/index.js";
@@ -22,6 +23,19 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
     if (!safeEqual(bearer(req.headers.authorization), d.token)) return void res.status(401).json({ error: "unauthorized" });
     next();
   });
+
+  /** Host network traffic (the broker shares the host's network) and casting load, for the System page. */
+  app.get(
+    "/system",
+    h(async (_req, res) => {
+      const views = await d.registry.view(false);
+      const streams = views.map((v) => v.stream).filter((x): x is NonNullable<typeof x> => Boolean(x));
+      res.json({
+        network: hostInterfaces(readFileSync("/proc/net/dev", "utf8")),
+        casting: { tvs: streams.length, streaming: streams.filter((x) => x.state === "streaming").length, pages: new Set(streams.map((x) => `${x.settings ?? ""}|${x.url}`)).size },
+      });
+    }),
+  );
 
   app.get(
     "/displays",
@@ -175,4 +189,19 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
   });
 
   return app;
+}
+
+/** /proc/net/dev → physical/VPN interfaces with byte counters (docker bridges and veths left out). */
+export function hostInterfaces(text: string): { name: string; rxBytes: number; txBytes: number }[] {
+  return text
+    .split(/\r?\n/)
+    .slice(2)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      const [name, rest] = l.split(":");
+      const n = rest.trim().split(/\s+/).map(Number);
+      return { name: name.trim(), rxBytes: n[0] ?? 0, txBytes: n[8] ?? 0 };
+    })
+    .filter((i) => i.name !== "lo" && !/^(veth|docker|br-)/.test(i.name));
 }

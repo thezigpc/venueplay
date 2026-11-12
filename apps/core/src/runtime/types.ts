@@ -1,4 +1,5 @@
 import type { InstalledGame } from "../state.js";
+import type { ContainerStat } from "../systemStats.js";
 
 export type GameState = "running" | "stopped" | "missing" | "unknown";
 
@@ -9,6 +10,8 @@ export interface GameRuntime {
   stop(gameId: string): Promise<void>;
   remove(gameId: string, opts: { keepData: boolean }): Promise<void>;
   state(gameId: string): Promise<GameState>;
+  /** CPU and memory of the box's containers (System page). Docker only. */
+  containerStats?(): Promise<ContainerStat[]>;
 }
 
 /** Runs the Cloudflare Tunnel connector (cloudflared) next to the gateway. */

@@ -88,7 +88,7 @@ async function boot(extraFetch?: (url: string, init?: RequestInit) => Response |
     auth: new AdminAuth(state.auth, "secret"),
     cloudflare: new CloudflareService({ store: state.cloudflare, connector: new NoopRuntime(), desiredHosts: () => [], tunnelName: () => "t", origin: "http://gw", log: createLogger("test", "error") }),
     log: createLogger("test", "error"),
-    config: { gatewayToken: "gw", brokerUrl: "http://broker", brokerToken: "b", internalUrl: "http://core:7100", adminDist: path.join(dir, "none"), boxVersion: "0.5.0", opsToken: "ops-secret", castAnswerMs: opts.castAnswerMs },
+    config: { gatewayToken: "gw", brokerUrl: "http://broker", brokerToken: "b", internalUrl: "http://core:7100", adminDist: path.join(dir, "none"), boxVersion: "0.5.0", opsToken: "ops-secret", castAnswerMs: opts.castAnswerMs, dataDir: dir },
     fetch: fakeFetch,
   });
   const server = app.listen(0);
@@ -96,7 +96,7 @@ async function boot(extraFetch?: (url: string, init?: RequestInit) => Response |
   const json = (method: string, p: string, body?: unknown, headers: Record<string, string> = {}) =>
     fetch(base + p, { method, headers: { "content-type": "application/json", ...headers }, body: body ? JSON.stringify(body) : undefined });
   const cookie = (await json("POST", "/api/auth/setup", { password: "correct horse" })).headers.get("set-cookie")!.split(";")[0];
-  return { json, base, authed: { cookie }, games, runtime, displays, shows, close: () => server.close() };
+  return { json, base, dir, authed: { cookie }, games, runtime, displays, shows, close: () => server.close() };
 }
 
 test("menus: listed apart from games, venue location reaches games, cast without a room", async () => {
@@ -439,6 +439,60 @@ test("box password: logging in signs staff in venue-wide; games can check it; gu
     // The box's own login is limited too.
     for (let i = 0; i < 10; i++) await b.json("POST", "/api/auth/login", { password: "x" });
     assert.equal((await b.json("POST", "/api/auth/login", { password: "correct horse" })).status, 429);
+  } finally {
+    b.close();
+  }
+});
+
+test("system: stats from /proc and /sys, container CPU, and a reboot only with the host helper", async () => {
+  const { HostSampler, containerCpuPercent, parseMeminfo, parseProcStat } = await import("./systemStats.js");
+  const { mkdirSync, writeFileSync, existsSync, readFileSync } = await import("node:fs");
+  assert.deepEqual(parseProcStat("cpu  100 0 100 700 100 0 0 0 0 0\ncpu0 1 2 3"), { total: 1000, idle: 800 });
+  assert.deepEqual(parseMeminfo("MemTotal:       1000 kB\nMemFree: 1 kB\nMemAvailable:    250 kB\n"), { totalBytes: 1024000, availableBytes: 256000 });
+  assert.equal(containerCpuPercent({ cpu_stats: { cpu_usage: { total_usage: 300 }, system_cpu_usage: 2000, online_cpus: 4 }, precpu_stats: { cpu_usage: { total_usage: 100 }, system_cpu_usage: 1000 } }), 80);
+  assert.equal(containerCpuPercent({}), undefined);
+
+  const root = mkdtempSync(path.join(tmpdir(), "bg-sys-"));
+  const put = (p: string, v: string) => {
+    mkdirSync(path.dirname(path.join(root, p)), { recursive: true });
+    writeFileSync(path.join(root, p), v);
+  };
+  put("proc/stat", "cpu  100 0 100 700 100 0 0 0 0 0\n");
+  put("proc/meminfo", "MemTotal: 1000 kB\nMemAvailable: 250 kB\n");
+  put("proc/loadavg", "0.50 0.25 0.10 1/500 99\n");
+  put("sys/thermal/thermal_zone0/type", "x86_pkg_temp\n");
+  put("sys/thermal/thermal_zone0/temp", "51000\n");
+  put("sys/hwmon/hwmon1/name", "nvme\n");
+  put("sys/hwmon/hwmon1/temp1_input", "38850\n");
+  put("sys/hwmon/hwmon1/temp1_label", "Composite\n");
+  put("sys/drm/card1/gt_cur_freq_mhz", "350\n");
+  put("sys/drm/card1/gt_max_freq_mhz", "1050\n");
+  const sampler = new HostSampler({ proc: path.join(root, "proc"), sys: path.join(root, "sys"), diskPath: root });
+  const first = sampler.read();
+  assert.equal(first.cpuPercent, undefined, "first reading: nothing to compare yet");
+  assert.deepEqual(first.load, [0.5, 0.25, 0.1]);
+  assert.equal(first.memory.usedPercent, 75);
+  assert.deepEqual(first.temps, [{ label: "CPU package", celsius: 51 }, { label: "NVMe Composite", celsius: 38.9 }]);
+  assert.deepEqual(first.gpu, { curMhz: 350, maxMhz: 1050 });
+  assert.ok(first.disk && first.disk.totalBytes > 0);
+  put("proc/stat", "cpu  400 0 100 900 100 0 0 0 0 0\n");
+  assert.equal(sampler.read().cpuPercent, 60, "300 of 500 jiffies busy");
+
+  // The API: stats, and reboot only with the host helper installed.
+  const b = await boot();
+  try {
+    const st = (await (await b.json("GET", "/api/system/stats", undefined, b.authed)).json()) as { host: { cores: number }; reboot: { available: boolean } };
+    assert.ok(st.host.cores > 0);
+    assert.equal(st.reboot.available, false);
+    assert.equal((await b.json("GET", "/api/system/stats")).status, 401, "admin only");
+    assert.equal((await b.json("POST", "/api/system/reboot", {}, b.authed)).status, 400, "needs the explicit confirm");
+    assert.equal((await b.json("POST", "/api/system/reboot", { confirm: "reboot" }, b.authed)).status, 409, "no host helper yet");
+    writeFileSync(path.join(b.dir, "host-hooks.json"), JSON.stringify({ reboot: true }));
+    assert.equal((await b.json("POST", "/api/system/reboot", { confirm: "reboot" })).status, 401, "admin only");
+    assert.equal((await b.json("POST", "/api/system/reboot", { confirm: "reboot" }, b.authed)).status, 200);
+    assert.ok(existsSync(path.join(b.dir, "reboot.request")), "the request the host helper watches for");
+    assert.match(readFileSync(path.join(b.dir, "reboot.request"), "utf8"), /"at":/);
+    assert.equal(((await (await b.json("GET", "/api/system/stats", undefined, b.authed)).json()) as { reboot: { pending: boolean } }).reboot.pending, true);
   } finally {
     b.close();
   }

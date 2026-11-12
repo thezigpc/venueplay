@@ -1,5 +1,6 @@
 import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_TTL_MS, type Logger } from "@bargames/common";
 import { PasswordLimiter } from "./limiter.js";
+import { HostSampler } from "./systemStats.js";
 import {
   checkTheme,
   HEADERS,
@@ -21,7 +22,7 @@ import {
 } from "@bargames/sdk";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ADMIN_COOKIE, AdminAuth, readCookie } from "./auth.js";
 import type { CloudflareService } from "./cloudflare/service.js";
@@ -53,6 +54,8 @@ export interface AppDeps {
     internalUrl: string;
     adminDist: string;
     boxVersion: string;
+    /** Core's data folder (reboot requests, host helper marker). */
+    dataDir?: string;
     /** How long a cast from inside a game waits before answering "starting" (default 6000). */
     castAnswerMs?: number;
     /** bgctl's token (ops endpoints). Absent: they're off. */
@@ -453,6 +456,55 @@ export function createApp(d: AppDeps) {
         .then((r) => r.ok)
         .catch(() => false);
       res.json({ version: d.config.boxVersion, runtime: d.runtime.kind, broker });
+    }),
+  );
+
+  // ------------------------------------------------------------ system stats and reboot
+
+  const sampler = new HostSampler({ diskPath: d.config.dataDir });
+  const coreStarted = Date.now();
+  /** The host helper (deploy/host/install.sh) leaves this marker; without it the box can't reboot itself. */
+  const hostHooks = (): { reboot?: boolean; installedAt?: string } => {
+    if (!d.config.dataDir) return {};
+    try {
+      return JSON.parse(readFileSync(path.join(d.config.dataDir, "host-hooks.json"), "utf8"));
+    } catch {
+      return {};
+    }
+  };
+  const rebootFile = () => (d.config.dataDir ? path.join(d.config.dataDir, "reboot.request") : undefined);
+
+  app.get(
+    "/api/system/stats",
+    h(async (_req, res) => {
+      const [containers, broker] = await Promise.all([
+        d.runtime.containerStats?.().catch(() => undefined),
+        brokerCall("GET", "/system").catch(() => undefined) as Promise<{ network?: unknown; casting?: unknown } | undefined>,
+      ]);
+      const rooms = Object.values(roomCache.snapshot()).reduce((n, r) => n + r.length, 0);
+      const pending = rebootFile();
+      res.json({
+        at: new Date().toISOString(),
+        host: sampler.read(),
+        containers,
+        network: broker?.network,
+        casting: broker?.casting,
+        box: { version: d.config.boxVersion, coreUptimeSec: Math.round((Date.now() - coreStarted) / 1000), games: d.games.list().filter((g) => g.enabled).length, openRooms: rooms },
+        reboot: { available: Boolean(hostHooks().reboot), pending: Boolean(pending && existsSync(pending)) },
+      });
+    }),
+  );
+
+  /** { confirm: "reboot" }: restarts the whole machine (host helper required). TV startup choices run after. */
+  app.post(
+    "/api/system/reboot",
+    h(async (req, res) => {
+      if ((req.body ?? {}).confirm !== "reboot") throw new HttpError(400, 'send { confirm: "reboot" }');
+      const file = rebootFile();
+      if (!file || !hostHooks().reboot) throw new HttpError(409, "This box can't reboot itself yet: run deploy/host/install.sh on it once (sudo).");
+      writeFileSync(file, JSON.stringify({ at: new Date().toISOString(), by: clientIpOf(req) }));
+      d.log.warn("system", "reboot requested from the admin", { by: clientIpOf(req) });
+      res.json({ ok: true, message: "Rebooting. The box is back in a minute or two; this page reconnects by itself." });
     }),
   );
 

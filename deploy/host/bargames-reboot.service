@@ -1,0 +1,7 @@
+# Removes the request first (so it can't loop), then reboots.
+[Unit]
+Description=Bar Games reboot (requested from the admin)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'logger -t bargames "reboot requested from the admin: $(cat @DATA@/reboot.request 2>/dev/null)"; rm -f @DATA@/reboot.request; /usr/bin/systemctl reboot'

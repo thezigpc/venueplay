@@ -3,6 +3,7 @@
 
 import type { Logger } from "@bargames/common";
 import type { InstalledGame } from "../state.js";
+import { containerCpuPercent, type ContainerStat } from "../systemStats.js";
 import { containerSpec, names, TUNNEL_CONTAINER, tunnelSpec } from "./spec.js";
 import type { GameRuntime, GameState, TunnelConnector } from "./types.js";
 
@@ -118,6 +119,30 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
 
   async state(id: string): Promise<GameState> {
     return this.containerState(names(id).container);
+  }
+
+  /** Every container on the box (the stack, the games, cloudflared), with CPU and memory. */
+  async containerStats(): Promise<ContainerStat[]> {
+    const list = (await (await this.call("GET", "/containers/json?all=1")).json()) as { Id: string; Names?: string[]; State?: string; Status?: string }[];
+    return Promise.all(
+      list.map(async (c) => {
+        const row: ContainerStat = { name: (c.Names?.[0] ?? c.Id.slice(0, 12)).replace(/^\//, ""), state: c.State ?? "", status: c.Status ?? "" };
+        if (c.State !== "running") return row;
+        try {
+          // One sample; Docker fills precpu_stats from ~1 s earlier, so CPU % works.
+          const s = (await (await this.call("GET", `/containers/${c.Id}/stats?stream=false`)).json()) as Parameters<typeof containerCpuPercent>[0] & {
+            memory_stats?: { usage?: number; limit?: number; stats?: { inactive_file?: number } };
+          };
+          row.cpuPercent = containerCpuPercent(s);
+          const m = s.memory_stats;
+          if (m?.usage !== undefined) row.memBytes = m.usage - (m.stats?.inactive_file ?? 0);
+          if (m?.limit) row.memLimitBytes = m.limit;
+        } catch {
+          /* stats unavailable: keep the row */
+        }
+        return row;
+      }),
+    );
   }
 
   private async containerState(name: string): Promise<GameState> {

@@ -75,6 +75,26 @@ export interface Updates {
   lastRun?: string;
   games: UpdateInfo[];
 }
+export interface SystemStats {
+  at: string;
+  host: {
+    hostname: string;
+    cpuModel: string;
+    cores: number;
+    cpuPercent?: number;
+    load: [number, number, number];
+    memory: { totalBytes: number; availableBytes: number; usedPercent: number };
+    disk?: { path: string; totalBytes: number; freeBytes: number; usedPercent: number };
+    uptimeSec: number;
+    temps: { label: string; celsius: number }[];
+    gpu?: { curMhz: number; maxMhz: number };
+  };
+  containers?: { name: string; state: string; status: string; cpuPercent?: number; memBytes?: number; memLimitBytes?: number }[];
+  network?: { name: string; rxBytes: number; txBytes: number }[];
+  casting?: { tvs: number; streaming: number; pages: number };
+  box: { version: string; coreUptimeSec: number; games: number; openRooms: number };
+  reboot: { available: boolean; pending: boolean };
+}
 export interface Display {
   id: string;
   driver: string;
@@ -166,6 +186,8 @@ export const api = {
   access: () => call<Access>("GET", "/access"),
   saveAccess: (a: Partial<Access>) => call<Access>("PUT", "/access", a),
   games: () => call<Game[]>("GET", "/games"),
+  systemStats: () => call<SystemStats>("GET", "/system/stats"),
+  reboot: () => call<{ ok: boolean; message?: string }>("POST", "/system/reboot", { confirm: "reboot" }),
   updates: () => call<Updates>("GET", "/games/updates"),
   checkUpdates: () => call<Updates>("POST", "/games/updates/check"),
   updateGame: (id: string) => call<{ game: Game; from: string; warnings: string[] }>("POST", `/games/${encodeURIComponent(id)}/update`),

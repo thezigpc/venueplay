@@ -6,6 +6,7 @@ import { AppsPage, GamesPage } from "./pages/Games";
 import { HomePage } from "./pages/Home";
 import { InternetPage } from "./pages/Internet";
 import { RoomsPage } from "./pages/Rooms";
+import { SystemPage } from "./pages/System";
 import { VenuePage } from "./pages/Venue";
 
 const TABS = [
@@ -17,6 +18,7 @@ const TABS = [
   { id: "venue", label: "Venue" },
   { id: "access", label: "Access" },
   { id: "internet", label: "Internet" },
+  { id: "system", label: "System" },
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
 
@@ -64,6 +66,7 @@ export function App() {
         {tab === "apps" && <AppsPage />}
         {tab === "displays" && <DisplaysPage />}
         {tab === "internet" && <InternetPage />}
+        {tab === "system" && <SystemPage />}
         {tab === "venue" && <VenuePage />}
         {tab === "access" && <AccessPage />}
       </main>

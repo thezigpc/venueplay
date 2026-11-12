@@ -181,3 +181,12 @@ test("local screens (scaffolding): connected outputs from sysfs, nothing shown y
   assert.equal((await drv.show(screen, { kind: "url", url: "http://x" })).ok, false);
   assert.equal((await drv.health(screen)).online, true);
 });
+
+test("system: host network interfaces from /proc/net/dev (bridges and veths left out)", async () => {
+  const { hostInterfaces } = await import("./app.js");
+  const dev = "Inter-|   Receive\n face |bytes    packets\n    lo: 100 1 0 0 0 0 0 0 100 1 0 0 0 0 0 0\n  eno1: 5000 10 0 0 0 0 0 0 7000 9 0 0 0 0 0 0\ntailscale0: 300 3 0 0 0 0 0 0 400 4 0 0 0 0 0 0\ndocker0: 1 1 0 0 0 0 0 0 1 1 0 0 0 0 0 0\nveth12ab: 1 1 0 0 0 0 0 0 1 1 0 0 0 0 0 0\n";
+  assert.deepEqual(hostInterfaces(dev), [
+    { name: "eno1", rxBytes: 5000, txBytes: 7000 },
+    { name: "tailscale0", rxBytes: 300, txBytes: 400 },
+  ]);
+});
