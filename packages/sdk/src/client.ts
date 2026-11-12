@@ -3,7 +3,7 @@
 
 import { PATHS, type VenueContext } from "./protocol.js";
 import { themeCssVars } from "./theme.js";
-import { basePath, bgUrl } from "./base.js";
+import { basePath, bgUrl, joinUrl as joinAt } from "./base.js";
 import { activeAnnouncement, activeCountdown, formatCountdown, GAMES_LINK_CSS, gamesLinkHtml, type GamesLinkOptions } from "./links.js";
 
 let cache: Promise<VenueContext | null> | undefined;
@@ -77,10 +77,9 @@ export function watchVenue(fn: (ctx: VenueContext) => void, opts: number | (Venu
   };
 }
 
-/** Absolute join link for a room, using the game's public origin when known. */
+/** Absolute join link for a room, on the game's public address when known (path prefix included, SDK 0.10.2). */
 export function joinUrl(ctx: VenueContext | null, path: string): string {
-  const base = ctx?.game.publicUrl ?? location.origin;
-  return new URL(path, base).toString();
+  return joinAt(ctx?.game.publicUrl ?? location.origin + basePath(), path);
 }
 
 export type TableState = "connected" | "reconnecting" | "closed";

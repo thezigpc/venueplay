@@ -29,12 +29,19 @@ const escAttr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").
 /**
  * Adds `<meta name="bargames-base" content="/bingo">` and `<base href="/bingo/">` right after
  * `<head>`, so the page knows its prefix and relative asset URLs resolve under it. With no
- * prefix the HTML is returned untouched. Safe to call twice.
+ * prefix it adds only `<base href="/">` (0.10.2), unless the page has its own. Safe to call twice.
  */
 export function injectBasePath(html: string, base: string): string {
   const b = normalizeBasePath(base);
-  if (!b || html.includes(`name="${BASE_META}"`)) return html;
-  const tags = `<meta name="${BASE_META}" content="${escAttr(b)}"><base href="${escAttr(b)}/">`;
+  if (html.includes(`name="${BASE_META}"`)) return html;
+  // At the root, relative assets (Vite base "./") still need <base href="/"> so a deep link
+  // (/room/AB) doesn't ask for /room/assets/…; a page that has its own <base> keeps it.
+  if (!b) return /<base\s/i.test(html) ? html : addToHead(html, '<base href="/">');
+  return addToHead(html, `<meta name="${BASE_META}" content="${escAttr(b)}"><base href="${escAttr(b)}/">`);
+}
+
+/** Inserts tags right after <head> (first in it, so an injected <base> wins over the page's own). */
+function addToHead(html: string, tags: string): string {
   const m = /<head[^>]*>/i.exec(html);
   return m ? html.slice(0, m.index + m[0].length) + tags + html.slice(m.index + m[0].length) : tags + html;
 }

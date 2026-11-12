@@ -499,7 +499,9 @@ test("0.10.0: base path helpers, manifest routing, publicUrl keeps the prefix", 
   assert.equal(basePathFromEnv({}), "");
 
   const html = "<!doctype html><html><head><title>x</title></head></html>";
-  assert.equal(injectBasePath(html, ""), html);
+  assert.equal(injectBasePath(html, ""), html.replace("<head>", '<head><base href="/">'), "root: <base href=/> so deep links find relative assets");
+  assert.equal(injectBasePath('<html><head><base href="/x/"></head></html>', ""), '<html><head><base href="/x/"></head></html>', "the page's own <base> stays");
+  assert.equal(injectBasePath(injectBasePath(html, ""), ""), injectBasePath(html, ""));
   const once = injectBasePath(html, "/bingo");
   assert.ok(once.includes('<head><meta name="bargames-base" content="/bingo"><base href="/bingo/">'));
   assert.equal(injectBasePath(once, "/bingo"), once);
@@ -515,6 +517,8 @@ test("0.10.0: base path helpers, manifest routing, publicUrl keeps the prefix", 
   assert.equal(bgUrl("/api/rooms", fakeDoc()), "/api/rooms");
   assert.equal(socketIoPath(fakeDoc("/bingo")), "/bingo/socket.io");
   assert.equal(basePath(), ""); // no document in Node
+  const { joinUrl: clientJoin } = await import("./client.js");
+  assert.equal(clientJoin({ game: { publicUrl: "https://v.example.com/bingo" } } as never, "/join/AB"), "https://v.example.com/bingo/join/AB");
 
   const m = validateManifest({ ...base, routing: { basePath: true } });
   assert.ok(m.ok && m.manifest.routing?.basePath === true);

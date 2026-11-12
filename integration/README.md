@@ -44,6 +44,10 @@ proxy (`BASE_PATH=/bingo`). Unset, the game runs at the root exactly as before.
   `joinUrl(base, path)` does the same for your own links.
 - **Declare it** in bargames.json: `"routing": { "basePath": true }`. Without it the box keeps
   the game on its subdomain.
+- **0.10.2:** the client `joinUrl(ctx, path)` keeps the prefix (it dropped it in 0.10.0/0.10.1;
+  update if you build join links or QRs with it). `injectBasePath` at the root now adds
+  `<base href="/">` (unless the page has its own), so a Vite `base: "./"` build works on deep
+  links like `/room/ABCD` there too.
 - **0.10.1:** the mock box's staff sign-in also answers at `/<base>/__bargames/staff`, and a
   `next` without the prefix gets it, like the box (`next=/admin` → `/my-game/admin`).
 - **Git Bash on Windows** rewrites `/my-game` into `C:/Program Files/Git/my-game`: run with
