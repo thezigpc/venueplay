@@ -44,6 +44,10 @@ proxy (`BASE_PATH=/bingo`). Unset, the game runs at the root exactly as before.
   `joinUrl(base, path)` does the same for your own links.
 - **Declare it** in bargames.json: `"routing": { "basePath": true }`. Without it the box keeps
   the game on its subdomain.
+- **0.10.1:** the mock box's staff sign-in also answers at `/<base>/__bargames/staff`, and a
+  `next` without the prefix gets it, like the box (`next=/admin` → `/my-game/admin`).
+- **Git Bash on Windows** rewrites `/my-game` into `C:/Program Files/Git/my-game`: run with
+  `MSYS_NO_PATHCONV=1` (e.g. `MSYS_NO_PATHCONV=1 npx bargames mock-box --base /my-game`).
 - **Test it:** `npx bargames mock-box --base /my-game`, start the game with the
   `BG_BASE_PATH` it prints, and click through `http://localhost:7080/my-game/`: every page,
   join link, QR, socket and the admin. The mock gateway strips the prefix, redirects `/` to

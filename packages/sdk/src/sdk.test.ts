@@ -547,6 +547,16 @@ test("0.10.0: the mock box serves a game under a prefix (strip, redirect, Locati
     assert.equal(r.status, 404);
     r = await fetch(`${gw}/pool/old`, { redirect: "manual" });
     assert.equal(r.headers.get("location"), "/pool/new");
+    const log = console.log;
+    console.log = () => undefined;
+    try {
+      r = await fetch(`${gw}/pool/__bargames/staff?next=/admin`, { redirect: "manual" });
+      assert.equal(r.headers.get("location"), "/pool/admin");
+      r = await fetch(`${gw}/__bargames/staff?next=/pool/admin`, { redirect: "manual" });
+      assert.equal(r.headers.get("location"), "/pool/admin");
+    } finally {
+      console.log = log;
+    }
 
     const bg = createBarGames({ gameId: "pool", coreUrl: `http://127.0.0.1:${(box.core.address() as AddressInfo).port}`, token: DEV_TOKEN });
     assert.equal(await bg.publicUrl("/join/ABCD"), `${box.publicUrl}/join/ABCD`);

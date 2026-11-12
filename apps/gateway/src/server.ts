@@ -92,7 +92,7 @@ export function createGateway(d: GatewayDeps) {
     const cookie = signToken(d.coreToken, "staff", now + STAFF_TTL_MS, randomBytes(8).toString("base64url"));
     const domain = cfg.domain && cfg.domain !== "localhost" ? `; Domain=${cfg.domain}` : "";
     res.writeHead(303, {
-      location: (route.path ?? "") + safeReturn(url.searchParams.get("next")),
+      location: underPrefix(route.path, safeReturn(url.searchParams.get("next"))),
       "cache-control": "no-store",
       "set-cookie": `${STAFF_COOKIE}=${cookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${STAFF_TTL_MS / 1000}${domain}${header(req, "cf-connecting-ip") ? "; Secure" : ""}`,
     });
@@ -240,6 +240,11 @@ export function stripPrefix(prefix: string, asked: string): { url?: string; redi
   const query = q < 0 ? "" : asked.slice(q);
   if (path === prefix) return { redirect: `${prefix}/${query}` };
   return path.startsWith(`${prefix}/`) ? { url: asked.slice(prefix.length) } : {};
+}
+
+/** A game's own path with its prefix ("/admin" → "/menu/admin"); already prefixed paths stay. */
+function underPrefix(prefix: string | undefined, p: string): string {
+  return !prefix || p === prefix || p.startsWith(`${prefix}/`) ? p : prefix + p;
 }
 
 /** A redirect from a path-routed game to one of its own paths gets the prefix back. */

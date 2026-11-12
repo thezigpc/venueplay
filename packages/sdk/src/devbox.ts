@@ -308,9 +308,12 @@ export function mockBox(o: MockBoxOptions) {
   const gateway = createServer((req, res) => {
     // Pretend staff sign-in: what the box's "Settings" link does (no box login to check here).
     // /__bargames/staff?next=/admin signs you in; ?off=1 signs you out.
-    if (req.url?.split("?")[0] === PATHS.staff) {
-      const q = new URL(req.url, "http://x").searchParams;
-      const next = q.get("next")?.startsWith("/") && !q.get("next")!.startsWith("//") ? q.get("next")! : "/";
+    const staffPath = req.url?.split("?")[0];
+    if (staffPath === PATHS.staff || (base && staffPath === base + PATHS.staff)) {
+      const q = new URL(req.url!, "http://x").searchParams;
+      const asked = q.get("next")?.startsWith("/") && !q.get("next")!.startsWith("//") ? q.get("next")! : "/";
+      // Like the box: a game path without the prefix gets it ("/admin" → "/menu/admin").
+      const next = !base || asked === base || asked.startsWith(base + "/") ? asked : base + asked;
       const off = q.get("off") === "1";
       res.writeHead(303, { location: next, "set-cookie": `${MOCK_STAFF_COOKIE}=${off ? "" : "1"}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${off ? 0 : 43200}` });
       console.log(`${c.ok(off ? "staff signed out" : "staff signed in")} (requests now ${off ? "without" : "with"} ${HEADERS.staff}: 1)`);

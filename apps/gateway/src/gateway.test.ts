@@ -321,6 +321,9 @@ test("path routing (SDK 0.10.0): a game under /<id> on the venue hostname, WebSo
     r = await get("play.example.com", `/bingo/__bargames/staff?t=${encodeURIComponent(t)}&next=/admin`);
     assert.equal(r.status, 303);
     assert.equal(r.headers.location, "/bingo/admin");
+    const t2 = signToken("core-tok", "staff-link", Date.now() + 60_000, "n-path2");
+    r = await get("play.example.com", `/bingo/__bargames/staff?t=${encodeURIComponent(t2)}&next=/bingo/admin`);
+    assert.equal(r.headers.location, "/bingo/admin", "a prefixed next isn't doubled");
 
     // WebSocket upgrade under the prefix reaches the game with the prefix stripped.
     const upgraded = await new Promise<number>((resolve, reject) => {
