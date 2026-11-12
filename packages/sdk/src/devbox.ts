@@ -33,6 +33,8 @@ export function loadManifest(dirOrFile: string): GameManifest | undefined {
 
 /** The mock box's games list page, served by its fake gateway. */
 export const MOCK_GAMES_PATH = "/__bargames/dev/games";
+/** The mock gateway's staff cookie (open PATHS.staff to set it). */
+export const MOCK_STAFF_COOKIE = "bg_staff_mock";
 
 export function mockContext(gameId: string, displayName: string, publicUrl: string, opts: { announcement?: string; app?: boolean; /** @deprecated */ display?: boolean } = {}): VenueContext {
   const app = Boolean(opts.app ?? opts.display);
@@ -217,12 +219,28 @@ export function mockBox(o: MockBoxOptions) {
     h[HEADERS.via] = "1";
     h[HEADERS.clientIp] = req.socket.remoteAddress ?? "";
     h[HEADERS.access] = "local";
+    // Staff sign-in (SDK 0.7.0): the cookie from MOCK_STAFF_PATH becomes the staff header.
+    const cookies = String(req.headers.cookie ?? "").split(";").map((c) => c.trim()).filter(Boolean);
+    if (cookies.includes(`${MOCK_STAFF_COOKIE}=1`)) h[HEADERS.staff] = "1";
+    const rest = cookies.filter((c) => !c.startsWith(`${MOCK_STAFF_COOKIE}=`)).join("; ");
+    if (rest) h.cookie = rest;
+    else delete h.cookie;
     h["x-forwarded-proto"] = "http";
     h["x-forwarded-for"] = req.socket.remoteAddress ?? "";
     h["x-forwarded-host"] = req.headers.host ?? "";
     return h;
   };
   const gateway = createServer((req, res) => {
+    // Pretend staff sign-in: what the box's "Settings" link does (no box login to check here).
+    // /__bargames/staff?next=/admin signs you in; ?off=1 signs you out.
+    if (req.url?.split("?")[0] === PATHS.staff) {
+      const q = new URL(req.url, "http://x").searchParams;
+      const next = q.get("next")?.startsWith("/") && !q.get("next")!.startsWith("//") ? q.get("next")! : "/";
+      const off = q.get("off") === "1";
+      res.writeHead(303, { location: next, "set-cookie": `${MOCK_STAFF_COOKIE}=${off ? "" : "1"}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${off ? 0 : 43200}` });
+      console.log(`${c.ok(off ? "staff signed out" : "staff signed in")} (requests now ${off ? "without" : "with"} ${HEADERS.staff}: 1)`);
+      return void res.end();
+    }
     if (req.url?.split("?")[0] === MOCK_GAMES_PATH) return void mockGamesList(o, publicUrl).then((html) => {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(html);

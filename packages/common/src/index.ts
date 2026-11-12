@@ -1,6 +1,6 @@
 // Small Node helpers shared by core, gateway and broker. Not part of the game SDK.
 
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -68,6 +68,27 @@ export function safeEqual(a: string, b: string): boolean {
   const ba = Buffer.from(a);
   const bb = Buffer.from(b);
   return ba.length === bb.length && timingSafeEqual(ba, bb);
+}
+
+/**
+ * Short signed tokens between core and the gateway (they share the gateway token):
+ * "<kind>.<expiry ms>.<nonce>.<hmac>". Used for staff sign-in links and the staff cookie.
+ */
+export function signToken(secret: string, kind: string, expiresAt: number, nonce = ""): string {
+  const body = `${kind}.${expiresAt}.${nonce}`;
+  return `${body}.${createHmac("sha256", `${secret}:${kind}`).update(body).digest("base64url")}`;
+}
+
+/** The token's expiry and nonce when it's ours, of this kind, and not expired. */
+export function verifyToken(secret: string, kind: string, token: string | undefined, now = Date.now()): { expiresAt: number; nonce: string } | undefined {
+  if (!token) return undefined;
+  const parts = token.split(".");
+  if (parts.length !== 4 || parts[0] !== kind) return undefined;
+  const [, exp, nonce, sig] = parts;
+  const want = createHmac("sha256", `${secret}:${kind}`).update(`${kind}.${exp}.${nonce}`).digest("base64url");
+  const expiresAt = Number(exp);
+  if (!safeEqual(sig, want) || !(expiresAt > now)) return undefined;
+  return { expiresAt, nonce };
 }
 
 /** "Bearer xyz" → "xyz" */

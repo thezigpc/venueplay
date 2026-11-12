@@ -174,3 +174,74 @@ test("games list: menus get their own link, not a game card (SDK 0.5.0)", async 
   assert.doesNotMatch(html, /class="game" href="https:\/\/menu/);
   assert.match(html, /class="game" href="https:\/\/pool/, "no kind (older core): a game");
 });
+
+test("staff sign-in: a box-signed link sets the staff cookie; games get the header, never the cookie", async () => {
+  const { signToken, verifyToken } = await import("@bargames/common");
+  // Tokens: right secret and kind only, not expired.
+  const t = signToken("k", "staff-link", Date.now() + 60_000, "n1");
+  assert.equal(verifyToken("k", "staff-link", t)?.nonce, "n1");
+  assert.equal(verifyToken("other", "staff-link", t), undefined);
+  assert.equal(verifyToken("k", "staff", t), undefined, "a link isn't a cookie");
+  assert.equal(verifyToken("k", "staff-link", signToken("k", "staff-link", Date.now() - 1, "n")), undefined, "expired");
+
+  const seen: { staff?: string; cookie?: string }[] = [];
+  const upstream = createServer((req, res) => {
+    seen.push({ staff: req.headers["x-bargames-staff"] as string | undefined, cookie: req.headers.cookie });
+    res.end("ok");
+  });
+  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
+  const target = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  const venue = { name: "Kava", theme: DEFAULT_THEME };
+  const cfg = {
+    boxVersion: "0.1.0",
+    domain: "example.com",
+    venue,
+    routes: [{ host: "menu.example.com", kind: "game", gameId: "menu", target, enabled: true, injectTheme: false }],
+    access: { pinEnabled: true, pin: "4321", whitelist: [], autoVenueIp: true, venueCidrs: [], adminRemote: false },
+    contexts: {},
+    hub: { games: [] },
+    setupRequired: false,
+    adminUrl: "https://admin.example.com",
+  } as unknown as GatewayConfig;
+  const gw = createGateway({ config: () => cfg, detectedCidrs: () => ["203.0.113.10/32"], secret: "core-tok", coreToken: "core-tok", log: createLogger("t", "error") });
+  await new Promise<void>((r) => gw.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(gw.address() as AddressInfo).port}`;
+  const get = (p: string, headers: Record<string, string> = {}) =>
+    new Promise<{ status: number; headers: Record<string, string | string[] | undefined> }>((resolve, reject) => {
+      const req = request(base + p, { headers: { ...headers, host: "menu.example.com", "cf-connecting-ip": "203.0.113.10" } }, (res) => {
+        res.resume();
+        res.on("end", () => resolve({ status: res.statusCode!, headers: res.headers }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  try {
+    // A forged header from the outside never reaches the game.
+    await get("/", { "x-bargames-staff": "1", cookie: "bg_pin=x" });
+    assert.equal(seen.at(-1), undefined, "PIN page: nothing proxied");
+
+    const link = signToken("core-tok", "staff-link", Date.now() + 60_000, "abc");
+    const r = await get(`/__bargames/staff?t=${encodeURIComponent(link)}&next=/admin`);
+    assert.equal(r.status, 303);
+    assert.equal(r.headers.location, "/admin");
+    const setCookie = String(r.headers["set-cookie"]);
+    assert.match(setCookie, /^bg_staff=staff\./);
+    assert.match(setCookie, /Domain=example\.com/);
+    assert.match(setCookie, /HttpOnly/);
+    assert.equal((await get(`/__bargames/staff?t=${encodeURIComponent(link)}&next=/admin`)).status, 403, "one use only");
+    assert.equal((await get(`/__bargames/staff?t=bogus`)).status, 403);
+    assert.equal((await get(`/__bargames/staff?t=${encodeURIComponent(link)}&next=//evil.example`)).status, 403);
+
+    const cookie = setCookie.split(";")[0];
+    seen.length = 0;
+    await get("/admin", { cookie: `${cookie}; other=1` });
+    assert.deepEqual(seen.at(-1), { staff: "1", cookie: "other=1" }, "staff header, cookie stripped, and the PIN is skipped for staff");
+    seen.length = 0;
+    const forged = await get("/admin", { cookie: "bg_staff=staff.9999999999999.x.forged" });
+    assert.equal(forged.status, 401, "a forged cookie isn't staff: the venue PIN is still asked");
+    assert.equal(seen.length, 0);
+  } finally {
+    gw.close();
+    upstream.close();
+  }
+});

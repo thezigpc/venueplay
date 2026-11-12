@@ -1,4 +1,4 @@
-import { bearer, GATEWAY_PROOF_HEADER, safeEqual, type Logger } from "@bargames/common";
+import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, type Logger } from "@bargames/common";
 import {
   checkTheme,
   HEADERS,
@@ -13,11 +13,13 @@ import {
   type CreatedRoom,
   type GameEventInput,
   type GameStatus,
+  adminPath,
   compareVersions,
+  PATHS,
   isApp,
 } from "@bargames/sdk";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { ADMIN_COOKIE, AdminAuth, readCookie } from "./auth.js";
@@ -819,7 +821,7 @@ export function createApp(d: AppDeps) {
    * Puts a game's (or menu's) TV view on TVs. A game without a roomCode creates a venue
    * room first (standard "create_room"). Used by the admin and by TV startup rules.
    */
-  const castGame = async (gameId: string, target: { displayIds?: string[]; group?: string }, opts: { roomCode?: string; title?: string } = {}) => {
+  const castGame = async (gameId: string, target: { displayIds?: string[]; group?: string }, opts: { roomCode?: string; title?: string; firstJoinerHosts?: boolean } = {}) => {
     const game = d.games.get(gameId);
     if (!game) throw new HttpError(404, "no such game");
     const ctx = buildContext(d.state.venue.get(), game);
@@ -844,7 +846,10 @@ export function createApp(d: AppDeps) {
       if (game.manifest.sdk.level < 3 || !game.manifest.commands.includes("create_room")) {
         throw new HttpError(400, `${name} can't create rooms from the box yet. Start a room on a phone and enter its code.`);
       }
-      const r = await gameCommand(game, { command: "create_room", args: { kind: "venue", purpose: "display", title: typeof title === "string" ? title : undefined } });
+      const r = await gameCommand(game, {
+        command: "create_room",
+        args: { kind: "venue", purpose: "display", title: typeof title === "string" ? title : undefined, ...(opts.firstJoinerHosts ? { firstJoinerHosts: true } : {}) },
+      });
       const created = r.result.data as CreatedRoom | undefined;
       if (!r.result.ok || typeof created?.roomCode !== "string" || !created.roomCode) {
         throw new HttpError(502, `${name} didn't create a room: ${r.result.message ?? `HTTP ${r.status}`}`);
@@ -859,6 +864,29 @@ export function createApp(d: AppDeps) {
     d.log.info("cast", "shown", { game: game.id, room: code, displays: Object.keys(results).length, failed: Object.values(results).filter((x) => !x.ok).length });
     return { roomCode: code, created: !roomCode, hostUrl, url, results };
   };
+
+  // ------------------------------------------------------------ staff sign-in to games
+
+  /**
+   * A one-time link that signs this admin in to a game's or app's own admin pages: the
+   * gateway checks it (same secret), sets a 12-hour staff cookie for the venue's domain, and
+   * games on SDK 0.7.0 trust it (bg.isStaff). { gameId, path? } → { url }.
+   */
+  app.get(
+    "/api/staff-link",
+    h(async (req, res) => {
+      const game = d.games.get(String(req.query.gameId ?? ""));
+      if (!game) throw new HttpError(404, "no such game");
+      const raw = typeof req.query.path === "string" ? req.query.path : (adminPath(game.manifest) ?? "/");
+      const next = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
+      const base = buildContext(d.state.venue.get(), game).game.publicUrl!;
+      const t = signToken(d.config.gatewayToken, "staff-link", Date.now() + 2 * 60_000, randomBytes(9).toString("base64url"));
+      const url = new URL(PATHS.staff, base);
+      url.searchParams.set("t", t);
+      url.searchParams.set("next", next);
+      res.json({ url: url.toString(), staffAware: compareVersions(game.manifest.sdk.version, "0.7.0") >= 0 });
+    }),
+  );
 
   // ------------------------------------------------------------ TV startup rules
 
@@ -908,11 +936,18 @@ export function createApp(d: AppDeps) {
   app.post(
     "/api/cast",
     h(async (req, res) => {
-      const { gameId, roomCode, title, displayIds, group } = (req.body ?? {}) as { gameId?: string; roomCode?: string; title?: string; displayIds?: string[]; group?: string };
+      const { gameId, roomCode, title, displayIds, group, firstJoinerHosts } = (req.body ?? {}) as {
+        gameId?: string;
+        roomCode?: string;
+        title?: string;
+        displayIds?: string[];
+        group?: string;
+        firstJoinerHosts?: boolean;
+      };
       const target = Array.isArray(displayIds) && displayIds.length ? { displayIds: displayIds.map(String) } : typeof group === "string" && group ? { group } : undefined;
       if (!d.games.get(String(gameId ?? ""))) throw new HttpError(404, "no such game");
       if (!target) throw new HttpError(400, "pick the TVs (displayIds or group)");
-      res.json(await castGame(String(gameId), target, { roomCode, title }));
+      res.json(await castGame(String(gameId), target, { roomCode, title, firstJoinerHosts: firstJoinerHosts === true }));
     }),
   );
 

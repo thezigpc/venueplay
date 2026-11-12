@@ -158,6 +158,7 @@ function DisplayCard({
           ))}
         </select>
       </label>
+      <ShowOnTv d={d} games={games} reload={reload} />
       <StartupChoice d={d} rule={startup} games={games} run={run} busy={busy} />
       {canPair && <StreamSettingsFields value={settings} onChange={setSettings} />}
       <div className="buttons">
@@ -186,6 +187,62 @@ function DisplayCard({
       </div>
       {(d.capabilities?.remoteKeys?.length ?? 0) > 0 && <Remote d={d} keys={d.capabilities!.remoteKeys!} />}
     </section>
+  );
+}
+
+/**
+ * Put a game or app on this TV now. A game gets a new room, hosted by whoever joins first
+ * from the TV's QR code (games on SDK 0.7.0); an app (the menu) just shows.
+ */
+function ShowOnTv({ d, games, reload }: { d: Display; games: Game[]; reload: () => unknown }) {
+  const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const castable = games.filter((g) => g.enabled && g.manifest.routes.table && (isApp(g.manifest) || g.manifest.commands.includes("create_room")));
+  if (!castable.length) return null;
+  const show = async () => {
+    const g = castable.find((x) => x.id === pick);
+    if (!g) return;
+    setBusy(true);
+    setMsg(isApp(g.manifest) ? `Starting ${g.context.game.displayName}…` : `Creating a ${g.context.game.displayName} room…`);
+    try {
+      const r = await api.cast({ gameId: g.id, displayIds: [d.id], firstJoinerHosts: true });
+      const res = r.results[d.id];
+      setMsg(
+        res && !res.ok
+          ? (res.message ?? "The TV didn't start.")
+          : r.roomCode
+            ? `Room ${r.roomCode} is on the TV. The first person to scan its QR code hosts.`
+            : `${g.context.game.displayName} is on the TV.`,
+      );
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+      void reload();
+    }
+  };
+  return (
+    <div>
+      <label>
+        Show on this TV
+        <span className="inline">
+          <select value={pick} onChange={(e) => setPick(e.target.value)}>
+            <option value="">Pick a game or app…</option>
+            {castable.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.context.game.displayName}
+                {isApp(g.manifest) ? "" : " (new room)"}
+              </option>
+            ))}
+          </select>
+          <button className="primary" type="button" disabled={!pick || busy} onClick={() => void show()}>
+            Show
+          </button>
+        </span>
+      </label>
+      {msg && <p className="muted">{msg}</p>}
+    </div>
   );
 }
 

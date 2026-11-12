@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.6.0";
+export const SDK_VERSION = "0.7.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -183,6 +183,12 @@ export interface CreateRoomArgs {
   purpose?: "display";
   /** Optional title, e.g. "Friday Bingo". */
   title?: string;
+  /**
+   * SDK 0.7.0: staff put the room on a TV with nobody to host it yet. The first player who
+   * joins (scanning the TV's QR code) should become the host. Games without a host role
+   * can ignore it.
+   */
+  firstJoinerHosts?: boolean;
 }
 
 /** `data` of a successful "create_room". */
@@ -297,6 +303,8 @@ export const PATHS = {
   command: "/__bargames/command",
   status: "/__bargames/status",
   pin: "/__bargames/pin",
+  /** Staff sign-in hand-off from the box admin (the gateway handles it; SDK 0.7.0). */
+  staff: "/__bargames/staff",
 } as const;
 
 /** Headers the gateway adds to every proxied request. */
@@ -304,6 +312,8 @@ export const HEADERS = {
   via: "x-bargames-via",
   clientIp: "x-bargames-client-ip",
   access: "x-bargames-access",
+  /** "1": the request comes from staff signed in to the box admin (SDK 0.7.0). */
+  staff: "x-bargames-staff",
 } as const;
 
 /** Why the gateway let a request in. */

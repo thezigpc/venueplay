@@ -46,6 +46,8 @@ export interface GatewayInfo {
   viaGateway: boolean;
   clientIp?: string;
   access?: AccessReason;
+  /** Staff signed in to the box admin (SDK 0.7.0). Always false off a box. */
+  staff: boolean;
 }
 
 export interface BarGames {
@@ -93,6 +95,12 @@ export interface BarGames {
    * Works with Express requests and socket.io's socket.request.
    */
   clientIp(req: IncomingMessage): string;
+  /**
+   * True when the request comes from staff signed in to the venue box's admin (SDK 0.7.0):
+   * the box vouches for them, so the game can skip its own admin password. Use it with the
+   * game kit: adminRouter({ ..., trusted: (req) => bg.isStaff(req) }). Always false off a box.
+   */
+  isStaff(req: IncomingMessage): boolean;
   /** Flush queued events (call on shutdown). */
   flush(): Promise<void>;
 }
@@ -240,6 +248,7 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
       viaGateway,
       clientIp: viaGateway ? first(h[HEADERS.clientIp]) : (first(h["cf-connecting-ip"]) ?? req.socket?.remoteAddress),
       access: viaGateway ? (first(h[HEADERS.access]) as AccessReason | undefined) : undefined,
+      staff: viaGateway && first(h[HEADERS.staff]) === "1",
     };
   }
 
@@ -297,6 +306,7 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
     middleware,
     gateway,
     clientIp: (req) => gateway(req).clientIp ?? "unknown",
+    isStaff: (req) => gateway(req).staff,
     flush: async () => {
       await draining;
     },

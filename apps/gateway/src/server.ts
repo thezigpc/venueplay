@@ -1,13 +1,17 @@
-import { GATEWAY_PROOF_HEADER, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
+import { GATEWAY_PROOF_HEADER, signToken, verifyToken, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
 import { GAMES_LINK_CSS, gamesLinkHtml, HEADERS, PATHS, themeToCss, type VenueContext } from "@bargames/sdk";
 import httpProxy from "http-proxy";
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { checkAccess, type AccessDecision } from "./ipgate.js";
 import { closedPage, hubPage, joinWifiPage, pinPage, simplePage } from "./pages.js";
 
 const PIN_COOKIE = "bg_pin";
+/** Staff signed in to the box admin (set by the /__bargames/staff hand-off). Never passed to games. */
+export const STAFF_COOKIE = "bg_staff";
+/** As long as a box admin login. */
+const STAFF_TTL_MS = 12 * 3600e3;
 
 export interface GatewayDeps {
   config: () => GatewayConfig | undefined;
@@ -67,8 +71,36 @@ export function createGateway(d: GatewayDeps) {
     return decision;
   }
 
+  /** Valid staff cookie (signed by this gateway, not expired). */
+  const isStaff = (req: IncomingMessage) => Boolean(verifyToken(d.coreToken, "staff", readCookie(req.headers.cookie, STAFF_COOKIE)));
+  /** One-time sign-in links already used (nonce → expiry). */
+  const usedLinks = new Map<string, number>();
+
+  /**
+   * GET /__bargames/staff?t=<link>&next=/admin: core signs the link for staff signed in to
+   * the box admin; this sets the staff cookie for the venue's domain and goes on to `next`.
+   */
+  function handleStaff(req: IncomingMessage, res: ServerResponse, cfg: GatewayConfig, url: URL): void {
+    const now = Date.now();
+    for (const [n, exp] of usedLinks) if (exp < now) usedLinks.delete(n);
+    const link = verifyToken(d.coreToken, "staff-link", url.searchParams.get("t") ?? undefined, now);
+    if (!link || !link.nonce || usedLinks.has(link.nonce)) {
+      return send(res, 403, simplePage(cfg.venue, "Link expired", "This sign-in link has expired or was already used. Open it again from the box admin."));
+    }
+    usedLinks.set(link.nonce, link.expiresAt);
+    const cookie = signToken(d.coreToken, "staff", now + STAFF_TTL_MS, randomBytes(8).toString("base64url"));
+    const domain = cfg.domain && cfg.domain !== "localhost" ? `; Domain=${cfg.domain}` : "";
+    res.writeHead(303, {
+      location: safeReturn(url.searchParams.get("next")),
+      "cache-control": "no-store",
+      "set-cookie": `${STAFF_COOKIE}=${cookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${STAFF_TTL_MS / 1000}${domain}${header(req, "cf-connecting-ip") ? "; Secure" : ""}`,
+    });
+    res.end();
+    d.log.info("staff", "staff signed in to a game", { host: req.headers.host });
+  }
+
   function pinOk(req: IncomingMessage, cfg: GatewayConfig, decision: AccessDecision, route: GatewayRoute): boolean {
-    if (!cfg.access.pinEnabled || decision.reason === "local" || route.kind === "admin") return true;
+    if (!cfg.access.pinEnabled || decision.reason === "local" || route.kind === "admin" || isStaff(req)) return true;
     return readCookie(req.headers.cookie, PIN_COOKIE) === pinToken(cfg.access.pin);
   }
 
@@ -76,6 +108,11 @@ export function createGateway(d: GatewayDeps) {
     for (const h of [...Object.values(HEADERS), GATEWAY_PROOF_HEADER]) delete req.headers[h];
     if (route.kind === "admin") req.headers[GATEWAY_PROOF_HEADER] = d.coreToken;
     req.headers[HEADERS.via] = "1";
+    // Staff: the game hears "staff", never the cookie (a game could replay it elsewhere).
+    if (isStaff(req)) req.headers[HEADERS.staff] = "1";
+    const cookies = withoutCookie(req.headers.cookie, STAFF_COOKIE);
+    if (cookies) req.headers.cookie = cookies;
+    else delete req.headers.cookie;
     if (decision.clientIp) req.headers[HEADERS.clientIp] = decision.clientIp;
     if (decision.reason) req.headers[HEADERS.access] = decision.reason;
     req.headers["x-forwarded-proto"] = header(req, "cf-connecting-ip") ? "https" : "http";
@@ -95,6 +132,7 @@ export function createGateway(d: GatewayDeps) {
     if (!decision.allowed) return send(res, 403, joinWifiPage(cfg.venue));
 
     if (url.pathname === PATHS.pin && req.method === "POST") return handlePin(req, res, cfg);
+    if (url.pathname === PATHS.staff && req.method === "GET" && route.kind === "game") return handleStaff(req, res, cfg, url);
     if (!pinOk(req, cfg, decision, route)) {
       if (req.method !== "GET") return send(res, 401, JSON.stringify({ error: "venue PIN required" }), "application/json");
       return send(res, 401, pinPage(cfg.venue, url.pathname + url.search));
@@ -214,6 +252,15 @@ async function readBody(req: IncomingMessage, max: number): Promise<string> {
 }
 
 /** Only same-site relative paths, so the PIN form can't be used as an open redirect. */
+/** The cookie header without one cookie ("" when nothing is left). */
+function withoutCookie(header: string | undefined, name: string): string {
+  return (header ?? "")
+    .split(";")
+    .map((c) => c.trim())
+    .filter((c) => c && c.split("=")[0] !== name)
+    .join("; ");
+}
+
 function safeReturn(to: string | null): string {
   return to && to.startsWith("/") && !to.startsWith("//") ? to : "/";
 }

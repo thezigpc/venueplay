@@ -45,6 +45,8 @@ export interface GameManifest {
     table?: string;
     /** Host / controller view. */
     host?: string;
+    /** The game's own admin (settings) page, linked from the box with staff sign-in (SDK 0.7.0). */
+    admin?: string;
   };
   /** Health endpoint returning 2xx when ready. */
   health: string;
@@ -107,7 +109,7 @@ export function validateManifest(input: unknown): ManifestResult {
   // routes
   const routes = isObj(m.routes) ? m.routes : undefined;
   if (!routes || !isStr(routes.player) || !routes.player.startsWith("/")) errors.push("routes.player: required path starting with /");
-  for (const k of ["table", "host"] as const) {
+  for (const k of ["table", "host", "admin"] as const) {
     if (routes && routes[k] !== undefined && (!isStr(routes[k]) || !(routes[k] as string).startsWith("/"))) {
       errors.push(`routes.${k}: must be a path starting with /`);
     }
@@ -183,6 +185,7 @@ export function validateManifest(input: unknown): ManifestResult {
       player: routes!.player as string,
       table: routes!.table as string | undefined,
       host: routes!.host as string | undefined,
+      admin: routes!.admin as string | undefined,
     },
     health: health as string,
     events: events as string[],
@@ -197,6 +200,9 @@ export function validateManifest(input: unknown): ManifestResult {
   };
   return { ok: true, manifest, warnings };
 }
+
+/** The game's own admin page: routes.admin, or for an app its routes.host (where 0.6.0 apps put it). */
+export const adminPath = (m: Pick<GameManifest, "kind" | "routes">): string | undefined => m.routes.admin ?? (isApp(m) ? m.routes.host : undefined);
 
 /** True for apps (menus, signage…), including SDK 0.5.0's "display". No kind: a game. */
 export const isApp = (m: Pick<GameManifest, "kind">): boolean => m.kind === "app" || m.kind === "display";

@@ -147,7 +147,12 @@ test("server sdk: gateway headers are trusted only on a box", () => {
 
   const onBox = createBarGames({ gameId: "pool", coreUrl: "http://core", token: "t" });
   assert.equal(onBox.clientIp(req(spoof)), "6.6.6.6");
-  assert.deepEqual(onBox.gateway(req(spoof)), { viaGateway: true, clientIp: "6.6.6.6", access: "pin" });
+  assert.deepEqual(onBox.gateway(req(spoof)), { viaGateway: true, clientIp: "6.6.6.6", access: "pin", staff: false });
+  // Staff (SDK 0.7.0): only from the gateway, only on a box.
+  const staff = { ...spoof, "x-bargames-staff": "1" };
+  assert.equal(onBox.isStaff(req(staff)), true);
+  assert.equal(onBox.isStaff(req({ "x-bargames-staff": "1" })), false, "not via the gateway");
+  assert.equal(standalone.isStaff(req(staff)), false, "standalone never trusts it");
 });
 
 test("client sdk: standalone context never restyles the game", async () => {

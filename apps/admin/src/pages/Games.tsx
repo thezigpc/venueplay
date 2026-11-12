@@ -1,4 +1,4 @@
-import { isApp } from "@bargames/sdk";
+import { adminPath, isApp } from "@bargames/sdk";
 import { useState } from "react";
 import { api, type Game, type UpdateInfo } from "../api";
 import { useAction, useLoad } from "../useLoad";
@@ -115,6 +115,37 @@ function UpdateBanner({ game, update, busy, run }: { game: Game; update?: Update
   );
 }
 
+/**
+ * Opens the game's/app's own admin page, signed in as staff (SDK 0.7.0 games skip their
+ * own password; older ones still ask for it).
+ */
+function OpenSettings({ game }: { game: Game }) {
+  const [note, setNote] = useState("");
+  const open = () => {
+    // Open the tab now (inside the tap), or iPad Safari blocks it as a pop-up.
+    const tab = window.open("about:blank", "_blank");
+    api.staffLink(game.id).then(
+      (r) => {
+        if (tab) tab.location.href = r.url;
+        else window.location.href = r.url;
+        setNote(r.staffAware ? "" : `${game.context.game.displayName} doesn't support box sign-in yet, so it may still ask for its own password.`);
+      },
+      (e: Error) => {
+        tab?.close();
+        setNote(e.message);
+      },
+    );
+  };
+  return (
+    <p>
+      <button type="button" onClick={open}>
+        Settings: {game.context.game.displayName} ↗
+      </button>
+      {note && <small className="muted"> {note}</small>}
+    </p>
+  );
+}
+
 function GameCard({ game, busy, run, update }: { game: Game; busy: boolean; run: (fn: () => Promise<unknown>) => void; update?: UpdateInfo }) {
   const slots = new Set(game.manifest.brandable);
   const [name, setName] = useState(game.branding.displayName ?? "");
@@ -143,13 +174,7 @@ function GameCard({ game, busy, run, update }: { game: Game; busy: boolean; run:
         {game.host} · SDK level {game.manifest.sdk.level} · {game.state} · {game.verified ? "verified" : <span className="warn">unverified source</span>}
       </p>
       <UpdateBanner game={game} update={update} busy={busy} run={run} />
-      {game.manifest.routes.host && url && (
-        <p>
-          <a href={new URL(game.manifest.routes.host, url).toString()} target="_blank" rel="noreferrer">
-            Open {game.context.game.displayName}'s own settings ↗
-          </a>
-        </p>
-      )}
+      {adminPath(game.manifest) && <OpenSettings game={game} />}
       {slots.has("displayName") && (
         <label>
           Display name

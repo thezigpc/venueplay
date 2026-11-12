@@ -185,6 +185,14 @@ watchVenue((c) => { link.update(c); news.update(c); }, 30_000);
 - In status, `joinPath` on a room (e.g. `/join/KQ7P`) puts a **Join** button for it on
   the venue's games list (venue and patron rooms only).
 
+**SDK 0.7.0 additions:**
+- `bg.isStaff(req)` (server): true for staff signed in to the box admin (the gateway's
+  `x-bargames-staff: 1`, trusted only on a box). With the game kit:
+  `adminRouter({ ..., trusted: (req) => bg.isStaff(req) })` and `staffSignIn()` on the
+  client. Manifest `routes.admin`: the page the box links to.
+- `CreateRoomArgs.firstJoinerHosts`: the box put the room on a TV with no host; the first
+  player to join becomes the host.
+
 **SDK 0.5.0 additions:**
 - `ctx.venue.location` (`{ latitude, longitude, label? }`), `ctx.venue.timezone` (IANA),
   `ctx.venue.units` (`"imperial" | "metric"`), `ctx.venue.modules` (display modules;

@@ -21,6 +21,31 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.7.0 (staff sign-in, first joiner hosts)
+
+1. **Vendor** `bargames-sdk-0.7.0.tgz` and, for kit games, game kit **0.4.0**
+   (`gh release download v0.4.0 --repo thezigpc/gamekit --pattern "*.tgz" --dir vendor --clobber`).
+2. **Staff sign-in.** Staff signed in to the box admin open your game's settings from the
+   box (Games/Apps tab, "Settings") without your game's password:
+   - `bargames.json`: declare the page as `routes.admin` (e.g. `"/admin"`). Apps that put
+     it in `routes.host` (0.6.0) keep working, but add `routes.admin` too.
+   - Server: `adminRouter({ auth, clientIp, trusted: (req) => bg.isStaff(req) })` (kit), or
+     check `bg.isStaff(req)` yourself. It's true only for requests through the box's
+     gateway from a browser the box signed in; always false standalone.
+   - Client: on the admin page, before the password form, `const token = await
+     staffSignIn(serverUrl)` (kit 0.4.0, `@bargames/gamekit/client`); a token means
+     signed in, so skip the form. `undefined`: show the normal login.
+   - Test it on the mock box: open `/__bargames/staff?next=/admin` on the mock gateway
+     (`?off=1` signs out); requests then carry `x-bargames-staff: 1`.
+3. **First joiner hosts.** Staff can now put a game on one TV from the box's TVs page. The
+   box sends `create_room` with `args.firstJoinerHosts: true`: nobody is the host yet,
+   so **the first player who joins (scanning the TV's QR code) becomes the host**, with the
+   same powers as a phone host who created the room. Without the flag, keep today's
+   behavior (a venue room the box controls). Games without a host role can ignore it.
+4. **Slow casts:** a cast from inside the game now answers within about 6 s (the box says
+   "starting" if TVs are still connecting). If you call it through the kit, you can also
+   give it longer: `call.withTimeout(30_000)("castToTvs", …)`.
+
 ## What's new in SDK 0.6.0 (apps)
 
 Games: nothing to do (vendor 0.6.0 with your next release if you like).
@@ -147,8 +172,8 @@ Nothing else changed; 0.2.0 games keep working on a 0.2.1 box.
 ## What's new in SDK 0.2.0 (for games already on 0.1.0)
 
 1. **Vendor the new tarball** (step 1, "Updating later"):
-   the newest tarball (now `bargames-sdk-0.6.0.tgz`), both `package.json` entries, `npm install`, and set
-   `"sdk": { "version": "0.6.0", … }` in `bargames.json`.
+   the newest tarball (now `bargames-sdk-0.7.0.tgz`), both `package.json` entries, `npm install`, and set
+   `"sdk": { "version": "0.7.0", … }` in `bargames.json`.
 2. **`create_room`** (step 6): the box can start a venue room for the TVs.
 3. **Casting from inside the game** (step 6b, optional): the host's screen can put
    the room on the venue's TVs, with the venue's TV PIN. It's box-only, so nothing
@@ -219,11 +244,11 @@ Work through them in order, and get each level fully working before starting the
 
 ## Step 1: Vendor the SDK
 
-1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.6.0.tgz` to
+1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.7.0.tgz` to
    `<repo>\vendor\` (create the folder).
 2. Add the dependency to **both** the `server` and `client` workspace `package.json`:
    ```json
-   "@bargames/sdk": "file:../vendor/bargames-sdk-0.6.0.tgz"
+   "@bargames/sdk": "file:../vendor/bargames-sdk-0.7.0.tgz"
    ```
 3. Run `npm install` at the repo root and commit the lockfile change along with it.
 4. **Dockerfile:** the `npm ci` layer needs the tarball. Next to the other
@@ -234,7 +259,7 @@ Work through them in order, and get each level fully working before starting the
 5. The CLI is now available as `npx bargames` (try `npx bargames` with no arguments).
 
 **Updating later:** a newer SDK arrives as a new file name, for example
-`bargames-sdk-0.6.0.tgz`. Replace the file, update both `package.json` entries, and run
+`bargames-sdk-0.7.0.tgz`. Replace the file, update both `package.json` entries, and run
 `npm install`. Never overwrite a tarball under the same name: the lockfile's integrity
 hash would then fail `npm ci`.
 
