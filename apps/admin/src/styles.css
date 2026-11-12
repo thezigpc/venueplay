@@ -118,3 +118,4 @@ button.danger { background: var(--danger); color: #1a0505; border: none; }
 
 .announce-live{background:rgba(242,179,61,.12);border-left:4px solid var(--primary,#f2b33d);padding:8px 12px;border-radius:8px;margin-bottom:12px}
 .announce-live p{margin:0 0 4px}
+.update { background: var(--surface-2); border-radius: 8px; padding: 8px 12px; margin: 8px 0; }

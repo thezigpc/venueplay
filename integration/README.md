@@ -11,7 +11,7 @@ Bar Games support. Read this whole file before changing anything.
 | `bargames-sdk-<version>.tgz` | The SDK package to vendor into the game (zero dependencies) |
 | `snippets/bargames.ts` | Server module to copy and adapt |
 | `snippets/useVenue.ts` | React hook for branding |
-| `snippets/VenueExtras.tsx` | React components for the games link and announcements (SDK 0.4.0) |
+| `snippets/VenueExtras.tsx` | React components for the games link and announcements (SDK 0.4.0, hide on shared screens 0.5.0) |
 | `snippets/bargames.example.json` | An example manifest (Bingo) |
 | `snippets/publish-image.yml` | GitHub Actions workflow that publishes the image (step 10) |
 
@@ -20,6 +20,58 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
+
+## What's new in SDK 0.5.0 (for games already on 0.4.0)
+
+Nothing breaks, and nothing here is urgent: a 0.4.0 game keeps working on a 0.5.0 box.
+Pick it up with your next release.
+
+1. **Vendor the new tarball** (step 1, "Updating later"): `bargames-sdk-0.5.0.tgz`,
+   both `package.json` entries, `npm install`, and `"sdk": { "version": "0.5.0", … }`.
+2. **Shared screens hide the announcement on their own.** `tableMode(ctx)` now marks
+   the page (`<html data-bargames-screen="shared">`), and `announcementBanner` hides
+   itself there. A page that becomes a TV some other way (a table that joined a plain
+   room URL with `?display=1`) calls `markSharedScreen()` (it returns an undo function).
+   Your own announcement markup can use `ANNOUNCEMENT_HIDE_CSS` and the class
+   `bargames-announcement`. The `hidden` prop/`remove()` from 0.4.0 still work; you can
+   drop that wiring once `tableMode` or `markSharedScreen` is in place.
+3. **Text on the venue's main color:** `--venue-on-primary` (and
+   `theme.colors.onPrimary`, optional). The box picks dark or light ink for the primary
+   color unless the venue chose one. Use it for anything you draw on `--venue-primary`
+   (the SDK's announcement strip does).
+4. **Wake lock:** `tableMode` already keeps the screen awake. Drop the game's own
+   wake-lock code while `tableMode` is on (keep it standalone if you want it there).
+5. **Venue location, time zone and units:** `ctx.venue.location` (`latitude`,
+   `longitude`, `label`), `ctx.venue.timezone` (IANA), `ctx.venue.units`
+   (`"imperial" | "metric"`). Optional; for anything time- or weather-aware.
+6. **Menus are listed apart:** display modules (menus, signage) arrive in
+   `ctx.venue.modules`, never in `ctx.venue.games`, so "Also playing" doesn't list them.
+   Nothing to do.
+7. **Updates on the box:** the box now checks each game's GitHub repo every 6 hours and
+   shows "Update available" once the new image can be downloaded. Its Update button
+   restarts the game on the new image, and rolls back if it won't start. See step 10.
+
+## Display modules (menus, signage): SDK 0.5.0
+
+A package with `"kind": "display"` in `bargames.json` is a screen module, not a game: no
+rooms, no players, no join codes. The menu module is the first one.
+
+- **Manifest:** `"kind": "display"`, `sdk.level` 1, `routes.player` (the phone page),
+  `routes.table` (the TV view, **required**, no `{code}`), optional `routes.host` (its
+  admin). `sessionKinds` isn't used. Ask for `network.internet: true` if it fetches
+  anything outside the box (weather); game containers have no internet otherwise.
+- **On the box:** listed apart from the games on the venue's games list (a button above
+  them), left out of "Also playing", cast to TVs from the iPad without a room, and
+  selectable under Venue > "Idle TVs show". When a game room's TV goes idle, it shows
+  the module.
+- **TV view:** call `tableMode(ctx)` (pointer, wake lock, shared-screen marker). It runs
+  unattended for hours, so it must survive network blips and pick up changes without a
+  reload. Show the staff announcement yourself (`activeAnnouncement(ctx)`): idle TVs
+  showing a module don't get the box's idle screen.
+- **Phone page:** the landing page, so `gamesLink`/`<BackToGames />` at the bottom and the
+  announcement at the top, as for games.
+- **Checks:** `npx bargames check` checks the phone page and the TV view and skips the
+  room checks; the mock box lists the module apart and casts its TV view without a room.
 
 ## What's new in SDK 0.4.0 (for games already on 0.3.0)
 
@@ -78,8 +130,8 @@ Nothing else changed; 0.2.0 games keep working on a 0.2.1 box.
 ## What's new in SDK 0.2.0 (for games already on 0.1.0)
 
 1. **Vendor the new tarball** (step 1, "Updating later"):
-   the newest tarball (now `bargames-sdk-0.4.0.tgz`), both `package.json` entries, `npm install`, and set
-   `"sdk": { "version": "0.4.0", … }` in `bargames.json`.
+   the newest tarball (now `bargames-sdk-0.5.0.tgz`), both `package.json` entries, `npm install`, and set
+   `"sdk": { "version": "0.5.0", … }` in `bargames.json`.
 2. **`create_room`** (step 6): the box can start a venue room for the TVs.
 3. **Casting from inside the game** (step 6b, optional): the host's screen can put
    the room on the venue's TVs, with the venue's TV PIN. It's box-only, so nothing
@@ -150,11 +202,11 @@ Work through them in order, and get each level fully working before starting the
 
 ## Step 1: Vendor the SDK
 
-1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.4.0.tgz` to
+1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.5.0.tgz` to
    `<repo>\vendor\` (create the folder).
 2. Add the dependency to **both** the `server` and `client` workspace `package.json`:
    ```json
-   "@bargames/sdk": "file:../vendor/bargames-sdk-0.4.0.tgz"
+   "@bargames/sdk": "file:../vendor/bargames-sdk-0.5.0.tgz"
    ```
 3. Run `npm install` at the repo root and commit the lockfile change along with it.
 4. **Dockerfile:** the `npm ci` layer needs the tarball. Next to the other
@@ -165,7 +217,7 @@ Work through them in order, and get each level fully working before starting the
 5. The CLI is now available as `npx bargames` (try `npx bargames` with no arguments).
 
 **Updating later:** a newer SDK arrives as a new file name, for example
-`bargames-sdk-0.4.0.tgz`. Replace the file, update both `package.json` entries, and run
+`bargames-sdk-0.5.0.tgz`. Replace the file, update both `package.json` entries, and run
 `npm install`. Never overwrite a tarball under the same name: the lockfile's integrity
 hash would then fail `npm ci`.
 
@@ -270,9 +322,12 @@ re-downloads a tag it already has. Any change you want on a box therefore needs 
    - **Where:** every phone page, including pre-join pages (landing, join screen) and
      the game's own admin pages. Never on a TV/shared screen: the box puts
      announcements on idle TVs itself.
-   - **When only the room page knows it's a TV** (a table that joined a plain room URL),
-     pass `hidden` while it's a shared screen: `<VenueAnnouncement ctx={venue}
-     hidden={isSharedScreen} />` (`announcementBanner`: call `remove()`).
+   - **On TV pages it hides itself (SDK 0.5.0):** `tableMode(ctx)` marks the page as a
+     shared screen. When only the room page knows it's a TV (a table that joined a plain
+     room URL), call `markSharedScreen()` there. On 0.4.0, pass `hidden` instead:
+     `<VenueAnnouncement ctx={venue} hidden={isSharedScreen} />` (`announcementBanner`:
+     call `remove()`).
+   - **Colors:** draw it on `--venue-primary` with `--venue-on-primary` text (0.5.0).
    - **Layering:** it sits at `z-index: 2147483646`, above the game's modals and toasts,
      on purpose (it's one line and dismissible). Don't try to layer over it. Check your
      layout still works with it: no full-height `position: fixed` page that hides it.
@@ -476,7 +531,9 @@ socket.on("room:closed", () => tm.setState("closed"));   // "This room has close
 // Layout: padding: var(--bg-safe-y, 0) var(--bg-safe-x, 0);
 ```
 
-Keep the game's own reconnect handling; `tableMode` only shows the state. On a box the
+Keep the game's own reconnect handling; `tableMode` only shows the state. It also keeps
+the screen awake, so drop the game's own wake-lock code while it's on (SDK 0.5.0 also
+marks the page as a shared screen, which hides the announcement strip). On a box the
 TV goes to the venue idle screen shortly after the room closes anyway.
 
 ## Step 8: Container compatibility (level 0)
@@ -621,8 +678,11 @@ accounts or secrets beyond the repo's own `GITHUB_TOKEN`.
 **Releasing a new version later:**
 1. Bump `version` and the `image` tag together in one commit, and push.
 2. Wait for the workflow to go green.
-3. On the box, re-install from the same GitHub URL (it upgrades in place). Then turn
-   the game off and on so it restarts on the new image.
+3. On the box: the Games tab shows "Update available" within 6 hours (or press
+   "Check for updates"). It only offers a version once its image can be downloaded.
+   **Update** installs it and restarts the game on the new image; open rooms close, so
+   do it between sessions. If the new version won't start, the box puts the previous one
+   back and says why. (Re-pasting the GitHub URL does the same.)
 
 Never re-publish an existing tag. The box would keep running its cached copy.
 

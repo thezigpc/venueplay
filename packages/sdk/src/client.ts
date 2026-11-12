@@ -98,7 +98,10 @@ const NOOP: TableModeController = { setState: () => undefined, stop: () => undef
  *  - hides the mouse pointer (nobody can use one on a cast TV);
  *  - keeps the screen awake (Wake Lock, re-taken when the page becomes visible);
  *  - sets --bg-safe-x / --bg-safe-y (5% margins) for your layout;
- *  - gives you a standard "Reconnecting…" strip and "Room closed" screen via setState().
+ *  - gives you a standard "Reconnecting…" strip and "Room closed" screen via setState();
+ *  - marks the page as a shared screen (SDK 0.5.0+), so the announcement banner and other
+ *    personal-device extras hide themselves (see markSharedScreen).
+ * It does NOT need your own wake-lock code alongside it; drop yours while it's on.
  * Off a box it does nothing and setState is a no-op (rule 1), unless always: true.
  */
 export function tableMode(ctx: VenueContext | null | undefined, opts: { always?: boolean; doc?: Document } = {}): TableModeController {
@@ -114,6 +117,7 @@ export function tableMode(ctx: VenueContext | null | undefined, opts: { always?:
     "#bargames-table-banner[data-state=closed]{inset:0;display:flex;align-items:center;justify-content:center;font-size:6vh;background:var(--venue-bg,#101528)}",
   ].join("\n");
   doc.head.appendChild(style);
+  const unmark = markSharedScreen(true, doc);
   const banner = doc.createElement("div");
   banner.id = "bargames-table-banner";
   banner.hidden = true;
@@ -138,10 +142,38 @@ export function tableMode(ctx: VenueContext | null | undefined, opts: { always?:
     stop() {
       doc.removeEventListener("visibilitychange", wake);
       void lock?.release().catch(() => undefined);
+      unmark();
       style.remove();
       banner.remove();
     },
   };
+}
+
+/** The attribute on <html> that marks a shared screen (a TV, a table display). */
+export const SHARED_SCREEN_ATTR = "data-bargames-screen";
+
+/**
+ * Marks (or unmarks) this page as a shared screen: a TV or table display that nobody holds.
+ * tableMode() does this for you; call it yourself when a page becomes a shared screen some
+ * other way (e.g. a table that opened a plain room URL with ?display=1). The SDK's
+ * announcement banner and the kit's VenueAnnouncement hide on shared screens (the box puts
+ * announcements on idle TVs itself). Returns a function that undoes it.
+ */
+export function markSharedScreen(on = true, doc: Document = document): () => void {
+  const root = doc.documentElement;
+  if (!root) return () => undefined;
+  const before = root.getAttribute(SHARED_SCREEN_ATTR);
+  if (on) root.setAttribute(SHARED_SCREEN_ATTR, "shared");
+  else root.removeAttribute(SHARED_SCREEN_ATTR);
+  return () => {
+    if (before === null) root.removeAttribute(SHARED_SCREEN_ATTR);
+    else root.setAttribute(SHARED_SCREEN_ATTR, before);
+  };
+}
+
+/** True while the page is marked as a shared screen. */
+export function isSharedScreen(doc: Document = document): boolean {
+  return doc.documentElement?.getAttribute(SHARED_SCREEN_ATTR) === "shared";
 }
 
 export interface GamesLinkController {
@@ -234,8 +266,8 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
       style.dataset.bargames = "announcement";
       style.textContent =
         "#bargames-announcement{position:sticky;z-index:2147483646;top:0;margin:0;display:flex;gap:12px;align-items:center;justify-content:center;padding:10px 48px 10px 16px;" +
-        "background:var(--venue-primary,#f2b33d);color:#111;font:600 15px/1.4 var(--venue-font,system-ui,sans-serif);text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.3)}" +
-        "#bargames-announcement[hidden]{display:none}#bargames-announcement button{all:unset;box-sizing:border-box;position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:50%;color:inherit;font:400 24px/1 system-ui,sans-serif;cursor:pointer}#bargames-announcement button:focus-visible{outline:2px solid currentColor}";
+        "background:var(--venue-primary,#f2b33d);color:var(--venue-on-primary,#111);font:600 15px/1.4 var(--venue-font,system-ui,sans-serif);text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.3)}" +
+        "#bargames-announcement[hidden],html[data-bargames-screen=shared] #bargames-announcement{display:none}#bargames-announcement button{all:unset;box-sizing:border-box;position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:50%;color:inherit;font:400 24px/1 system-ui,sans-serif;cursor:pointer}#bargames-announcement button:focus-visible{outline:2px solid currentColor}";
       doc.head.appendChild(style);
       el = doc.createElement("div");
       el.id = "bargames-announcement";
@@ -276,6 +308,6 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
   };
 }
 
-export { activeAnnouncement, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
-export type { Announcement, VenueGameLink } from "./protocol.js";
+export { activeAnnouncement, ANNOUNCEMENT_HIDE_CSS, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
+export type { Announcement, VenueGameLink, VenueLocation } from "./protocol.js";
 export type { VenueContext } from "./protocol.js";

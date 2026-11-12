@@ -218,15 +218,17 @@ test("server sdk: publicUrl follows the box's address, undefined standalone", as
 });
 
 test("client sdk: tableMode is inert standalone, hides the pointer and shows banners on a box", async () => {
-  const { tableMode } = await import("./client.js");
+  const { tableMode, isSharedScreen } = await import("./client.js");
   const { standaloneContext } = await import("./context.js");
   const added: { id?: string; hidden?: boolean; textContent?: string; dataset: Record<string, string>; remove(): void }[] = [];
   const el = () => {
     const e = { hidden: false, textContent: "", dataset: {} as Record<string, string>, remove: () => void added.splice(added.indexOf(e), 1) } as (typeof added)[number];
     return e;
   };
+  const attrs = new Map<string, string>();
   const doc = {
     visibilityState: "hidden",
+    documentElement: { getAttribute: (k: string) => attrs.get(k) ?? null, setAttribute: (k: string, v: string) => attrs.set(k, v), removeAttribute: (k: string) => attrs.delete(k) },
     createElement: el,
     head: { appendChild: (e: (typeof added)[number]) => added.push(e) },
     body: { appendChild: (e: (typeof added)[number]) => added.push(e) },
@@ -237,7 +239,9 @@ test("client sdk: tableMode is inert standalone, hides the pointer and shows ban
   tableMode(ctx, { doc }).setState("closed");
   assert.equal(added.length, 0, "standalone: nothing added");
 
+  assert.equal(isSharedScreen(doc), false, "standalone: not marked");
   const tm = tableMode({ ...ctx, standalone: false }, { doc });
+  assert.equal(isSharedScreen(doc), true, "on a box the TV page is marked shared");
   assert.equal(added.length, 2);
   assert.match(String(added[0].textContent), /cursor:none/);
   tm.setState("reconnecting");
@@ -246,6 +250,7 @@ test("client sdk: tableMode is inert standalone, hides the pointer and shows ban
   assert.equal(added[1].hidden, true);
   tm.stop();
   assert.equal(added.length, 0, "stop removes everything");
+  assert.equal(isSharedScreen(doc), false, "stop unmarks the page");
 });
 
 test("manifest: roomFromTableUrl reverses tableUrl", () => {
@@ -368,4 +373,47 @@ test("mock box: venue context carries the games list, a second game and the anno
   assert.deepEqual(ctx.venue.games?.map((g) => g.id), ["pool", "other-game"]);
   assert.equal(ctx.venue.announcement?.text, "Hi");
   assert.equal(mockContext("pool", "P", "http://localhost:7080").venue.announcement, undefined);
+});
+
+// ---------------------------------------------------------------- 0.5.0: display modules, venue location, on-primary
+
+test("manifest: display modules need a TV view, have no rooms, default to kind game", () => {
+  const g = validateManifest(base);
+  assert.ok(g.ok && g.manifest.kind === "game");
+  const d = validateManifest({ ...base, kind: "display", sdk: { version: "0.5.0", level: 1 }, routes: { player: "/", table: "/tv" }, events: [] });
+  assert.ok(d.ok, JSON.stringify(d));
+  if (d.ok) {
+    assert.equal(d.manifest.kind, "display");
+    assert.deepEqual(d.manifest.sessionKinds, []);
+  }
+  const noTv = validateManifest({ ...base, kind: "display", routes: { player: "/" } });
+  assert.ok(!noTv.ok && noTv.errors.some((e) => e.startsWith("routes.table")));
+  const code = validateManifest({ ...base, kind: "display", routes: { player: "/", table: "/tv/{code}" } });
+  assert.ok(!code.ok && code.errors.some((e) => e.includes("{code}")));
+  const bad = validateManifest({ ...base, kind: "kiosk" });
+  assert.ok(!bad.ok && bad.errors.some((e) => e.startsWith("kind")));
+});
+
+test("theme: --venue-on-primary picks a readable ink unless the venue set one", async () => {
+  const { onPrimary, themeCssVars } = await import("./theme.js");
+  assert.equal(onPrimary({ primary: "#f2b33d" }), "#111111");
+  assert.equal(onPrimary({ primary: "#1a237e" }), "#ffffff");
+  assert.equal(onPrimary({ primary: "#1a237e", onPrimary: "#ffeb3b" }), "#ffeb3b");
+  assert.equal(themeCssVars(DEFAULT_THEME)["--venue-on-primary"], "#111111");
+  const t = { ...DEFAULT_THEME, colors: { ...DEFAULT_THEME.colors, onPrimary: "#f2b33d" } };
+  assert.ok(checkTheme(t).some((p) => p.startsWith("onPrimary on primary")), "unreadable onPrimary is flagged");
+  assert.deepEqual(checkTheme(DEFAULT_THEME), [], "no onPrimary: nothing to check");
+});
+
+test("devbox: mock context carries location, time zone, units; display modules list under modules", async () => {
+  const { mockContext } = await import("./devbox.js");
+  const { otherGames } = await import("./links.js");
+  const g = mockContext("menu", "Menu", "http://localhost:7080");
+  assert.equal(g.venue.timezone, "America/New_York");
+  assert.equal(g.venue.units, "imperial");
+  assert.equal(typeof g.venue.location?.latitude, "number");
+  const d = mockContext("menu", "Menu", "http://localhost:7080", { display: true });
+  assert.deepEqual(d.venue.modules?.map((m) => m.id), ["menu"]);
+  assert.ok(!d.venue.games?.some((x) => x.id === "menu"), "a display module is not in the game lineup");
+  assert.deepEqual(otherGames(d).map((x) => x.id), ["other-game"]);
 });

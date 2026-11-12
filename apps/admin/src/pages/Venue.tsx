@@ -1,12 +1,34 @@
-import { checkTheme, type ThemeColors } from "@bargames/sdk";
+import { checkTheme, isDisplayModule, onPrimary, type ThemeColors } from "@bargames/sdk";
 import { useEffect, useState } from "react";
 import { api, type Venue } from "../api";
+
+const BASE_COLORS = ["background", "surface", "text", "primary", "accent"] as const;
+
+interface Place {
+  name: string;
+  admin1?: string;
+  country_code?: string;
+  latitude: number;
+  longitude: number;
+  timezone?: string;
+}
+
+/** Look a place up by name (Open-Meteo's free geocoder, from this browser; nothing is stored there). */
+async function findPlaces(q: string): Promise<Place[]> {
+  const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?count=5&language=en&format=json&name=${encodeURIComponent(q)}`);
+  if (!r.ok) throw new Error(`lookup failed (HTTP ${r.status})`);
+  return ((await r.json()) as { results?: Place[] }).results ?? [];
+}
 import { useAction, useLoad } from "../useLoad";
 
 const PATTERNS = ["{game}.{domain}", "{game}-{venue}.{domain}", "{game}.internal.{domain}", "{game}.{venue}.{domain}"];
 
 export function VenuePage() {
   const view = useLoad(api.venue);
+  const games = useLoad(api.games);
+  const [query, setQuery] = useState("");
+  const [places, setPlaces] = useState<Place[] | undefined>();
+  const [placeError, setPlaceError] = useState("");
   const { busy, run } = useAction(view.reload, view.setError);
   const [v, setV] = useState<Venue | undefined>();
   useEffect(() => setV(view.data?.venue), [view.data]);
@@ -45,13 +67,35 @@ export function VenuePage() {
       <section className="card">
         <h2>Colors</h2>
         <div className="swatches">
-          {(Object.keys(v.theme.colors) as (keyof ThemeColors)[]).map((k) => (
+          {BASE_COLORS.map((k) => (
             <label key={k} className="swatch">
               <input type="color" value={v.theme.colors[k]} onChange={(e) => setColor(k, e.target.value)} />
               {k}
             </label>
           ))}
+          <label className="swatch">
+            <input type="color" value={onPrimary(v.theme.colors)} onChange={(e) => setColor("onPrimary", e.target.value)} />
+            text on primary
+          </label>
         </div>
+        <p className="muted">
+          Text on primary: {v.theme.colors.onPrimary ? "your pick" : "automatic (dark or light, whichever reads better)"}
+          {v.theme.colors.onPrimary && (
+            <>
+              {" "}
+              <button
+                className="ghost"
+                onClick={() => {
+                  const { onPrimary: _drop, ...rest } = v.theme.colors;
+                  setV({ ...v, theme: { ...v.theme, colors: rest as ThemeColors } });
+                }}
+              >
+                Back to automatic
+              </button>
+            </>
+          )}
+        </p>
+        <div style={{ background: v.theme.colors.primary, color: onPrimary(v.theme.colors), padding: "8px 12px", borderRadius: 8, fontWeight: 700 }}>Last call at 1:30</div>
         <div className="preview" style={{ background: v.theme.colors.background, color: v.theme.colors.text }}>
           <div style={{ background: v.theme.colors.surface, padding: 12, borderRadius: 8 }}>
             <b style={{ color: v.theme.colors.primary }}>{v.name}</b> <span style={{ color: v.theme.colors.accent }}>Bingo tonight</span>
@@ -63,6 +107,83 @@ export function VenuePage() {
             {w}
           </p>
         ))}
+      </section>
+
+      <section className="card">
+        <h2>Location and TVs</h2>
+        <p className="muted">Menus use this for the weather and the time. Games get it too.</p>
+        <label>
+          Find a place
+          <span className="inline">
+            <input value={query} placeholder="City or ZIP code" onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.currentTarget.nextElementSibling as HTMLButtonElement | null)?.click()} />
+            <button
+              disabled={!query.trim()}
+              onClick={() => {
+                setPlaceError("");
+                findPlaces(query.trim()).then(setPlaces, (e: Error) => setPlaceError(e.message));
+              }}
+            >
+              Search
+            </button>
+          </span>
+        </label>
+        {placeError && <p className="error">{placeError}</p>}
+        {places && !places.length && <p className="muted">Nothing found.</p>}
+        {places?.map((p) => (
+          <button
+            key={`${p.latitude},${p.longitude}`}
+            className="ghost"
+            style={{ display: "block" }}
+            onClick={() => {
+              const label = [p.name, p.admin1].filter(Boolean).join(", ");
+              setV({ ...v, location: { latitude: p.latitude, longitude: p.longitude, label }, timezone: p.timezone ?? v.timezone });
+              setPlaces(undefined);
+            }}
+          >
+            {[p.name, p.admin1, p.country_code].filter(Boolean).join(", ")}
+          </button>
+        ))}
+        <p className="muted">
+          {v.location ? (
+            <>
+              Venue location: <b>{v.location.label || `${v.location.latitude.toFixed(3)}, ${v.location.longitude.toFixed(3)}`}</b>{" "}
+              <button className="ghost" onClick={() => set("location", null)}>
+                Clear
+              </button>
+            </>
+          ) : (
+            "No location set."
+          )}
+        </p>
+        <label>
+          Time zone
+          <span className="inline">
+            <input value={v.timezone ?? ""} placeholder="America/New_York" onChange={(e) => set("timezone", e.target.value.trim() || null)} />
+            <button onClick={() => set("timezone", Intl.DateTimeFormat().resolvedOptions().timeZone)}>Use this iPad's</button>
+          </span>
+        </label>
+        <label>
+          Units
+          <select value={v.units ?? "imperial"} onChange={(e) => set("units", e.target.value as "imperial" | "metric")}>
+            <option value="imperial">°F, miles</option>
+            <option value="metric">°C, km</option>
+          </select>
+        </label>
+        <label>
+          Idle TVs show
+          <select value={v.idleModule ?? ""} onChange={(e) => set("idleModule", e.target.value || null)}>
+            <option value="">The box's idle screen (games, Wi-Fi, join QR)</option>
+            {(games.data ?? [])
+              .filter((g) => isDisplayModule(g.manifest))
+              .map((g) => (
+                <option key={g.id} value={g.id} disabled={!g.enabled}>
+                  {g.context.game.displayName}
+                  {g.enabled ? "" : " (turned off)"}
+                </option>
+              ))}
+          </select>
+        </label>
+        <p className="muted">A TV goes back to this when its game room closes.</p>
       </section>
 
       <section className="card">

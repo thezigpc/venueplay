@@ -1,5 +1,5 @@
 import { JsonStore, type GatewayAccess } from "@bargames/common";
-import { DEFAULT_THEME, type Announcement, type GameBranding, type GameManifest, type VenueTheme, type WifiInfo } from "@bargames/sdk";
+import { DEFAULT_THEME, type Announcement, type GameBranding, type GameManifest, type VenueLocation, type VenueTheme, type WifiInfo } from "@bargames/sdk";
 import path from "node:path";
 import type { CloudflareSettings } from "./cloudflare/service.js";
 
@@ -26,6 +26,13 @@ export interface VenueSettings {
    */
   publicScheme: "https" | "http";
   publicPort?: number | null;
+  /** Where the venue is (weather on menus). null: not set. SDK 0.5.0. */
+  location?: VenueLocation | null;
+  /** IANA time zone, e.g. "America/New_York". */
+  timezone?: string | null;
+  units?: "imperial" | "metric" | null;
+  /** A display module (menu) idle TVs show instead of the box's idle screen. null: the box's. */
+  idleModule?: string | null;
 }
 
 export type AccessSettings = GatewayAccess;

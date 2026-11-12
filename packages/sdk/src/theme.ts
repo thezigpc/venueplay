@@ -18,6 +18,7 @@ export const CSS_VARS = {
   surface: "--venue-surface",
   text: "--venue-text",
   primary: "--venue-primary",
+  onPrimary: "--venue-on-primary",
   accent: "--venue-accent",
   font: "--venue-font",
   radius: "--venue-radius",
@@ -33,12 +34,20 @@ export function themeCssVars(theme: VenueTheme): Record<string, string> {
     [CSS_VARS.surface]: theme.colors.surface,
     [CSS_VARS.text]: theme.colors.text,
     [CSS_VARS.primary]: theme.colors.primary,
+    [CSS_VARS.onPrimary]: onPrimary(theme.colors),
     [CSS_VARS.accent]: theme.colors.accent,
   };
   if (theme.font) vars[CSS_VARS.font] = theme.font;
   if (theme.radius !== undefined) vars[CSS_VARS.radius] = `${theme.radius}px`;
   if (theme.logoUrl) vars[CSS_VARS.logo] = `url("${theme.logoUrl.replace(/"/g, "%22")}")`;
   return vars;
+}
+
+/** Text color for the primary color: the venue's own, else #111 or #fff, whichever reads better. */
+export function onPrimary(colors: Pick<ThemeColors, "primary" | "onPrimary">): string {
+  if (isHexColor(colors.onPrimary)) return colors.onPrimary;
+  if (!isHexColor(colors.primary)) return "#111111";
+  return contrastRatio("#111111", colors.primary) >= contrastRatio("#ffffff", colors.primary) ? "#111111" : "#ffffff";
 }
 
 /** A stylesheet with the venue variables, for <link> injection into level-0/1 games. */
@@ -85,6 +94,7 @@ export function checkTheme(theme: VenueTheme): string[] {
   const problems: string[] = [];
   const c = theme.colors;
   for (const key of Object.keys(c) as (keyof ThemeColors)[]) {
+    if (key === "onPrimary" && c[key] === undefined) continue;
     if (!isHexColor(c[key])) problems.push(`${key} must be a hex color like #1a2b3c`);
   }
   if (problems.length) return problems;
@@ -94,8 +104,9 @@ export function checkTheme(theme: VenueTheme): string[] {
     ["primary", "background", 3],
     ["accent", "background", 3],
   ];
+  if (c.onPrimary !== undefined) pairs.push(["onPrimary", "primary", 4.5]);
   for (const [fg, bg, min] of pairs) {
-    const ratio = contrastRatio(c[fg], c[bg]);
+    const ratio = contrastRatio(c[fg]!, c[bg]!);
     if (ratio < min) problems.push(`${fg} on ${bg} contrast is ${ratio.toFixed(1)}:1; needs at least ${min}:1`);
   }
   return problems;

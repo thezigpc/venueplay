@@ -162,3 +162,15 @@ test("gateway: routing, gate, PIN, closed games, headers", async () => {
     upstream.close();
   }
 });
+
+test("games list: menus get their own link, not a game card (SDK 0.5.0)", async () => {
+  const { hubPage } = await import("./pages.js");
+  const html = hubPage({ name: "Kava", theme: DEFAULT_THEME }, [
+    { id: "bingo", displayName: "Bingo", url: "https://bingo.example.com", enabled: true, kind: "game" },
+    { id: "menu", displayName: "Menu", url: "https://menu.example.com", enabled: true, kind: "display" },
+    { id: "pool", displayName: "Pool", url: "https://pool.example.com", enabled: true },
+  ]);
+  assert.match(html, /<a class="module" href="https:\/\/menu.example.com">Menu<\/a>/);
+  assert.doesNotMatch(html, /class="game" href="https:\/\/menu/);
+  assert.match(html, /class="game" href="https:\/\/pool/, "no kind (older core): a game");
+});

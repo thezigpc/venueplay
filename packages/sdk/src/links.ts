@@ -24,6 +24,12 @@ export function activeAnnouncement(ctx: VenueContext | null | undefined, now = D
   return a.until && Date.parse(a.until) <= now ? undefined : a;
 }
 
+/**
+ * Hides an announcement element on shared screens (pages marked by tableMode() or
+ * markSharedScreen()). For your own announcement markup: give it class "bargames-announcement".
+ */
+export const ANNOUNCEMENT_HIDE_CSS = "html[data-bargames-screen=shared] .bargames-announcement{display:none!important}";
+
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 export interface GamesLinkOptions {

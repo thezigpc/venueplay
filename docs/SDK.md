@@ -46,6 +46,12 @@ step-by-step guide, and it comes with the packaged SDK and snippets.
 
 Check it with `bargames validate .` (the CLI ships with the SDK).
 
+**Display modules (SDK 0.5.0):** `"kind": "display"` marks a screen module (a menu,
+signage) instead of a game: no rooms, `routes.table` required with no `{code}`,
+`sessionKinds` unused, level 1. The box lists it apart from the games, casts its TV view
+without a room, and can put it on idle TVs. `kind` defaults to `"game"`; boxes older than
+0.5.0 ignore it.
+
 ## 2. What the box gives your container
 
 | Env var | Meaning |
@@ -176,6 +182,19 @@ watchVenue((c) => { link.update(c); news.update(c); }, 30_000);
   the SDK (level 0).
 - In status, `joinPath` on a room (e.g. `/join/KQ7P`) puts a **Join** button for it on
   the venue's games list (venue and patron rooms only).
+
+**SDK 0.5.0 additions:**
+- `ctx.venue.location` (`{ latitude, longitude, label? }`), `ctx.venue.timezone` (IANA),
+  `ctx.venue.units` (`"imperial" | "metric"`), `ctx.venue.modules` (display modules;
+  never in `ctx.venue.games`).
+- `--venue-on-primary` / `theme.colors.onPrimary?`: text on the primary color. Absent,
+  `onPrimary(colors)` picks #111111 or #ffffff by contrast.
+- `markSharedScreen(on?)` / `isSharedScreen()`: mark a page as a TV/shared screen
+  (`<html data-bargames-screen="shared">`). `tableMode` does it for you. The announcement
+  banner hides there; `ANNOUNCEMENT_HIDE_CSS` does the same for your own markup with
+  class `bargames-announcement`.
+- `tableMode` keeps the screen awake; a game needs no wake-lock code of its own while
+  it's on.
 
 **Big-screen (`table`) views:**
 - Design for 1080p, seen from across a room: text 3vh or larger, no hover, and safe margins of about 4–5%.

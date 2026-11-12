@@ -13,6 +13,8 @@ import {
   type CreatedRoom,
   type GameEventInput,
   type GameStatus,
+  compareVersions,
+  isDisplayModule,
 } from "@bargames/sdk";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import { existsSync } from "node:fs";
@@ -23,6 +25,7 @@ import type { EventBus } from "./events.js";
 import { GameRegistry, HttpError } from "./games.js";
 import { certificateWarning, checkPattern, hostFor } from "./hostnames.js";
 import { idleScreenUrl } from "./idleScreen.js";
+import { imageState, UpdateChecker } from "./updates.js";
 import { fetchManifest } from "./manifestSource.js";
 import { RoomCache } from "./roomCache.js";
 import { TvWatch } from "./tvWatch.js";
@@ -146,17 +149,76 @@ export function createApp(d: AppDeps) {
     const r = await doFetch(`${gameTarget(game)}/__bargames/status`, { headers: { authorization: `Bearer ${game.token}` }, signal: AbortSignal.timeout(3000) });
     return r.ok ? ((await r.json()) as GameStatus) : undefined;
   };
+  /** The display module idle TVs show, if the venue picked one and it's on. */
+  const idleModuleOf = (): InstalledGame | undefined => {
+    const id = d.state.venue.get().idleModule;
+    const g = id ? d.games.get(id) : undefined;
+    return g && g.enabled && isDisplayModule(g.manifest) && g.manifest.routes.table ? g : undefined;
+  };
   const idleContent = async () => {
     const venue = d.state.venue.get();
+    const mod = idleModuleOf();
+    if (mod) {
+      const ctx = buildContext(venue, mod);
+      return { kind: "idle" as const, title: ctx.game.displayName, url: new URL(mod.manifest.routes.table!, ctx.game.publicUrl!).toString() };
+    }
     const names = d.games.list().filter((g) => g.enabled).map((g) => buildContext(venue, g).game.displayName);
     return { kind: "idle" as const, title: "Idle", url: await idleScreenUrl({ venue: venueInfo(venue, { announcement: d.state.announcement.get() }), games: names }) };
   };
-  /** Re-render the idle screen on TVs already showing it (after an announcement change). */
-  const refreshIdleTvs = async () => {
+  /**
+   * Re-render the idle screen on TVs already showing it (after an announcement change).
+   * A menu on idle TVs shows announcements itself, so it's only reloaded when `force`d
+   * (the idle choice changed, or the menu went away).
+   */
+  const refreshIdleTvs = async (force = false) => {
+    if (!force && idleModuleOf()) return;
     const list = ((await brokerCall("GET", "/displays").catch(() => [])) as BrokerDisplay[]) ?? [];
     const ids = list.filter((x) => x.content?.kind === "idle").map((x) => x.id);
     if (ids.length) await brokerCall("POST", "/show", { displayIds: ids, content: await idleContent() });
   };
+  /**
+   * A display module was turned off or removed: TVs showing it (cast on purpose or as the
+   * idle screen) go to the idle screen. Call after the change, with the module's address.
+   */
+  const moduleGone = async (origin: string | undefined) => {
+    if (!origin) return;
+    const list = ((await brokerCall("GET", "/displays").catch(() => [])) as BrokerDisplay[]) ?? [];
+    const ids = list.filter((x) => typeof x.content?.url === "string" && x.content.url.startsWith(`${origin}/`)).map((x) => x.id);
+    if (ids.length) await brokerCall("POST", "/show", { displayIds: ids, content: await idleContent() });
+  };
+  const originOf = (g: InstalledGame | undefined) => {
+    try {
+      return g && isDisplayModule(g.manifest) ? new URL(buildContext(d.state.venue.get(), g).game.publicUrl!).origin : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const updates = new UpdateChecker({
+    games: () => d.games.list(),
+    fetchManifest: (ref) => fetchManifest(ref, doFetch),
+    imageState: (image) => imageState(image, doFetch),
+    boxVersion: d.config.boxVersion,
+    log: d.log,
+  });
+  app.locals.updates = updates;
+
+  /**
+   * After an upgrade of a game that's on: start it on the new image. If that fails, put the
+   * previous version back (and running), so a bad release never leaves the venue without it.
+   */
+  const restartUpgraded = async (prev: InstalledGame | undefined, game: InstalledGame) => {
+    if (!prev || !game.enabled) return;
+    try {
+      await d.runtime.ensureRunning(game);
+    } catch (e) {
+      const msg = (e as Error).message;
+      d.log.error("games", "upgrade failed to start, rolling back", { game: game.id, version: game.manifest.version, err: msg });
+      await d.games.install({ manifest: prev.manifest, source: prev.source, verified: prev.verified, devTarget: prev.devTarget });
+      await d.runtime.ensureRunning(prev).catch(() => undefined);
+      throw new HttpError(502, `${game.manifest.name} ${game.manifest.version} didn't start, so it's back on ${prev.manifest.version}: ${msg}`);
+    }
+  };
+
   const roomCache = new RoomCache({
     games: () => d.games.list(),
     status: gameStatusOf,
@@ -338,7 +400,12 @@ export function createApp(d: AppDeps) {
     h(async (req, res) => {
       const cur = d.state.venue.get();
       const b = req.body as Partial<VenueSettings>;
-      const next: VenueSettings = { ...cur, ...pick(b, ["name", "theme", "wifi", "domain", "hostnamePattern", "playLabel", "adminLabel", "slug", "publicScheme", "publicPort"]) };
+      const next: VenueSettings = {
+        ...cur,
+        ...pick(b, ["name", "theme", "wifi", "domain", "hostnamePattern", "playLabel", "adminLabel", "slug", "publicScheme", "publicPort", "location", "timezone", "units", "idleModule"]),
+      };
+      const venueProblem = checkVenueExtras(next, (id) => d.games.get(id));
+      if (venueProblem) throw new HttpError(400, venueProblem);
       const problems = checkPattern(next.hostnamePattern);
       if (problems.length) throw new HttpError(400, problems.join("; "));
       if (!Object.values(next.theme?.colors ?? {}).every(isHexColor)) throw new HttpError(400, "theme colors must be hex");
@@ -348,6 +415,7 @@ export function createApp(d: AppDeps) {
         throw new HttpError(400, (e as Error).message);
       }
       await d.state.venue.set(next);
+      if ((cur.idleModule ?? null) !== (next.idleModule ?? null)) void refreshIdleTvs(true).catch(() => undefined);
       res.json(venueView(next));
     }),
   );
@@ -532,16 +600,19 @@ export function createApp(d: AppDeps) {
       const { url, manifest, devTarget, hostnameAlias } = req.body as { url?: string; manifest?: unknown; devTarget?: string; hostnameAlias?: string };
       let installed;
       let warnings: string[] = [];
+      let prev: InstalledGame | undefined;
       if (url) {
         const fetched = await fetchManifest(url, doFetch).catch((e: Error) => {
           throw new HttpError(400, e.message);
         });
         warnings = fetched.warnings;
+        prev = d.games.get(fetched.manifest.id);
         installed = await d.games.install({ manifest: fetched.manifest, source: { kind: "url", ref: fetched.url }, verified: false });
       } else if (manifest) {
         const r = validateManifest(manifest);
         if (!r.ok) throw new HttpError(400, r.errors.join("; "));
         warnings = r.warnings;
+        prev = d.games.get(r.manifest.id);
         installed = await d.games.install({ manifest: r.manifest, source: { kind: "local", ref: "upload" }, verified: false, devTarget });
       } else throw new HttpError(400, "send { url } or { manifest }");
       // Optional subdomain chosen at install. A clash or bad label keeps the default and says why.
@@ -552,8 +623,39 @@ export function createApp(d: AppDeps) {
           warnings = [...warnings, `Subdomain not set: ${(e as Error).message}`];
         }
       }
+      await restartUpgraded(prev, installed.game);
       d.log.info("games", installed.upgraded ? "upgraded" : "installed", { game: installed.game.id, version: installed.game.manifest.version });
       res.json({ game: await gameView(installed.game), upgraded: installed.upgraded, warnings });
+    }),
+  );
+
+  /** Update checks: what the Games tab shows ("Update available: 1.1.0 → 1.2.0"). */
+  app.get("/api/games/updates", (_req, res) => res.json({ lastRun: updates.lastRun, games: updates.list() }));
+  app.post(
+    "/api/games/updates/check",
+    h(async (_req, res) => {
+      await updates.checkAll();
+      res.json({ lastRun: updates.lastRun, games: updates.list() });
+    }),
+  );
+
+  /** Installs the newer version from where the game came from, and restarts it if it's on. */
+  app.post(
+    "/api/games/:id/update",
+    h(async (req, res) => {
+      const prev = d.games.get(req.params.id);
+      if (!prev) throw new HttpError(404, "no such game");
+      if (prev.source.kind !== "url") throw new HttpError(400, "this game wasn't installed from a URL; install the new version by hand");
+      const fetched = await fetchManifest(prev.source.ref, doFetch).catch((e: Error) => {
+        throw new HttpError(502, e.message);
+      });
+      if (fetched.manifest.id !== prev.id) throw new HttpError(409, `the source now describes "${fetched.manifest.id}", not ${prev.id}`);
+      if (compareVersions(fetched.manifest.version, prev.manifest.version) <= 0) throw new HttpError(409, `already on ${prev.manifest.version}`);
+      const installed = await d.games.install({ manifest: fetched.manifest, source: prev.source, verified: prev.verified });
+      await restartUpgraded(prev, installed.game);
+      void updates.check(installed.game).catch(() => undefined);
+      d.log.info("games", "updated", { game: prev.id, from: prev.manifest.version, to: fetched.manifest.version });
+      res.json({ game: await gameView(installed.game), from: prev.manifest.version, warnings: fetched.warnings });
     }),
   );
 
@@ -564,6 +666,7 @@ export function createApp(d: AppDeps) {
       if (req.body?.enabled === true) await d.runtime.ensureRunning(game);
       if (req.body?.enabled === false) {
         await tvWatch.gameGone(game.id).catch(() => undefined);
+        await moduleGone(originOf(game)).catch(() => undefined);
         await d.runtime.stop(game.id);
       }
       res.json(await gameView(game));
@@ -574,9 +677,12 @@ export function createApp(d: AppDeps) {
     "/api/games/:id",
     h(async (req, res) => {
       const keepData = req.query.keepData !== "false";
+      const origin = originOf(d.games.get(req.params.id));
       await tvWatch.gameGone(req.params.id).catch(() => undefined);
       await d.runtime.remove(req.params.id, { keepData });
-      res.json({ removed: await d.games.remove(req.params.id) });
+      const removed = await d.games.remove(req.params.id);
+      await moduleGone(origin).catch(() => undefined);
+      res.json({ removed });
     }),
   );
 
@@ -609,6 +715,14 @@ export function createApp(d: AppDeps) {
       const target = Array.isArray(displayIds) && displayIds.length ? { displayIds: displayIds.map(String) } : typeof group === "string" && group ? { group } : undefined;
       if (!target) throw new HttpError(400, "pick the TVs (displayIds or group)");
       const publicUrl = ctx.game.publicUrl!;
+
+      // Menus and other display modules: no rooms, their TV view as is.
+      if (isDisplayModule(game.manifest)) {
+        const url = new URL(game.manifest.routes.table, publicUrl).toString();
+        const results = (await brokerCall("POST", "/show", { ...target, content: { kind: "url", url, title: name } })) as Record<string, { ok: boolean; message?: string }>;
+        d.log.info("cast", "shown", { game: game.id, displays: Object.keys(results).length, failed: Object.values(results).filter((x) => !x.ok).length });
+        return void res.json({ url, results });
+      }
 
       let code = typeof roomCode === "string" && roomCode.trim() ? roomCode.trim().toUpperCase() : undefined;
       let hostUrl: string | undefined;
@@ -760,4 +874,30 @@ function pick<T extends object, K extends keyof T>(obj: T | undefined, keys: K[]
 /** Cloudflare failures are the user's to fix (token, permissions, DNS): 400 with the message. */
 function cfError(e: Error): never {
   throw e instanceof HttpError ? e : new HttpError(400, e.message);
+}
+
+/** Venue location, time zone, units and idle module (SDK 0.5.0). Returns a problem, or undefined. */
+export function checkVenueExtras(v: VenueSettings, gameOf: (id: string) => InstalledGame | undefined): string | undefined {
+  const loc = v.location;
+  if (loc != null) {
+    if (typeof loc !== "object") return "location: { latitude, longitude, label? }";
+    const { latitude, longitude, label } = loc;
+    if (typeof latitude !== "number" || !(latitude >= -90 && latitude <= 90)) return "location.latitude: -90 to 90";
+    if (typeof longitude !== "number" || !(longitude >= -180 && longitude <= 180)) return "location.longitude: -180 to 180";
+    if (label !== undefined && (typeof label !== "string" || label.length > 60)) return "location.label: at most 60 characters";
+  }
+  if (v.timezone != null) {
+    if (typeof v.timezone !== "string") return "timezone: an IANA name like America/New_York";
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: v.timezone });
+    } catch {
+      return `timezone: "${v.timezone}" isn't a time zone (try America/New_York)`;
+    }
+  }
+  if (v.units != null && v.units !== "imperial" && v.units !== "metric") return "units: imperial or metric";
+  if (v.idleModule != null && v.idleModule !== "") {
+    const g = gameOf(String(v.idleModule));
+    if (!g || !isDisplayModule(g.manifest)) return "idleModule: pick an installed menu (display module)";
+  }
+  return undefined;
 }

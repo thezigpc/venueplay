@@ -1,10 +1,17 @@
+import { isDisplayModule } from "@bargames/sdk";
 import { useState } from "react";
-import { api, type Game } from "../api";
+import { api, type Game, type UpdateInfo } from "../api";
 import { useAction, useLoad } from "../useLoad";
 
 export function GamesPage() {
   const games = useLoad(api.games);
-  const { busy, run } = useAction(games.reload, games.setError);
+  const updates = useLoad(api.updates);
+  const reloadAll = async () => {
+    await Promise.all([games.reload(), updates.reload()]);
+  };
+  const { busy, run } = useAction(reloadAll, games.setError);
+  const [checking, setChecking] = useState(false);
+  const available = (updates.data?.games ?? []).filter((u) => u.available);
   const [url, setUrl] = useState("");
   const [sub, setSub] = useState("");
   const [notes, setNotes] = useState<string[]>([]);
@@ -35,15 +42,61 @@ export function GamesPage() {
           </p>
         ))}
         {games.error && <p className="error">{games.error}</p>}
+        <div className="inline">
+          <button
+            disabled={checking || busy}
+            onClick={() => {
+              setChecking(true);
+              api
+                .checkUpdates()
+                .then(() => updates.reload())
+                .catch((e: Error) => games.setError(e.message))
+                .finally(() => setChecking(false));
+            }}
+          >
+            {checking ? "Checking…" : "Check for updates"}
+          </button>
+          <span className="muted">
+            {available.length ? `${available.length} update(s) available. ` : ""}
+            {updates.data?.lastRun ? `Last checked ${new Date(updates.data.lastRun).toLocaleString()}.` : "The box checks every 6 hours."}
+          </span>
+        </div>
       </section>
       {(games.data ?? []).map((g) => (
-        <GameCard key={g.id} game={g} busy={busy} run={run} />
+        <GameCard key={g.id} game={g} busy={busy} run={run} update={updates.data?.games.find((u) => u.gameId === g.id)} />
       ))}
     </div>
   );
 }
 
-function GameCard({ game, busy, run }: { game: Game; busy: boolean; run: (fn: () => Promise<unknown>) => void }) {
+function UpdateBanner({ game, update, busy, run }: { game: Game; update?: UpdateInfo; busy: boolean; run: (fn: () => Promise<unknown>) => void }) {
+  const [done, setDone] = useState("");
+  if (done) return <p className="ok">{done}</p>;
+  if (!update || update.installed !== game.manifest.version) return null;
+  if (update.error) return <p className="muted">Update check: {update.error}</p>;
+  if (!update.available) return update.note && update.note !== "up to date" ? <p className="muted">Update: {update.note}</p> : null;
+  const go = () => {
+    const live = game.enabled ? "\n\nIt restarts, so open rooms close (players can start new ones a moment later)." : "";
+    if (!window.confirm(`Update ${game.context.game.displayName} from ${update.installed} to ${update.latest}?${live}`)) return;
+    run(async () => {
+      const r = await api.updateGame(game.id);
+      setDone(`Updated from ${r.from} to ${r.game.manifest.version}.${r.warnings.length ? ` ${r.warnings.join(" ")}` : ""}`);
+    });
+  };
+  return (
+    <div className="inline update">
+      <b>
+        Update available: {update.installed} → {update.latest}
+      </b>
+      <button className="primary" disabled={busy} onClick={go}>
+        Update
+      </button>
+      {update.note && <span className="muted">{update.note}</span>}
+    </div>
+  );
+}
+
+function GameCard({ game, busy, run, update }: { game: Game; busy: boolean; run: (fn: () => Promise<unknown>) => void; update?: UpdateInfo }) {
   const slots = new Set(game.manifest.brandable);
   const [name, setName] = useState(game.branding.displayName ?? "");
   const [tagline, setTagline] = useState(game.branding.tagline ?? "");
@@ -67,8 +120,10 @@ function GameCard({ game, busy, run }: { game: Game; busy: boolean; run: (fn: ()
         <small>{game.manifest.version}</small>
       </h2>
       <p className="muted">
+        {isDisplayModule(game.manifest) ? "Menu / display · " : ""}
         {game.host} · SDK level {game.manifest.sdk.level} · {game.state} · {game.verified ? "verified" : <span className="warn">unverified source</span>}
       </p>
+      <UpdateBanner game={game} update={update} busy={busy} run={run} />
       {slots.has("displayName") && (
         <label>
           Display name

@@ -1,4 +1,4 @@
-import type { BarGamesEvent, GameBranding, GameManifest, VenueContext, VenueTheme, WifiInfo } from "@bargames/sdk";
+import type { BarGamesEvent, GameBranding, GameManifest, VenueContext, VenueLocation, VenueTheme, WifiInfo } from "@bargames/sdk";
 
 export class ApiError extends Error {
   constructor(
@@ -32,6 +32,10 @@ export interface Venue {
   slug: string;
   publicScheme: "https" | "http";
   publicPort?: number | null;
+  location?: VenueLocation | null;
+  timezone?: string | null;
+  units?: "imperial" | "metric" | null;
+  idleModule?: string | null;
 }
 export interface VenueView {
   venue: Venue;
@@ -57,6 +61,19 @@ export interface Game {
   host: string;
   context: VenueContext;
   state: string;
+}
+export interface UpdateInfo {
+  gameId: string;
+  checkedAt: string;
+  installed: string;
+  latest?: string;
+  available: boolean;
+  note?: string;
+  error?: string;
+}
+export interface Updates {
+  lastRun?: string;
+  games: UpdateInfo[];
 }
 export interface Display {
   id: string;
@@ -142,6 +159,9 @@ export const api = {
   access: () => call<Access>("GET", "/access"),
   saveAccess: (a: Partial<Access>) => call<Access>("PUT", "/access", a),
   games: () => call<Game[]>("GET", "/games"),
+  updates: () => call<Updates>("GET", "/games/updates"),
+  checkUpdates: () => call<Updates>("POST", "/games/updates/check"),
+  updateGame: (id: string) => call<{ game: Game; from: string; warnings: string[] }>("POST", `/games/${encodeURIComponent(id)}/update`),
   install: (url: string, hostnameAlias?: string) => call<{ game: Game; upgraded: boolean; warnings: string[] }>("POST", "/games/install", { url, hostnameAlias: hostnameAlias || undefined }),
   patchGame: (id: string, patch: { enabled?: boolean; branding?: GameBranding; hostnameAlias?: string | null }) => call<Game>("PATCH", `/games/${id}`, patch),
   removeGame: (id: string) => call("DELETE", `/games/${id}`),
@@ -162,7 +182,7 @@ export const api = {
   idleTvs: (target: { displayIds?: string[]; group?: string } = {}) => call<Record<string, ShowResult>>("POST", "/tvs/idle", target),
   gameStatus: (id: string) => call<{ rooms: RoomSummary[] }>("GET", `/games/${encodeURIComponent(id)}/status`),
   cast: (body: { gameId: string; roomCode?: string; displayIds?: string[]; group?: string }) =>
-    call<{ roomCode: string; created: boolean; hostUrl?: string; url: string; results: Record<string, ShowResult> }>("POST", "/cast", body),
+    call<{ roomCode?: string; created?: boolean; hostUrl?: string; url: string; results: Record<string, ShowResult> }>("POST", "/cast", body),
   castSettings: () => call<CastSettings>("GET", "/cast-settings"),
   saveCastSettings: (s: CastSettings) => call<CastSettings>("PUT", "/cast-settings", s),
   cloudflare: () => call<CfStatus>("GET", "/cloudflare"),

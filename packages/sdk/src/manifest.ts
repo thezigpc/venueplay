@@ -13,10 +13,16 @@ export interface ContentPack {
   description?: string;
 }
 
+/** "game" (default): rooms and players. "display": a screen module (menus, signage) with no rooms (SDK 0.5.0+). */
+export const MODULE_KINDS = ["game", "display"] as const;
+export type ModuleKind = (typeof MODULE_KINDS)[number];
+
 export interface GameManifest {
   /** Unique slug; also the default hostname label (pool → pool.example.com). */
   id: string;
   name: string;
+  /** What this package is. Boxes older than SDK 0.5.0 ignore it and treat everything as a game. */
+  kind?: ModuleKind;
   /** Semver. */
   version: string;
   description?: string;
@@ -44,7 +50,7 @@ export interface GameManifest {
   commands: string[];
   brandable: BrandableSlot[];
   contentPacks: ContentPack[];
-  /** Session kinds this game supports. */
+  /** Session kinds this game supports (always empty for display modules). */
   sessionKinds: SessionKind[];
   resources: { memory: string; cpus: number };
   /** internet: false keeps the game on an internal-only network. */
@@ -80,6 +86,10 @@ export function validateManifest(input: unknown): ManifestResult {
   else if (!m.image.includes("@sha256:")) warnings.push("image: not pinned by digest; releases should use image@sha256:…");
   if (typeof m.port !== "number" || !Number.isInteger(m.port) || m.port < 1 || m.port > 65535) errors.push("port: integer 1-65535");
 
+  const kind = m.kind === undefined ? "game" : m.kind;
+  if (!(MODULE_KINDS as readonly unknown[]).includes(kind)) errors.push(`kind: ${MODULE_KINDS.join(" or ")}`);
+  const display = kind === "display";
+
   // sdk
   let level: IntegrationLevel = 0;
   if (!isObj(m.sdk)) errors.push("sdk: required object { version, level }");
@@ -97,7 +107,12 @@ export function validateManifest(input: unknown): ManifestResult {
       errors.push(`routes.${k}: must be a path starting with /`);
     }
   }
-  if (routes && routes.table === undefined) warnings.push("routes.table: no big-screen view; this game cannot be cast to TVs");
+  if (routes && routes.table === undefined) {
+    if (display) errors.push("routes.table: display modules need their TV view");
+    else warnings.push("routes.table: no big-screen view; this game cannot be cast to TVs");
+  }
+  if (display && routes && isStr(routes.table) && routes.table.includes("{code}")) errors.push("routes.table: display modules have no rooms, so no {code}");
+  if (display && level >= 2) warnings.push("sdk.level: display modules have no rooms; level 2+ room events and commands won't be used");
 
   const health = m.health === undefined ? "/health" : m.health;
   if (!isStr(health) || !health.startsWith("/")) errors.push("health: path starting with /");
@@ -123,8 +138,9 @@ export function validateManifest(input: unknown): ManifestResult {
     errors.push("contentPacks: array of { id, name, description? }");
   }
 
-  const kinds = m.sessionKinds === undefined ? [...SESSION_KINDS] : m.sessionKinds;
-  if (!strArray(kinds) || kinds.length === 0 || !kinds.every((k) => (SESSION_KINDS as readonly string[]).includes(k))) {
+  const kinds = display ? [] : m.sessionKinds === undefined ? [...SESSION_KINDS] : m.sessionKinds;
+  if (display && m.sessionKinds !== undefined) warnings.push("sessionKinds: ignored for display modules");
+  if (!display && (!strArray(kinds) || kinds.length === 0 || !kinds.every((k) => (SESSION_KINDS as readonly string[]).includes(k)))) {
     errors.push(`sessionKinds: non-empty subset of ${SESSION_KINDS.join(", ")}`);
   }
 
@@ -150,6 +166,7 @@ export function validateManifest(input: unknown): ManifestResult {
   const manifest: GameManifest = {
     id: m.id as string,
     name: m.name as string,
+    kind: kind as ModuleKind,
     version: m.version as string,
     description: m.description as string | undefined,
     author: m.author as string | undefined,
@@ -176,6 +193,9 @@ export function validateManifest(input: unknown): ManifestResult {
   };
   return { ok: true, manifest, warnings };
 }
+
+/** True for display modules (menus, signage). Manifests saved before SDK 0.5.0 have no kind: games. */
+export const isDisplayModule = (m: Pick<GameManifest, "kind">): boolean => m.kind === "display";
 
 /** Fills a table route template with a room code. */
 export function tableUrl(manifest: Pick<GameManifest, "routes">, roomCode: string): string | undefined {

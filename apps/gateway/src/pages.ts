@@ -21,7 +21,8 @@ button,.btn{display:block;width:100%;padding:14px;border:0;border-radius:10px;ba
 .entry{background:var(--venue-surface);border-radius:var(--venue-radius,12px);border-left:6px solid var(--venue-accent);overflow:hidden}.entry .game{border-left:0;background:none}
 .rooms{list-style:none;margin:0;padding:0 16px 12px;text-align:left}.rooms li{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid rgba(127,127,127,.25)}
 .rooms .code{font-weight:700;letter-spacing:.08em}.rooms .who{opacity:.75;flex:1}.rooms a{padding:6px 14px;border-radius:8px;background:var(--venue-primary);color:#111;font-weight:700;text-decoration:none}
-.news{background:var(--venue-primary);color:#111;font-weight:700;border-radius:var(--venue-radius,12px);padding:12px 16px;margin:12px 0}
+.modules{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:12px 0}.module{background:var(--venue-primary);color:var(--venue-on-primary,#111);font-weight:700;text-decoration:none;border-radius:999px;padding:10px 20px}
+.news{background:var(--venue-primary);color:var(--venue-on-primary,#111);font-weight:700;border-radius:var(--venue-radius,12px);padding:12px 16px;margin:12px 0}
 </style></head><body><main>${logo}${body}</main></body></html>`;
 }
 
@@ -68,7 +69,11 @@ function hubRooms(g: HubGame): string {
 }
 
 export function hubPage(venue: VenueInfo | undefined, games: HubGame[]): string {
-  const live = games.filter((g) => g.enabled);
+  const live = games.filter((g) => g.enabled && g.kind !== "display");
+  const modules = games.filter((g) => g.enabled && g.kind === "display");
+  const moduleLinks = modules.length
+    ? `<nav class="modules">${modules.map((m) => `<a class="module" href="${esc(m.url)}">${esc(m.displayName)}</a>`).join("")}</nav>`
+    : "";
   const list = live.length
     ? `<div class="games">${live
         .map((g) => `<div class="entry"><a class="game" href="${esc(g.url)}"><b>${esc(g.displayName)}</b>${g.tagline ? `<span>${esc(g.tagline)}</span>` : ""}</a>${hubRooms(g)}</div>`)
@@ -78,7 +83,7 @@ export function hubPage(venue: VenueInfo | undefined, games: HubGame[]): string 
   return page(
     venue,
     venue?.name ?? "Games",
-    `<h1>${esc(venue?.name ?? "Games")}</h1>${news ? `<div class="news" role="status">${esc(news.text)}</div>` : ""}<p>Pick a game to start a room, or join one that's open.</p>${list}`,
+    `<h1>${esc(venue?.name ?? "Games")}</h1>${news ? `<div class="news" role="status">${esc(news.text)}</div>` : ""}${moduleLinks}<p>Pick a game to start a room, or join one that's open.</p>${list}`,
   );
 }
 

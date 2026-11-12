@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.4.0";
+export const SDK_VERSION = "0.5.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -27,6 +27,8 @@ export interface ThemeColors {
   text: string;
   primary: string;
   accent: string;
+  /** Text on the primary color (SDK 0.5.0+). Absent: pick #111 or #fff by contrast; themeCssVars does. */
+  onPrimary?: string;
 }
 
 export interface VenueTheme {
@@ -56,6 +58,21 @@ export interface VenueInfo {
   games?: VenueGameLink[];
   /** A message from the staff for every game page ("Last call at 1:30"), if one is up. */
   announcement?: Announcement;
+  /** Display modules on the box (menus, signage): not games, listed apart (SDK 0.5.0+). */
+  modules?: VenueGameLink[];
+  /** Where the venue is, if the staff set it (weather, sunset times). SDK 0.5.0+. */
+  location?: VenueLocation;
+  /** The venue's IANA time zone, e.g. "America/New_York". SDK 0.5.0+. */
+  timezone?: string;
+  /** Units the venue prefers. SDK 0.5.0+. */
+  units?: "imperial" | "metric";
+}
+
+export interface VenueLocation {
+  latitude: number;
+  longitude: number;
+  /** "Asheville, NC" */
+  label?: string;
 }
 
 /** One game on the venue's games list. */

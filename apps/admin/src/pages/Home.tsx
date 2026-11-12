@@ -1,3 +1,4 @@
+import { isDisplayModule } from "@bargames/sdk";
 import { useEffect, useState } from "react";
 import { api, type Display, type Game, type RoomSummary } from "../api";
 import { useAction, useLoad } from "../useLoad";
@@ -141,12 +142,13 @@ function CastCard({ games, displays, displaysError, groups }: { games: Game[]; d
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ text: string; hostUrl?: string; pairHint?: boolean } | undefined>();
   const game = games.find((g) => g.id === gameId);
+  const display = Boolean(game && isDisplayModule(game.manifest));
   const canCreate = Boolean(game && game.manifest.sdk.level >= 3 && game.manifest.commands.includes("create_room"));
 
   useEffect(() => {
     setRooms([]);
     setResult(undefined);
-    if (!game) return;
+    if (!game || isDisplayModule(game.manifest)) return;
     setChoice(game.manifest.sdk.level >= 3 && game.manifest.commands.includes("create_room") ? NEW : TYPED);
     api
       .gameStatus(game.id)
@@ -156,20 +158,22 @@ function CastCard({ games, displays, displaysError, groups }: { games: Game[]; d
 
   const castTo = async (target: { group?: string; displayIds?: string[] }) => {
     if (!game) return setResult({ text: "Pick a game first." });
-    const roomCode = choice === NEW ? undefined : choice === TYPED ? typed.trim() : choice;
-    if (choice === TYPED && !roomCode) return setResult({ text: "Enter the room code." });
+    const roomCode = display || choice === NEW ? undefined : choice === TYPED ? typed.trim() : choice;
+    if (!display && choice === TYPED && !roomCode) return setResult({ text: "Enter the room code." });
     setBusy(true);
-    setResult({ text: choice === NEW ? "Creating a room and starting the TVs…" : "Starting the TVs…" });
+    setResult({ text: !display && choice === NEW ? "Creating a room and starting the TVs…" : "Starting the TVs…" });
     try {
       const r = await api.cast({ gameId: game.id, roomCode, ...target });
       const entries = Object.entries(r.results);
       const failed = entries.filter(([, v]) => !v.ok);
       const name = (id: string) => displays.find((d) => d.id === id)?.label || displays.find((d) => d.id === id)?.name || id;
-      const lines = [`${r.created ? "New room" : "Room"} ${r.roomCode} on ${entries.length - failed.length} of ${entries.length} TV(s).`];
+      const what = display ? game.context.game.displayName : `${r.created ? "New room" : "Room"} ${r.roomCode}`;
+      const lines = [`${what} on ${entries.length - failed.length} of ${entries.length} TV(s).`];
       for (const [id, v] of entries) if (!v.ok || v.message) lines.push(`${name(id)}: ${v.message ?? "failed"}`);
       setResult({ text: lines.join("\n"), hostUrl: r.hostUrl, pairHint: failed.some(([, v]) => v.needsCode) });
-      if (r.created) setRooms((x) => [...x, { code: r.roomCode, kind: "venue", players: 0 }]);
-      if (r.created) setChoice(r.roomCode);
+      const created = r.created ? r.roomCode : undefined;
+      if (created) setRooms((x) => [...x, { code: created, kind: "venue", players: 0 }]);
+      if (created) setChoice(created);
     } catch (e) {
       setResult({ text: (e as Error).message });
     } finally {
@@ -181,14 +185,14 @@ function CastCard({ games, displays, displaysError, groups }: { games: Game[]; d
     <section className="card">
       <h2>Put a game on the TVs</h2>
       <select value={gameId} onChange={(e) => setGameId(e.target.value)}>
-        <option value="">Game…</option>
+        <option value="">Game or menu…</option>
         {games.map((g) => (
           <option key={g.id} value={g.id}>
             {g.context.game.displayName}
           </option>
         ))}
       </select>
-      {game && (
+      {game && !display && (
         <select value={choice} onChange={(e) => setChoice(e.target.value)}>
           {canCreate && <option value={NEW}>New room</option>}
           {rooms.map((r) => (
@@ -199,8 +203,8 @@ function CastCard({ games, displays, displaysError, groups }: { games: Game[]; d
           <option value={TYPED}>Enter a room code…</option>
         </select>
       )}
-      {game && choice === TYPED && <input placeholder="Room code" value={typed} onChange={(e) => setTyped(e.target.value)} autoCapitalize="characters" />}
-      {game && !canCreate && <p className="muted">This game can't create rooms from the box yet: start one on a phone, then pick it here.</p>}
+      {game && !display && choice === TYPED && <input placeholder="Room code" value={typed} onChange={(e) => setTyped(e.target.value)} autoCapitalize="characters" />}
+      {game && !display && !canCreate && <p className="muted">This game can't create rooms from the box yet: start one on a phone, then pick it here.</p>}
       <div className="buttons">
         <button className="primary" disabled={busy || !game || !displays.length} onClick={() => void castTo({ displayIds: displays.map((d) => d.id) })}>
           All TVs

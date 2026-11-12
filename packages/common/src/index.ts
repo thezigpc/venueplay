@@ -162,6 +162,8 @@ export interface HubGame {
   iconUrl?: string;
   url: string;
   enabled: boolean;
+  /** "display": a menu or other screen module, listed apart from the games (SDK 0.5.0). */
+  kind?: "game" | "display";
   /** Its open venue/patron rooms (games list "Join" links). Undefined: unknown or not level 2+. */
   rooms?: HubRoom[];
 }

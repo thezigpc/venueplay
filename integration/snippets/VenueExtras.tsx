@@ -8,7 +8,7 @@
 // Games on the game kit: use <BackToGames /> and <VenueAnnouncement /> from
 // "@bargames/gamekit/client" instead; they're the same components.
 
-import { activeAnnouncement, GAMES_LINK_CSS, gamesListUrl, otherGames, type VenueContext } from "@bargames/sdk/client";
+import { activeAnnouncement, ANNOUNCEMENT_HIDE_CSS, GAMES_LINK_CSS, gamesListUrl, otherGames, type VenueContext } from "@bargames/sdk/client";
 import { useEffect, useState } from "react";
 
 /** "← All games" back to the venue's games list, with "Also playing: …" under it. */
@@ -40,9 +40,9 @@ export function BackToGames({ ctx, label = "← All games", alsoPlaying = true }
 const DISMISSED = "bargames.dismissed";
 
 /**
- * The staff's announcement: a sticky strip at the top with a close button. Pass `hidden`
- * when the current screen is a shared/TV screen that only the page knows about (e.g. a
- * table that joined a plain room URL): the box shows announcements on idle TVs itself.
+ * The staff's announcement: a sticky strip at the top with a close button. It hides itself
+ * on shared screens (SDK 0.5.0: pages marked by tableMode() or markSharedScreen()); on
+ * SDK 0.4.0, pass `hidden` there instead. The box shows announcements on idle TVs itself.
  */
 export function VenueAnnouncement({ ctx, hidden = false }: { ctx: VenueContext | null; hidden?: boolean }) {
   const [now, setNow] = useState(Date.now());
@@ -73,6 +73,7 @@ export function VenueAnnouncement({ ctx, hidden = false }: { ctx: VenueContext |
   return (
     <div
       role="status"
+      className="bargames-announcement"
       style={{
         position: "sticky",
         top: 0,
@@ -82,12 +83,13 @@ export function VenueAnnouncement({ ctx, hidden = false }: { ctx: VenueContext |
         justifyContent: "center",
         padding: "10px 48px 10px 16px",
         background: "var(--venue-primary, #f2b33d)",
-        color: "#111",
+        color: "var(--venue-on-primary, #111)",
         font: "600 15px/1.4 var(--venue-font, system-ui, sans-serif)",
         textAlign: "center",
         boxShadow: "0 2px 8px rgba(0,0,0,.3)",
       }}
     >
+      <style>{ANNOUNCEMENT_HIDE_CSS}</style>
       {a.text}
       <button
         type="button"
