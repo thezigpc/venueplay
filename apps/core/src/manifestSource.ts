@@ -27,7 +27,11 @@ export function resolveManifestUrl(input: string): string {
 
 export async function fetchManifest(input: string, doFetch: typeof fetch = fetch): Promise<{ manifest: GameManifest; warnings: string[]; url: string }> {
   const url = resolveManifestUrl(input);
-  const res = await doFetch(url, { signal: AbortSignal.timeout(10_000), redirect: "follow" });
+  // raw.githubusercontent.com caches files ~5 minutes per edge, so a release pushed a
+  // minute ago can still read as the old version. A unique query string gets a fresh copy.
+  const fetchUrl = new URL(url);
+  if (fetchUrl.hostname === "raw.githubusercontent.com") fetchUrl.searchParams.set("bargames", Date.now().toString(36));
+  const res = await doFetch(fetchUrl.toString(), { signal: AbortSignal.timeout(10_000), redirect: "follow" });
   if (!res.ok) throw new Error(`could not fetch ${url}: HTTP ${res.status}`);
   const text = await res.text();
   if (text.length > 256 * 1024) throw new Error("manifest is too large");

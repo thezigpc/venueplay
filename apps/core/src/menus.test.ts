@@ -199,7 +199,7 @@ test("updates: offered only when newer and published; Update restarts it, a bad 
   let served = { ...bingo, image: "ghcr.io/acme/bingo:1.0.0" } as Record<string, unknown>;
   const published = new Set(["ghcr.io/acme/bingo:1.0.0"]);
   const raw = "https://raw.githubusercontent.com/acme/bingo/HEAD/bargames.json";
-  const b = await boot((url) => (url === raw ? reply(served) : undefined));
+  const b = await boot((url) => (url.split("?")[0] === raw ? (assert.match(url, /[?]bargames=/), reply(served)) : undefined));
   const checker = new UpdateChecker({
     games: () => b.games.list(),
     fetchManifest: async () => ({ manifest: { ...(served as never), kind: "game" } }),
@@ -253,7 +253,7 @@ test("bgctl: ops endpoints need the ops token; update waits for a building image
   const raw = "https://raw.githubusercontent.com/acme/bingo/HEAD/bargames.json";
   let published = new Set(["1.0.0"]);
   const b = await boot((url, init) => {
-    if (url === raw) return reply(served);
+    if (url.split("?")[0] === raw) return reply(served);
     // The registry: anonymous token, then the manifest by tag.
     if (url.startsWith("https://ghcr.io/token")) return reply({ token: "anon" });
     if (url.startsWith("https://ghcr.io/v2/acme/bingo/manifests/")) {
@@ -308,7 +308,7 @@ test("bgctl install: waits for the image, installs, and turns the game on", asyn
   const raw = "https://raw.githubusercontent.com/acme/bingo/HEAD/bargames.json";
   let published = false;
   const b = await boot((url, init) => {
-    if (url === raw) return reply(bingo);
+    if (url.split("?")[0] === raw) return reply(bingo);
     if (url.startsWith("https://ghcr.io/token")) return reply({ token: "anon" });
     if (url.startsWith("https://ghcr.io/v2/acme/bingo/manifests/")) {
       if (!new Headers(init?.headers).get("authorization")) return reply({}, 401, { "www-authenticate": 'Bearer realm="https://ghcr.io/token",service="ghcr.io"' });
