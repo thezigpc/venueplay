@@ -16,6 +16,8 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
       coreUrl: string;
       attach: string[];
       publicUrlFor: (g: InstalledGame) => string;
+      /** Path routing (SDK 0.10.0): the game's prefix, or undefined on its own hostname. */
+      basePathFor?: (g: InstalledGame) => string | undefined;
       /** Per-app secret settings from the box admin, injected as env. */
       secretsFor?: (gameId: string) => Record<string, string>;
       log: Logger;
@@ -36,7 +38,7 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
   }
 
   async ensureRunning(game: InstalledGame): Promise<void> {
-    const spec = containerSpec(game, { coreUrl: this.opts.coreUrl, publicUrl: this.opts.publicUrlFor(game), secrets: this.opts.secretsFor?.(game.id) });
+    const spec = containerSpec(game, { coreUrl: this.opts.coreUrl, publicUrl: this.opts.publicUrlFor(game), basePath: this.opts.basePathFor?.(game), secrets: this.opts.secretsFor?.(game.id) });
 
     // 1. Image.
     const imageId = await this.ensureImage(game.manifest.image);

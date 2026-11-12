@@ -245,3 +245,99 @@ test("staff sign-in: a box-signed link sets the staff cookie; games get the head
     upstream.close();
   }
 });
+
+test("path routing (SDK 0.10.0): a game under /<id> on the venue hostname, WebSockets, old subdomain redirects", async () => {
+  const { signToken } = await import("@bargames/common");
+  const { stripPrefix } = await import("./server.js");
+  assert.deepEqual(stripPrefix("/bingo", "/bingo/x?y=1"), { url: "/x?y=1" });
+  assert.deepEqual(stripPrefix("/bingo", "/bingo?y=1"), { redirect: "/bingo/?y=1" });
+  assert.deepEqual(stripPrefix("/bingo", "/bingoextra/x"), {});
+
+  const seen: { url?: string; prefix?: string }[] = [];
+  const upstream = createServer((req, res) => {
+    seen.push({ url: req.url, prefix: req.headers["x-forwarded-prefix"] as string | undefined });
+    if (req.url === "/old") return void res.writeHead(302, { location: "/new" }).end();
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("game");
+  });
+  upstream.on("upgrade", (req, socket) => {
+    seen.push({ url: req.url });
+    socket.end("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+  });
+  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
+  const target = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  const venue = { name: "Kava", theme: DEFAULT_THEME, wifi: { ssid: "KavaGuest" }, playUrl: "https://play.example.com" };
+  const ctx = (id: string) => ({ protocol: 1, venue, game: { id, displayName: id, theme: DEFAULT_THEME, basePath: id === "_hub" ? undefined : `/${id}` }, standalone: false, generatedAt: "" });
+  const cfg: GatewayConfig = {
+    boxVersion: "0.1.0",
+    domain: "example.com",
+    venue,
+    routes: [
+      { host: "play.example.com", kind: "hub", enabled: true, injectTheme: false },
+      { host: "play.example.com", path: "/bingo", kind: "game", gameId: "bingo", target, enabled: true, injectTheme: false },
+      { host: "bingo.example.com", kind: "game", gameId: "bingo", enabled: true, injectTheme: false, redirectTo: "https://play.example.com/bingo" },
+      { host: "admin.example.com", kind: "admin", target, enabled: true, injectTheme: false },
+    ],
+    access: { pinEnabled: false, pin: "", whitelist: [], autoVenueIp: true, venueCidrs: [], adminRemote: false },
+    contexts: { bingo: ctx("bingo"), _hub: ctx("_hub") },
+    hub: { games: [{ id: "bingo", displayName: "Bingo", url: "https://play.example.com/bingo", enabled: true }] },
+    setupRequired: false,
+    adminUrl: "https://admin.example.com",
+  };
+  const gw = createGateway({ config: () => cfg, detectedCidrs: () => [], secret: "s", coreToken: "core-tok", log: createLogger("t", "error") });
+  await new Promise<void>((r) => gw.listen(0, "127.0.0.1", r));
+  const port = (gw.address() as AddressInfo).port;
+  const get = (host: string, p: string, headers: Record<string, string> = {}) =>
+    new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }>((resolve, reject) => {
+      const req = request(`http://127.0.0.1:${port}${p}`, { headers: { ...headers, host } }, (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c)).on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  try {
+    let r = await get("play.example.com", "/bingo/api/rooms?x=1", { "x-forwarded-prefix": "/evil" });
+    assert.equal(r.body, "game");
+    assert.deepEqual(seen.at(-1), { url: "/api/rooms?x=1", prefix: "/bingo" });
+    r = await get("play.example.com", "/bingo?a=1");
+    assert.equal(r.status, 302);
+    assert.equal(r.headers.location, "/bingo/?a=1");
+    r = await get("play.example.com", "/bingo/old");
+    assert.equal(r.headers.location, "/bingo/new", "the game's redirect gets its prefix back");
+    r = await get("play.example.com", "/bingo/__bargames/venue.json");
+    assert.equal((JSON.parse(r.body) as { game: { id: string } }).game.id, "bingo");
+    r = await get("play.example.com", "/");
+    assert.match(r.body, /Bingo/, "the games list stays at the root");
+    const before = seen.length;
+    r = await get("play.example.com", "/bingox/");
+    assert.equal(seen.length, before, "a near-miss doesn't reach the game");
+    r = await get("bingo.example.com", "/join/AB?x=1");
+    assert.equal(r.status, 301);
+    assert.equal(r.headers.location, "https://play.example.com/bingo/join/AB?x=1");
+
+    // Staff sign-in link on a path: lands back on the game's own path.
+    const t = signToken("core-tok", "staff-link", Date.now() + 60_000, "n-path");
+    r = await get("play.example.com", `/bingo/__bargames/staff?t=${encodeURIComponent(t)}&next=/admin`);
+    assert.equal(r.status, 303);
+    assert.equal(r.headers.location, "/bingo/admin");
+
+    // WebSocket upgrade under the prefix reaches the game with the prefix stripped.
+    const upgraded = await new Promise<number>((resolve, reject) => {
+      const req = request(`http://127.0.0.1:${port}/bingo/socket.io/?EIO=4&transport=websocket`, {
+        headers: { host: "play.example.com", connection: "Upgrade", upgrade: "websocket", "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==" },
+      });
+      req.on("upgrade", (res, socket) => {
+        socket.destroy();
+        resolve(res.statusCode!);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(upgraded, 101);
+    assert.equal(seen.at(-1)!.url, "/socket.io/?EIO=4&transport=websocket");
+  } finally {
+    gw.close();
+    upstream.close();
+  }
+});

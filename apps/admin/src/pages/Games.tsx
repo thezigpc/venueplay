@@ -203,6 +203,9 @@ function GameCard({ game, busy, run, update }: { game: Game; busy: boolean; run:
   const [tagline, setTagline] = useState(game.branding.tagline ?? "");
   const [accent, setAccent] = useState(game.branding.accent ?? "");
   const [alias, setAlias] = useState(game.hostnameAlias ?? "");
+  const [ownHost, setOwnHost] = useState(Boolean(game.ownHostname));
+  const pathCapable = Boolean(game.manifest.routing?.basePath);
+  const onPath = Boolean(game.context.game.basePath);
   const label = (alias.trim().toLowerCase() || game.id);
   const current = game.hostnameAlias ?? game.id;
   const previewHost = game.host.startsWith(`${current}.`) || game.host.startsWith(`${current}-`) ? label + game.host.slice(current.length) : game.host;
@@ -246,18 +249,35 @@ function GameCard({ game, busy, run, update }: { game: Game; busy: boolean; run:
         </label>
       )}
       <label>
-        Subdomain
+        {onPath && !ownHost ? "Address name" : "Subdomain"}
         <input placeholder={game.id} value={alias} onChange={(e) => setAlias(e.target.value)} autoCapitalize="none" />
         <small className="muted">
-          {label === current ? `Players use ${game.host}` : `After saving: ${previewHost} (DNS updates within a minute; the old address stops working)`}
+          {onPath && !ownHost
+            ? `Players use ${game.host}/${label}`
+            : label === current
+              ? `Players use ${game.host}`
+              : `After saving: ${previewHost} (DNS updates within a minute; the old address stops working)`}
         </small>
       </label>
+      {pathCapable ? (
+        <label className="check">
+          <input type="checkbox" checked={ownHost} onChange={(e) => setOwnHost(e.target.checked)} />
+          Give it its own hostname
+          <small className="muted">
+            Off (recommended): it lives on the games list's address, at /{label}, with no extra DNS record or tunnel route. On: {label}.… gets its own record.
+          </small>
+        </label>
+      ) : (
+        <p className="muted">
+          <small>This version can't run under a path yet (no "routing" in its bargames.json), so it keeps its own hostname.</small>
+        </p>
+      )}
       <div className="buttons">
         <button
           className="primary"
           disabled={busy}
           onClick={() =>
-            run(() => api.patchGame(game.id, { branding: { displayName: name || undefined, tagline: tagline || undefined, accent: accent || undefined }, hostnameAlias: alias || null }))
+            run(() => api.patchGame(game.id, { branding: { displayName: name || undefined, tagline: tagline || undefined, accent: accent || undefined }, hostnameAlias: alias || null, ...(pathCapable ? { ownHostname: ownHost } : {}) }))
           }
         >
           Save

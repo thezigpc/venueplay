@@ -4,10 +4,14 @@ import { isHexColor } from "@bargames/sdk";
 import { isLabel } from "./hostnames.js";
 import type { InstalledGame } from "./state.js";
 
+/** Names a game can't take: they're box paths on the venue's hostname. */
+export const RESERVED_PATHS = ["admin", "api", "internal", "health", "assets"];
+
 export interface GamePatch {
   enabled?: boolean;
   branding?: GameBranding;
   hostnameAlias?: string | null;
+  ownHostname?: boolean;
 }
 
 export class GameRegistry {
@@ -60,9 +64,11 @@ export class GameRegistry {
     const next: InstalledGame = { ...game, updatedAt: new Date().toISOString() };
     if (patch.enabled !== undefined) next.enabled = Boolean(patch.enabled);
     if (patch.branding) next.branding = sanitizeBranding(game.manifest, patch.branding);
+    if (patch.ownHostname !== undefined) next.ownHostname = patch.ownHostname ? true : undefined;
     if (patch.hostnameAlias !== undefined) {
       const alias = patch.hostnameAlias?.trim().toLowerCase() || undefined;
       if (alias && !isLabel(alias)) throw new HttpError(400, "hostnameAlias must be a single DNS label (a-z, 0-9, -)");
+      if (alias && RESERVED_PATHS.includes(alias)) throw new HttpError(400, `"${alias}" is reserved by the box`);
       const clash = alias && this.list().find((g) => g.id !== id && (g.hostnameAlias ?? g.id) === alias);
       if (clash) throw new HttpError(409, `hostname "${alias}" is used by ${clash.id}`);
       next.hostnameAlias = alias;

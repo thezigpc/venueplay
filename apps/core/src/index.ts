@@ -11,7 +11,7 @@ import { publicUrl } from "./hostnames.js";
 import { DockerRuntime } from "./runtime/docker.js";
 import { NoopRuntime, type GameRuntime } from "./runtime/types.js";
 import { openState } from "./state.js";
-import { allHosts, gameHost } from "./venue.js";
+import { allHosts, gamePath, gameUrl } from "./venue.js";
 
 const log = createLogger("core");
 const state = openState(config.dataDir);
@@ -24,7 +24,8 @@ const runtime: GameRuntime =
     ? new DockerRuntime(config.dockerUrl, {
         coreUrl: config.internalUrl,
         attach: config.attachContainers,
-        publicUrlFor: (g) => publicUrl(state.venue.get(), gameHost(state.venue.get(), g)),
+        publicUrlFor: (g) => gameUrl(state.venue.get(), g),
+        basePathFor: (g) => gamePath(g),
         secretsFor: (id) => state.appSecrets.get()[id] ?? {},
         log,
         tunnel: { image: config.tunnel.image, network: config.tunnel.network },

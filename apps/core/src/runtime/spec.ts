@@ -25,7 +25,7 @@ export interface ContainerSpec {
   body: Record<string, unknown>;
 }
 
-export function containerSpec(game: InstalledGame, opts: { coreUrl: string; publicUrl: string; secrets?: Record<string, string> }): ContainerSpec {
+export function containerSpec(game: InstalledGame, opts: { coreUrl: string; publicUrl: string; basePath?: string; secrets?: Record<string, string> }): ContainerSpec {
   const m = game.manifest;
   const n = names(game.id);
   const env: Record<string, string> = {
@@ -38,6 +38,8 @@ export function containerSpec(game: InstalledGame, opts: { coreUrl: string; publ
     [ENV.token]: game.token,
     [ENV.publicUrl]: opts.publicUrl,
     [ENV.dataDir]: "/data",
+    // Path routing (SDK 0.10.0): only set when the game is served under a prefix.
+    ...(opts.basePath ? { [ENV.basePath]: opts.basePath } : {}),
   };
   return {
     name: n.container,

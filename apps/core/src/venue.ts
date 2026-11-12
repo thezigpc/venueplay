@@ -41,14 +41,34 @@ export function liveAnnouncement(a: Partial<Announcement> | undefined, now = Dat
 }
 
 function gameLink(v: VenueSettings, g: InstalledGame): VenueGameLink {
-  const link: VenueGameLink = { id: g.id, displayName: g.branding.displayName ?? g.manifest.name, url: publicUrl(v, gameHost(v, g)) };
+  const link: VenueGameLink = { id: g.id, displayName: g.branding.displayName ?? g.manifest.name, url: gameUrl(v, g) };
   if (g.branding.tagline) link.tagline = g.branding.tagline;
   if (g.branding.iconUrl) link.iconUrl = g.branding.iconUrl;
   return link;
 }
 
+/**
+ * Path routing (SDK 0.10.0): the prefix a game is served under on the play hostname
+ * ("/bingo"), or undefined when it has its own hostname (no support declared, or the venue
+ * chose a hostname for it).
+ */
+export function gamePath(g: InstalledGame): string | undefined {
+  return g.manifest.routing?.basePath && !g.ownHostname ? `/${g.hostnameAlias ?? g.id}` : undefined;
+}
+
+/** The hostname that serves a game: the play hostname for path-routed games. */
 export function gameHost(v: VenueSettings, g: InstalledGame): string {
+  return gamePath(g) ? hostFor(v, v.playLabel) : hostFor(v, g.hostnameAlias ?? g.id);
+}
+
+/** The game's own subdomain, whether or not it's served there now (old links redirect from it). */
+export function gameSubdomain(v: VenueSettings, g: InstalledGame): string {
   return hostFor(v, g.hostnameAlias ?? g.id);
+}
+
+/** The game's address: https://play.example.com/bingo, or https://bingo.example.com. */
+export function gameUrl(v: VenueSettings, g: InstalledGame): string {
+  return publicUrl(v, gameHost(v, g)) + (gamePath(g) ?? "");
 }
 
 export function buildContext(v: VenueSettings, g: InstalledGame, extras: VenueExtras = {}): VenueContext {
@@ -60,7 +80,8 @@ export function buildContext(v: VenueSettings, g: InstalledGame, extras: VenueEx
       displayName: g.branding.displayName ?? g.manifest.name,
       tagline: g.branding.tagline,
       iconUrl: g.branding.iconUrl,
-      publicUrl: publicUrl(v, gameHost(v, g)),
+      publicUrl: gameUrl(v, g),
+      ...(gamePath(g) ? { basePath: gamePath(g) } : {}),
       theme: withAccent(v.theme, g.branding.accent),
     },
     standalone: false,
@@ -95,7 +116,12 @@ export function buildGatewayConfig(input: {
   const hub: HubGame[] = [];
   for (const g of games) {
     const host = gameHost(venue, g);
-    routes.push({ host, kind: "game", gameId: g.id, target: gameTarget(g), enabled: g.enabled, injectTheme: g.manifest.sdk.level === 0 });
+    const path = gamePath(g);
+    routes.push({ host, ...(path ? { path } : {}), kind: "game", gameId: g.id, target: gameTarget(g), enabled: g.enabled, injectTheme: g.manifest.sdk.level === 0 });
+    // Moved to a path: its old subdomain redirects there while it still resolves (its DNS
+    // record is no longer kept, so this only lasts on a LAN name or a wildcard record).
+    const old = gameSubdomain(venue, g);
+    if (path && old !== host) routes.push({ host: old, kind: "game", gameId: g.id, enabled: g.enabled, injectTheme: false, redirectTo: gameUrl(venue, g) });
     const ctx = buildContext(venue, g, extras);
     contexts[g.id] = ctx;
     hub.push({ id: g.id, displayName: ctx.game.displayName, tagline: ctx.game.tagline, iconUrl: ctx.game.iconUrl, url: ctx.game.publicUrl!, enabled: g.enabled, kind: isApp(g.manifest) ? "app" : "game", rooms: input.rooms?.[g.id] });

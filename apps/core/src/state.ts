@@ -52,6 +52,11 @@ export interface InstalledGame {
   branding: GameBranding;
   /** Replaces the {game} label in the hostname (e.g. "kavabingo"). */
   hostnameAlias?: string;
+  /**
+   * Path routing (SDK 0.10.0): games that support it live at <play host>/<alias or id>.
+   * true keeps this one on its own hostname instead (one more DNS record and tunnel route).
+   */
+  ownHostname?: boolean;
   /** Per-game secret for events/commands. Never sent to browsers. */
   token: string;
   /** Development only: reach the game here instead of its container. */

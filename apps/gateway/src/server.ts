@@ -34,7 +34,11 @@ export function createGateway(d: GatewayDeps) {
     });
   }
   injecting.on("proxyReq", (proxyReq) => proxyReq.setHeader("accept-encoding", "identity"));
+  // Path routing: the game's own redirects ("/admin") get its prefix back. http-proxy emits
+  // proxyRes before it copies the headers, so changing them here is enough.
+  proxy.on("proxyRes", (proxyRes, req) => prefixLocation(proxyRes, req));
   injecting.on("proxyRes", (proxyRes, req, res) => {
+    prefixLocation(proxyRes, req);
     const type = String(proxyRes.headers["content-type"] ?? "");
     const headers = { ...proxyRes.headers };
     if (!type.includes("text/html")) {
@@ -77,7 +81,7 @@ export function createGateway(d: GatewayDeps) {
    * GET /__bargames/staff?t=<link>&next=/admin: core signs the link for staff signed in to
    * the box admin; this sets the staff cookie for the venue's domain and goes on to `next`.
    */
-  function handleStaff(req: IncomingMessage, res: ServerResponse, cfg: GatewayConfig, url: URL): void {
+  function handleStaff(req: IncomingMessage, res: ServerResponse, cfg: GatewayConfig, url: URL, route: GatewayRoute): void {
     const now = Date.now();
     for (const [n, exp] of usedLinks) if (exp < now) usedLinks.delete(n);
     const link = verifyToken(d.coreToken, "staff-link", url.searchParams.get("t") ?? undefined, now);
@@ -88,7 +92,7 @@ export function createGateway(d: GatewayDeps) {
     const cookie = signToken(d.coreToken, "staff", now + STAFF_TTL_MS, randomBytes(8).toString("base64url"));
     const domain = cfg.domain && cfg.domain !== "localhost" ? `; Domain=${cfg.domain}` : "";
     res.writeHead(303, {
-      location: safeReturn(url.searchParams.get("next")),
+      location: (route.path ?? "") + safeReturn(url.searchParams.get("next")),
       "cache-control": "no-store",
       "set-cookie": `${STAFF_COOKIE}=${cookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${STAFF_TTL_MS / 1000}${domain}${header(req, "cf-connecting-ip") ? "; Secure" : ""}`,
     });
@@ -102,7 +106,9 @@ export function createGateway(d: GatewayDeps) {
   }
 
   function prepare(req: IncomingMessage, decision: AccessDecision, route: GatewayRoute): void {
-    for (const h of [...Object.values(HEADERS), GATEWAY_PROOF_HEADER]) delete req.headers[h];
+    for (const h of [...Object.values(HEADERS), GATEWAY_PROOF_HEADER, "x-forwarded-prefix"]) delete req.headers[h];
+    const prefix = (req as PrefixedRequest).bgPrefix;
+    if (prefix) req.headers["x-forwarded-prefix"] = prefix;
     if (route.kind === "admin") req.headers[GATEWAY_PROOF_HEADER] = d.coreToken;
     req.headers[HEADERS.via] = "1";
     // Staff: the game hears "staff", never the cookie (a game could replay it elsewhere).
@@ -122,6 +128,21 @@ export function createGateway(d: GatewayDeps) {
     if (!cfg) return send(res, 503, simplePage(undefined, "Starting up", "The game box is starting. Try again in a moment."));
     const route = findRoute(cfg, req) ?? consoleRoute(cfg, req);
     if (!route) return send(res, 404, simplePage(cfg.venue, "Not found", "There's nothing at this address."));
+    const asked = req.url ?? "/";
+    if (route.redirectTo) {
+      // A game's old subdomain, after it moved to a path on the venue's hostname.
+      res.writeHead(301, { location: route.redirectTo + (asked.startsWith("/") ? asked : "/"), "cache-control": "no-store" });
+      return void res.end();
+    }
+    if (route.path) {
+      const r = stripPrefix(route.path, asked);
+      if (r.redirect) {
+        res.writeHead(302, { location: r.redirect, "cache-control": "no-store" });
+        return void res.end();
+      }
+      req.url = r.url;
+      (req as PrefixedRequest).bgPrefix = route.path;
+    }
     const url = new URL(req.url ?? "/", "http://x");
     if (url.pathname.startsWith("/internal")) return send(res, 404, simplePage(cfg.venue, "Not found", ""));
 
@@ -129,10 +150,10 @@ export function createGateway(d: GatewayDeps) {
     if (!decision.allowed) return send(res, 403, joinWifiPage(cfg.venue));
 
     if (url.pathname === PATHS.pin && req.method === "POST") return handlePin(req, res, cfg);
-    if (url.pathname === PATHS.staff && req.method === "GET" && route.kind === "game") return handleStaff(req, res, cfg, url);
+    if (url.pathname === PATHS.staff && req.method === "GET" && route.kind === "game") return handleStaff(req, res, cfg, url, route);
     if (!pinOk(req, cfg, decision, route)) {
       if (req.method !== "GET") return send(res, 401, JSON.stringify({ error: "venue PIN required" }), "application/json");
-      return send(res, 401, pinPage(cfg.venue, url.pathname + url.search));
+      return send(res, 401, pinPage(cfg.venue, (route.path ?? "") + url.pathname + url.search));
     }
 
     const ctx: VenueContext | undefined = cfg.contexts[route.gameId ?? "_hub"];
@@ -170,7 +191,13 @@ export function createGateway(d: GatewayDeps) {
   function upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const cfg = d.config();
     const route = cfg && (findRoute(cfg, req) ?? consoleRoute(cfg, req));
-    if (!cfg || !route || route.kind !== "game" || !route.enabled || !route.target) return void socket.destroy();
+    if (!cfg || !route || route.kind !== "game" || !route.enabled || !route.target || route.redirectTo) return void socket.destroy();
+    if (route.path) {
+      const r = stripPrefix(route.path, req.url ?? "/");
+      if (!r.url) return void socket.destroy();
+      req.url = r.url;
+      (req as PrefixedRequest).bgPrefix = route.path;
+    }
     const decision = decide(req, cfg, route);
     if (!decision.allowed || !pinOk(req, cfg, decision, route)) return void socket.destroy();
     prepare(req, decision, route);
@@ -204,9 +231,34 @@ export function injectTheme(html: string, landingCtx?: VenueContext): string {
   return out;
 }
 
+type PrefixedRequest = IncomingMessage & { bgPrefix?: string };
+
+/** "/bingo/x?y" under "/bingo" → "/x?y"; "/bingo?y" → redirect to "/bingo/?y". */
+export function stripPrefix(prefix: string, asked: string): { url?: string; redirect?: string } {
+  const q = asked.indexOf("?");
+  const path = q < 0 ? asked : asked.slice(0, q);
+  const query = q < 0 ? "" : asked.slice(q);
+  if (path === prefix) return { redirect: `${prefix}/${query}` };
+  return path.startsWith(`${prefix}/`) ? { url: asked.slice(prefix.length) } : {};
+}
+
+/** A redirect from a path-routed game to one of its own paths gets the prefix back. */
+function prefixLocation(proxyRes: IncomingMessage, req: IncomingMessage): void {
+  const prefix = (req as PrefixedRequest).bgPrefix;
+  const loc = proxyRes.headers.location;
+  if (!prefix || typeof loc !== "string" || !loc.startsWith("/") || loc.startsWith("//")) return;
+  if (loc === prefix || loc.startsWith(`${prefix}/`)) return;
+  proxyRes.headers.location = prefix + loc;
+}
+
 function findRoute(cfg: GatewayConfig, req: IncomingMessage): GatewayRoute | undefined {
   const host = (req.headers.host ?? "").toLowerCase().replace(/:\d+$/, "");
-  return cfg.routes.find((r) => r.host === host);
+  const path = (req.url ?? "/").split("?")[0];
+  // A game under a path on this hostname first, then the hostname itself (the games list).
+  return (
+    cfg.routes.find((r) => r.host === host && r.path && (path === r.path || path.startsWith(`${r.path}/`))) ??
+    cfg.routes.find((r) => r.host === host && !r.path)
+  );
 }
 
 /**

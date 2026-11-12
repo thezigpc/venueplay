@@ -23,6 +23,7 @@ import {
   compareVersions,
   PATHS,
   isApp,
+  joinUrl,
 } from "@bargames/sdk";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -77,7 +78,8 @@ const h =
 function absoluteHttpUrl(value: unknown, base: string): string | undefined {
   if (typeof value !== "string" || !value) return undefined;
   try {
-    const u = new URL(value, base);
+    // A path from the game is on the game's address, prefix included (path routing).
+    const u = new URL(value.startsWith("/") && !value.startsWith("//") ? joinUrl(base, value) : value, base);
     return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : undefined;
   } catch {
     return undefined;
@@ -153,8 +155,10 @@ export function createApp(d: AppDeps) {
     if (!url) return undefined;
     try {
       const u = new URL(url);
-      if (u.origin !== new URL(buildContext(d.state.venue.get(), game).game.publicUrl!).origin) return undefined;
-      return roomFromTableUrl(game.manifest, u.pathname + u.search);
+      const base = new URL(buildContext(d.state.venue.get(), game).game.publicUrl!);
+      const prefix = base.pathname.replace(/\/$/, "");
+      if (u.origin !== base.origin || (prefix && !u.pathname.startsWith(`${prefix}/`))) return undefined;
+      return roomFromTableUrl(game.manifest, u.pathname.slice(prefix.length) + u.search);
     } catch {
       return undefined;
     }
@@ -189,7 +193,7 @@ export function createApp(d: AppDeps) {
     const mod = idleModuleOf();
     if (mod) {
       const ctx = buildContext(venue, mod);
-      return { kind: "idle" as const, title: ctx.game.displayName, url: new URL(mod.manifest.routes.table!, ctx.game.publicUrl!).toString() };
+      return { kind: "idle" as const, title: ctx.game.displayName, url: joinUrl(ctx.game.publicUrl!, mod.manifest.routes.table!) };
     }
     const names = d.games.list().filter((g) => g.enabled).map((g) => buildContext(venue, g).game.displayName);
     return { kind: "idle" as const, title: "Idle", url: await idleScreenUrl({ venue: venueInfo(venue, venueExtras()), games: names }) };
@@ -217,7 +221,8 @@ export function createApp(d: AppDeps) {
   };
   const originOf = (g: InstalledGame | undefined) => {
     try {
-      return g && isApp(g.manifest) ? new URL(buildContext(d.state.venue.get(), g).game.publicUrl!).origin : undefined;
+      // The app's address without a trailing slash (its origin, or origin + path prefix).
+      return g && isApp(g.manifest) ? buildContext(d.state.venue.get(), g).game.publicUrl!.replace(/\/$/, "") : undefined;
     } catch {
       return undefined;
     }
@@ -295,7 +300,7 @@ export function createApp(d: AppDeps) {
         .catch(() => ({ rooms: [] }) as GameStatus);
       if (!st.rooms?.some((r) => r.code === roomCode)) throw new HttpError(404, `no room ${roomCode}`);
       const ctx = buildContext(d.state.venue.get(), game);
-      const url = new URL(tableUrl(game.manifest, roomCode)!, ctx.game.publicUrl!).toString();
+      const url = joinUrl(ctx.game.publicUrl!, tableUrl(game.manifest, roomCode)!);
       type Results = Record<string, { ok: boolean; message?: string; needsCode?: boolean }>;
       const ids = displayIds.map(String);
       const showing = (brokerCall("POST", "/show", { displayIds: ids, content: { kind: "url", url, title: `${ctx.game.displayName} · ${roomCode}` } }) as Promise<Results>).then((results) => {
@@ -1439,7 +1444,7 @@ export function createApp(d: AppDeps) {
 
     // Apps (menus…): no rooms, their TV view as is.
     if (isApp(game.manifest)) {
-      const url = new URL(game.manifest.routes.table, publicUrl).toString();
+      const url = joinUrl(publicUrl, game.manifest.routes.table);
       const results = (await brokerCall("POST", "/show", { ...target, content: { kind: "url", url, title: name } })) as Results;
       d.log.info("cast", "shown", { game: game.id, displays: Object.keys(results).length, failed: Object.values(results).filter((x) => !x.ok).length });
       return { url, results } as { url: string; results: Results; roomCode?: string; created?: boolean; hostUrl?: string };
@@ -1465,7 +1470,7 @@ export function createApp(d: AppDeps) {
       d.log.info("cast", "room created", { game: game.id, room: code });
     }
 
-    const url = new URL(tableUrl(game.manifest, code)!, publicUrl).toString();
+    const url = joinUrl(publicUrl, tableUrl(game.manifest, code)!);
     const results = (await brokerCall("POST", "/show", { ...target, content: { kind: "url", url, title: `${name} · ${code}` } })) as Results;
     d.log.info("cast", "shown", { game: game.id, room: code, displays: Object.keys(results).length, failed: Object.values(results).filter((x) => !x.ok).length });
     return { roomCode: code, created: !roomCode, hostUrl, url, results };
@@ -1535,7 +1540,7 @@ export function createApp(d: AppDeps) {
       const next = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
       const base = buildContext(d.state.venue.get(), game).game.publicUrl!;
       const t = signToken(d.config.gatewayToken, "staff-link", Date.now() + 2 * 60_000, randomBytes(9).toString("base64url"));
-      const url = new URL(PATHS.staff, base);
+      const url = new URL(joinUrl(base, PATHS.staff));
       url.searchParams.set("t", t);
       url.searchParams.set("next", next);
       res.json({ url: url.toString(), staffAware: compareVersions(game.manifest.sdk.version, "0.7.0") >= 0 });

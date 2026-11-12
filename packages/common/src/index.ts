@@ -160,6 +160,13 @@ export interface GatewayRoute {
   enabled: boolean;
   /** Inject the venue theme stylesheet into HTML (level 0 games). */
   injectTheme: boolean;
+  /**
+   * Path routing (SDK 0.10.0): served under this prefix on `host` ("/bingo"). The gateway strips
+   * it before proxying and puts it back on the game's redirects.
+   */
+  path?: string;
+  /** Old address: answer every request with a redirect to this URL plus the request's path. */
+  redirectTo?: string;
 }
 
 export interface WhitelistEntry {

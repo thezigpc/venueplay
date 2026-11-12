@@ -294,3 +294,53 @@ test("room cache: games list rooms skip private ones and only link same-origin j
   assert.equal(cache.snapshot().bingo, undefined, "unreadable status: no stale Join links");
   cache.stop();
 });
+
+test("path routing (SDK 0.10.0): games that support it live at <play host>/<id>, off the DNS list", async () => {
+  const { allHosts, buildContext, buildGatewayConfig, gamePath, gameUrl } = await import("./venue.js");
+  const { RESERVED_PATHS } = await import("./games.js");
+  const dir = mkdtempSync(path.join(tmpdir(), "bg-core-"));
+  await openState(dir).venue.update((v) => Object.assign(v, { domain: "example.com", publicScheme: "https", publicPort: null }));
+  const venue = openState(dir).venue.get();
+  const mk = (id: string, routing?: boolean, extra: Partial<InstalledGame> = {}): InstalledGame => ({
+    id,
+    manifest: { ...manifest, id, health: "/health", resources: { memory: "256m", cpus: 0.5 }, network: { internet: false }, ...(routing ? { routing: { basePath: true } } : {}) } as unknown as InstalledGame["manifest"],
+    source: { kind: "url", ref: "x" },
+    verified: false,
+    installedAt: "",
+    updatedAt: "",
+    enabled: true,
+    branding: {},
+    token: "t",
+    ...extra,
+  });
+  const play = hostFor(venue, venue.playLabel);
+  const bingo = mk("bingo", true);
+  const pool = mk("pool");
+  const menu = mk("menu", true, { hostnameAlias: "eats" });
+  const kept = mk("trivia", true, { ownHostname: true });
+
+  assert.equal(gamePath(bingo), "/bingo");
+  assert.equal(gamePath(menu), "/eats", "the alias names the path too");
+  assert.equal(gamePath(pool), undefined, "no support declared: its own hostname");
+  assert.equal(gamePath(kept), undefined, "the venue chose a hostname for it");
+  assert.equal(gameUrl(venue, bingo), `https://${play}/bingo`);
+  assert.equal(gameUrl(venue, pool), "https://pool.example.com");
+  assert.equal(buildContext(venue, bingo).game.basePath, "/bingo");
+  assert.equal(buildContext(venue, pool).game.basePath, undefined);
+
+  const hosts = allHosts(venue, [bingo, pool, menu, kept]);
+  assert.ok(!hosts.includes("bingo.example.com") && !hosts.includes("eats.example.com"), "path games need no DNS record");
+  assert.ok(hosts.includes("pool.example.com") && hosts.includes("trivia.example.com"));
+
+  const gw = buildGatewayConfig({ venue, access: openState(dir).access.get(), games: [bingo, pool], coreUrl: "http://core", boxVersion: "x", setupRequired: false });
+  const r = gw.routes.find((x) => x.gameId === "bingo" && !x.redirectTo)!;
+  assert.deepEqual([r.host, r.path], [play, "/bingo"]);
+  assert.equal(gw.routes.find((x) => x.host === "bingo.example.com")?.redirectTo, `https://${play}/bingo`);
+  assert.equal(gw.hub.games.find((g) => g.id === "bingo")?.url, `https://${play}/bingo`);
+
+  const spec = containerSpec(bingo, { coreUrl: "http://core:7100", publicUrl: gameUrl(venue, bingo), basePath: gamePath(bingo) });
+  assert.ok((spec.body.Env as string[]).includes("BG_BASE_PATH=/bingo"));
+  assert.ok((spec.body.Env as string[]).includes(`BG_PUBLIC_URL=https://${play}/bingo`));
+  assert.ok(!(containerSpec(pool, { coreUrl: "http://core:7100", publicUrl: gameUrl(venue, pool) }).body.Env as string[]).some((e) => e.startsWith("BG_BASE_PATH=")));
+  assert.ok(RESERVED_PATHS.includes("admin"));
+});

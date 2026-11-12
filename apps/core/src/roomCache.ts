@@ -33,8 +33,10 @@ export function hubRooms(rooms: RoomSummary[], publicUrl: string | undefined): H
 function joinUrl(joinPath: unknown, base: string | undefined): string | undefined {
   if (!base || typeof joinPath !== "string" || !joinPath.startsWith("/") || joinPath.startsWith("//")) return undefined;
   try {
-    const u = new URL(joinPath, base);
-    return u.origin === new URL(base).origin ? u.toString() : undefined;
+    // On the game's address, prefix included (path routing): /join/AB → https://play.x/bingo/join/AB.
+    const b = new URL(base);
+    const u = new URL(b.pathname.replace(/\/$/, "") + joinPath, b.origin);
+    return u.origin === b.origin ? u.toString() : undefined;
   } catch {
     return undefined;
   }

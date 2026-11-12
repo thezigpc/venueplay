@@ -44,3 +44,18 @@ for the admin.
 3. Admin at `/admin` (default) or a separate admin hostname (option + recommendation).
 4. Cloudflare tunnel-only mode.
 5. A round for each game (Bingo, No Filter, Menu, YouTube).
+
+## As built (box 0.10.0)
+- Steps 1 and 2 are done: SDK 0.10.0, game kit 0.6.0, gateway path routing, core URLs.
+- A game is served at `<play host>/<alias or id>` when its manifest has `"routing": { "basePath": true }`
+  and the venue didn't tick "Give it its own hostname" (`ownHostname`). Core sets `BG_BASE_PATH`
+  and a `BG_PUBLIC_URL` with the path, which recreates the container once.
+- The gateway matches host + prefix before host alone. It strips the prefix (HTTP and
+  WebSockets), redirects `/<id>` to `/<id>/`, puts the prefix back on the game's `Location`
+  headers and staff/PIN returns, and sends `X-Forwarded-Prefix`.
+- Path games drop out of the box's hostname list, so the Cloudflare sync removes their CNAMEs
+  and tunnel routes. The old subdomain gets a 301 route to the path, which only helps while
+  the name still resolves (a LAN name or a wildcard record).
+- Reserved names (a game can't take them): admin, api, internal, health, assets.
+- Same origin means shared cookies and storage: games must key storage per game (the kit's
+  session store already does) and scope their cookies to their prefix.

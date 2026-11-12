@@ -58,6 +58,8 @@ export interface Game {
   enabled: boolean;
   branding: GameBranding;
   hostnameAlias?: string;
+  /** Path routing: keep this game on its own hostname. */
+  ownHostname?: boolean;
   host: string;
   context: VenueContext;
   state: string;
@@ -271,7 +273,7 @@ export const api = {
   checkUpdates: () => call<Updates>("POST", "/games/updates/check"),
   updateGame: (id: string) => call<{ game: Game; from: string; warnings: string[] }>("POST", `/games/${encodeURIComponent(id)}/update`),
   install: (url: string, hostnameAlias?: string) => call<{ game: Game; upgraded: boolean; warnings: string[] }>("POST", "/games/install", { url, hostnameAlias: hostnameAlias || undefined }),
-  patchGame: (id: string, patch: { enabled?: boolean; branding?: GameBranding; hostnameAlias?: string | null }) => call<Game>("PATCH", `/games/${id}`, patch),
+  patchGame: (id: string, patch: { enabled?: boolean; branding?: GameBranding; hostnameAlias?: string | null; ownHostname?: boolean }) => call<Game>("PATCH", `/games/${id}`, patch),
   removeGame: (id: string) => call("DELETE", `/games/${id}`),
   events: () => call<BarGamesEvent[]>("GET", "/events/recent?limit=30"),
   displays: () => call<Display[]>("GET", "/broker/displays?health=1"),
