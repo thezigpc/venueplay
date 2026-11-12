@@ -9,7 +9,7 @@ const TOKEN_URL = "https://dash.cloudflare.com/profile/api-tokens";
  * Cloudflare setup, as a guided walk-through:
  * 1 domain in Cloudflare · 2 API token · 3 pick domain + addresses · 4 connect · status.
  */
-export function InternetPage() {
+function CloudflareSection() {
   const st = useLoad(api.cloudflare, 15_000);
   if (!st.data) return <div className="card">{st.error || "Loading…"}</div>;
   return st.data.connected ? <Connected status={st.data} reload={st.reload} /> : <Wizard status={st.data} reload={st.reload} />;
@@ -246,5 +246,50 @@ function Connected({ status, reload }: { status: CfStatus; reload: () => unknown
       </section>
       {error && <p className="error wide">{error}</p>}
     </div>
+  );
+}
+
+export function InternetPage() {
+  return (
+    <>
+      <CloudflareSection />
+      <div className="grid" style={{ marginTop: 16 }}>
+        <RemoteSupportCard />
+      </div>
+    </>
+  );
+}
+
+/**
+ * STUB (planned): Tailscale from the venue's point of view. Today Tailscale is only the
+ * operator's management and remote-support channel (docs/NATIVE-CLIENTS.md). Nothing here
+ * does anything yet; core's GET /api/tailscale answers { built: false }.
+ */
+function RemoteSupportCard() {
+  const [built, setBuilt] = useState<boolean | undefined>();
+  useEffect(() => {
+    api.tailscale().then(
+      (t) => setBuilt(t.built),
+      () => setBuilt(false),
+    );
+  }, []);
+  return (
+    <section className="card wide">
+      <h2>
+        Remote support (Tailscale) <small>coming soon</small>
+      </h2>
+      <p className="muted">
+        Lets your Bar Games support team reach this box securely to help you, without opening anything to the internet. Players and TVs never use it.
+      </p>
+      <ul className="plain muted">
+        <li>Status: {built ? "" : "not available yet"} (connected or not, this box's support address, when access was last used)</li>
+        <li>Allow remote support: on / pause (planned)</li>
+        <li>Your own Tailscale plan: connect Venuebox screens at other sites (planned, for venues with a paid Tailscale plan)</li>
+      </ul>
+      <div className="buttons">
+        <button disabled>Pause remote support</button>
+        <button disabled>Use our own Tailscale account</button>
+      </div>
+    </section>
   );
 }

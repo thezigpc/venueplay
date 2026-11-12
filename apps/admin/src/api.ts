@@ -202,6 +202,8 @@ export const api = {
   renameVenuebox: (id: string, name: string) => call<VenueboxDevice>("PATCH", `/broker/venuebox/devices/${encodeURIComponent(id)}`, { name }),
   revokeVenuebox: (id: string) => call("DELETE", `/broker/venuebox/devices/${encodeURIComponent(id)}`),
   identify: (displayId: string) => call("POST", `/broker/displays/${encodeURIComponent(displayId)}/identify`),
+  /** Stub: Tailscale from the venue's side (planned). */
+  tailscale: () => call<{ built: boolean }>("GET", "/tailscale"),
   systemStats: () => call<SystemStats>("GET", "/system/stats"),
   reboot: () => call<{ ok: boolean; message?: string }>("POST", "/system/reboot", { confirm: "reboot" }),
   updates: () => call<Updates>("GET", "/games/updates"),

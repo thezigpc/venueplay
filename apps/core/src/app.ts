@@ -508,6 +508,13 @@ export function createApp(d: AppDeps) {
     }),
   );
 
+  /**
+   * STUB (planned): Tailscale from the venue's side, for the Internet page: status of the
+   * operator's remote-support link, pausing it, a venue's own Tailscale plan for remote
+   * Venuebox screens. Tailscale runs on the host; nothing reads it yet.
+   */
+  app.get("/api/tailscale", (_req, res) => res.json({ built: false }));
+
   // ------------------------------------------------------------ venue
 
   const venueView = (v: VenueSettings) => {
