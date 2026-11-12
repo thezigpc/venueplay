@@ -54,6 +54,8 @@ export interface Access {
   autoVenueIp: boolean;
   venueCidrs: string[];
   adminRemote: boolean;
+  /** Anyone on the internet may play (the admin stays behind adminRemote). */
+  open?: boolean;
 }
 export interface Game {
   id: string;

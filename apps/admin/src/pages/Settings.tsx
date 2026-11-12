@@ -65,7 +65,7 @@ function Hub() {
         <Row
           to="access"
           title="Who can play"
-          detail={a ? [a.autoVenueIp || a.venueCidrs.length ? "Venue Wi-Fi only" : "Local network only", a.pinEnabled ? "venue PIN on" : "venue PIN off", cast.data ? (cast.data.pin ? "TV PIN on" : "TV PIN off") : ""].filter(Boolean).join(" · ") : access.error || "…"}
+          detail={a ? [a.open ? "Open to anyone" : a.autoVenueIp || a.venueCidrs.length ? "Venue Wi-Fi only" : "Local network only", a.pinEnabled ? "venue PIN on" : "venue PIN off", cast.data ? (cast.data.pin ? "TV PIN on" : "TV PIN off") : ""].filter(Boolean).join(" · ") : access.error || "…"}
         />
         <Row
           to="internet"

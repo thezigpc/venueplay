@@ -129,7 +129,7 @@ export interface AccessDecision {
  */
 export function checkAccess(
   input: { cfIp?: string; remote?: string },
-  policy: { venueCidrs: string[]; whitelist: WhitelistEntry[] },
+  policy: { venueCidrs: string[]; whitelist: WhitelistEntry[]; /** Anyone may come in ("open"), after the venue/whitelist checks. */ open?: boolean },
   now = Date.now(),
 ): AccessDecision {
   if (!input.cfIp) {
@@ -144,5 +144,6 @@ export function checkAccess(
   if (policy.venueCidrs.some(match)) return { allowed: true, reason: "venue-ip", clientIp: input.cfIp };
   const live = policy.whitelist.filter((w) => !w.expiresAt || Date.parse(w.expiresAt) > now);
   if (live.some((w) => match(w.cidr))) return { allowed: true, reason: "whitelist", clientIp: input.cfIp };
+  if (policy.open) return { allowed: true, reason: "open", clientIp: input.cfIp };
   return { allowed: false, clientIp: input.cfIp };
 }

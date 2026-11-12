@@ -180,6 +180,9 @@ test("api: setup, install, brand, events, gateway config", async () => {
     assert.match(((await badRange.json()) as { error: string }).error, /not an IP address or range/);
     assert.equal((await json("PUT", "/api/access", { whitelist: [{ cidr: "10.0.0.0/33" }] }, authed)).status, 400);
     assert.equal((await json("PUT", "/api/access", { venueCidrs: [] }, authed)).status, 200);
+    const opened = await json("PUT", "/api/access", { open: true }, authed);
+    assert.equal(((await opened.json()) as { open: boolean }).open, true, "open mode saves");
+    assert.equal((await json("PUT", "/api/access", { open: false }, authed)).status, 200);
     // 0.13.1: the venue's own name for the admin, shown on the sign-in screen too.
     assert.equal(((await (await json("GET", "/api/auth/status")).json()) as { title?: string }).title, undefined);
     assert.equal((await json("PUT", "/api/venue", { adminTitle: "  Pacha   Kava  " }, authed)).status, 200);

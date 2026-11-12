@@ -90,6 +90,7 @@ export const DEFAULT_ACCESS: AccessSettings = {
   autoVenueIp: true,
   venueCidrs: [],
   adminRemote: false,
+  open: false,
 };
 
 /** Whether game hosts may put their rooms on the venue's TVs (from inside the game). */

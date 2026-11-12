@@ -340,7 +340,8 @@ export const HEADERS = {
 } as const;
 
 /** Why the gateway let a request in. */
-export type AccessReason = "local" | "venue-ip" | "whitelist" | "pin";
+/** "open": the venue lets anyone play (open mode); the player may be anywhere. */
+export type AccessReason = "local" | "venue-ip" | "whitelist" | "pin" | "open";
 
 // ---------------------------------------------------------------- SDK 0.9.0
 

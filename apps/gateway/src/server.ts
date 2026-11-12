@@ -65,7 +65,12 @@ export function createGateway(d: GatewayDeps) {
     const cfIp = header(req, "cf-connecting-ip");
     const decision = checkAccess(
       { cfIp, remote: req.socket.remoteAddress },
-      { venueCidrs: [...(cfg.access.autoVenueIp ? d.detectedCidrs() : []), ...cfg.access.venueCidrs], whitelist: cfg.access.whitelist },
+      {
+        venueCidrs: [...(cfg.access.autoVenueIp ? d.detectedCidrs() : []), ...cfg.access.venueCidrs],
+        whitelist: cfg.access.whitelist,
+        // Open mode lets anyone play; the admin stays behind its own "from outside" switch.
+        open: Boolean(cfg.access.open) && route.kind !== "admin",
+      },
     );
     // The admin UI has its own login; venues can open it to the internet.
     if (!decision.allowed && route.kind === "admin" && cfg.access.adminRemote) return { allowed: true, clientIp: decision.clientIp };

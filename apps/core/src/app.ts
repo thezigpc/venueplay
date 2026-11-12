@@ -1157,7 +1157,8 @@ export function createApp(d: AppDeps) {
     "/api/access",
     h(async (req, res) => {
       const b = req.body as Partial<AccessSettings>;
-      const next = { ...d.state.access.get(), ...pick(b, ["pinEnabled", "pin", "whitelist", "autoVenueIp", "venueCidrs", "adminRemote"]) };
+      const next = { ...d.state.access.get(), ...pick(b, ["pinEnabled", "pin", "whitelist", "autoVenueIp", "venueCidrs", "adminRemote", "open"]) };
+      next.open = Boolean(next.open);
       if (next.pinEnabled && !/^\d{4,8}$/.test(next.pin)) throw new HttpError(400, "PIN must be 4-8 digits");
       // An IP ("203.0.113.7", "2001:db8::1") or a range ("203.0.113.0/24"); anything else would be silently ignored.
       const range = (s: unknown) => {

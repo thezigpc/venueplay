@@ -16,6 +16,19 @@ export function AccessPage() {
     <div className="grid">
       <section className="card">
         <h2>Who can play</h2>
+        <div className="seg" role="radiogroup" aria-label="Who can play">
+          <button type="button" role="radio" aria-checked={!a.open} className={!a.open ? "on" : ""} onClick={() => setA({ ...a, open: false })}>
+            Venue only
+          </button>
+          <button type="button" role="radio" aria-checked={Boolean(a.open)} className={a.open ? "on" : ""} onClick={() => setA({ ...a, open: true })}>
+            Anyone
+          </button>
+        </div>
+        <p className="muted small-print">
+          {a.open
+            ? "Anyone with the link can play, from anywhere (mobile data, home). Turn on the venue PIN below to keep it to people who know it. The admin page still follows its own setting."
+            : "Players must be on the venue's internet, an extra venue address, or the whitelist."}
+        </p>
         <label className="check">
           <input type="checkbox" checked={a.autoVenueIp} onChange={(e) => setA({ ...a, autoVenueIp: e.target.checked })} />
           Allow the venue's own internet connection (detected automatically, IPv4 + IPv6)

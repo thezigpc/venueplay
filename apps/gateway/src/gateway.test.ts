@@ -37,6 +37,10 @@ test("access decisions", () => {
   assert.equal(checkAccess({ cfIp: "198.51.100.7", remote: "172.18.0.5" }, policy).reason, "whitelist");
   assert.equal(checkAccess({ cfIp: "192.0.2.1", remote: "172.18.0.5" }, policy).allowed, false, "expired whitelist entry");
   assert.equal(checkAccess({ cfIp: "8.8.8.8", remote: "172.18.0.5" }, policy).allowed, false, "mobile data is blocked");
+  const open = { ...policy, open: true };
+  assert.deepEqual(checkAccess({ cfIp: "8.8.8.8", remote: "172.18.0.5" }, open), { allowed: true, reason: "open", clientIp: "8.8.8.8" }, "open mode lets anyone in");
+  assert.equal(checkAccess({ cfIp: "203.0.113.10", remote: "172.18.0.5" }, open).reason, "venue-ip", "venue players still show as venue");
+  assert.equal(checkAccess({ remote: "8.8.8.8" }, open).allowed, false, "direct non-LAN traffic stays blocked");
 });
 
 test("theme injection", () => {
@@ -114,6 +118,16 @@ test("gateway: routing, gate, PIN, closed games, headers", async () => {
     const outside = await get("pool.example.com", "/", { "cf-connecting-ip": "8.8.8.8" });
     assert.equal(outside.status, 403);
     assert.match(await outside.text(), /KavaGuest/);
+
+    // Open mode: anyone plays; the admin host stays closed unless adminRemote; the PIN still applies.
+    cfg.access.open = true;
+    assert.equal((await get("pool.example.com", "/", { "cf-connecting-ip": "8.8.8.8" })).status, 200);
+    assert.equal(seen.at(-1)!.access, "open");
+    assert.equal((await get("admin.example.com", "/", { "cf-connecting-ip": "8.8.8.8" })).status, 403, "admin doesn't open with the games");
+    cfg.access.pinEnabled = true;
+    assert.equal((await get("pool.example.com", "/", { "cf-connecting-ip": "8.8.8.8" })).status, 401, "PIN still asked");
+    cfg.access.pinEnabled = false;
+    cfg.access.open = false;
 
     // /internal is never reachable; disabled games show the closed page; hub lists live games.
     assert.equal((await get("pool.example.com", "/internal/venue", venueIp)).status, 404);

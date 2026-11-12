@@ -188,6 +188,8 @@ export interface GatewayAccess {
   venueCidrs: string[];
   /** Allow the admin host from anywhere (it still needs the admin login). */
   adminRemote: boolean;
+  /** Open mode: anyone on the internet may play (the PIN still applies if on; the admin doesn't open). */
+  open?: boolean;
 }
 
 export interface HubGame {

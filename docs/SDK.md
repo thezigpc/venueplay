@@ -73,7 +73,7 @@ Helpers: `isApp(manifest)` (`isDisplayModule` is its 0.5.0 alias).
 **Requests arrive through the gateway with:**
 - `x-bargames-via: 1`
 - `x-bargames-client-ip`
-- `x-bargames-access`: `local`, `venue-ip`, `whitelist` or `pin`
+- `x-bargames-access`: `local`, `venue-ip`, `whitelist`, `pin` or `open` (the venue lets anyone play, so the player may be anywhere)
 - `x-forwarded-proto`
 
 WebSockets (socket.io) are proxied.

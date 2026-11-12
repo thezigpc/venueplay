@@ -31,6 +31,8 @@ the SDK or the platform, write it under "SDK requests" in your report (step 9).
   `announcementBanner()` (and kit 0.7.0's `VenueAnnouncement`) follow both. **Use it on your TV
   view too** (after `tableMode()`/`markSharedScreen()`): it hides itself where it doesn't belong.
   Drawing your own? Respect `show` against your page being shared or not.
+- **0.11.5:** `ctx.access` (the `x-bargames-access` header) can now be `"open"`: the venue lets
+  anyone play, so the player may be anywhere (not necessarily in the room). Nothing to change.
 - **0.11.4:** `bg.reportResults()` sends a `game_result` event for you; you don't need to list it
   in bargames.json `events` (the mock box no longer flags it). Listing it does no harm.
 - **0.11.3:** `--bargames-announcement-top` too (a top strip's height), for layouts that fill
