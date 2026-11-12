@@ -386,6 +386,10 @@ test("mock box: venue context carries the games list, a second game and the anno
   assert.deepEqual(ctx.venue.games?.map((g) => g.id), ["pool", "other-game"]);
   assert.equal(ctx.venue.announcement?.text, "Hi");
   assert.equal(mockContext("pool", "P", "http://localhost:7080").venue.announcement, undefined);
+  // 0.11.1: a pretend box admin and the announcement's placement.
+  assert.equal(ctx.venue.adminUrl, "http://localhost:7080/__bargames/dev/admin");
+  const placed = mockContext("pool", "P", "http://localhost:7080", { announcement: "Hi", announcementShow: "tvs", announcementPosition: "bottom" });
+  assert.deepEqual([placed.venue.announcement?.show, placed.venue.announcement?.position], ["tvs", "bottom"]);
 });
 
 // ---------------------------------------------------------------- 0.5.0: display modules, venue location, on-primary

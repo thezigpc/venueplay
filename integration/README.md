@@ -31,6 +31,9 @@ the SDK or the platform, write it under "SDK requests" in your report (step 9).
   `announcementBanner()` (and kit 0.7.0's `VenueAnnouncement`) follow both. **Use it on your TV
   view too** (after `tableMode()`/`markSharedScreen()`): it hides itself where it doesn't belong.
   Drawing your own? Respect `show` against your page being shared or not.
+- **0.11.1 mock box:** `--announce "…" --announce-show tvs --announce-position bottom` sets the
+  pretend announcement's placement, and venue.adminUrl points at a pretend admin page, so
+  `BoxAdminLink` shows up on the mock.
 - **"← Box admin":** `venue.adminUrl` is the box admin's address; `boxAdminUrl(ctx)` returns it
   on a box (undefined standalone). Put a link at the top of your admin pages (kit 0.7.0:
   `<BoxAdminLink ctx={venue} />`), so staff who opened your settings from the box get back.

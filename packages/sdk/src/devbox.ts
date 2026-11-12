@@ -36,8 +36,10 @@ export function loadManifest(dirOrFile: string): GameManifest | undefined {
 export const MOCK_GAMES_PATH = "/__bargames/dev/games";
 /** The mock gateway's staff cookie (open PATHS.staff to set it). */
 export const MOCK_STAFF_COOKIE = "bg_staff_mock";
+/** SDK 0.11.1: the pretend box admin page (venue.adminUrl on the mock box). */
+export const MOCK_ADMIN_PATH = "/__bargames/dev/admin";
 
-export function mockContext(gameId: string, displayName: string, publicUrl: string, opts: { announcement?: string; app?: boolean; /** @deprecated */ display?: boolean } = {}): VenueContext {
+export function mockContext(gameId: string, displayName: string, publicUrl: string, opts: { announcement?: string; announcementShow?: "everywhere" | "phones" | "tvs"; announcementPosition?: "top" | "bottom"; app?: boolean; /** @deprecated */ display?: boolean } = {}): VenueContext {
   const app = Boolean(opts.app ?? opts.display);
   const self = { id: gameId, displayName, tagline: "Branded by the mock box", url: publicUrl };
   return {
@@ -58,7 +60,9 @@ export function mockContext(gameId: string, displayName: string, publicUrl: stri
       location: { latitude: 40.7128, longitude: -74.006, label: "Test City" },
       timezone: "America/New_York",
       units: "imperial",
-      ...(opts.announcement ? { announcement: { id: "mock-1", text: opts.announcement } } : {}),
+      ...(opts.announcement ? { announcement: { id: "mock-1", text: opts.announcement, ...(opts.announcementShow ? { show: opts.announcementShow } : {}), ...(opts.announcementPosition ? { position: opts.announcementPosition } : {}) } } : {}),
+      // SDK 0.11.1: a pretend box admin, so BoxAdminLink / boxAdminUrl() show up on the mock.
+      adminUrl: new URL(MOCK_ADMIN_PATH, publicUrl).toString(),
     },
     game: { id: gameId, displayName, tagline: "Branded by the mock box", publicUrl, theme: TEST_THEME, ...(normalizeBasePath(new URL(publicUrl).pathname) ? { basePath: normalizeBasePath(new URL(publicUrl).pathname) } : {}) },
     standalone: false,
@@ -96,6 +100,9 @@ export interface MockBoxOptions {
   castFromGames?: boolean;
   /** A pretend staff announcement, shown by announcementBanner(). */
   announcement?: string;
+  /** SDK 0.11.1: where the pretend announcement shows, and top or bottom. */
+  announcementShow?: "everywhere" | "phones" | "tvs";
+  announcementPosition?: "top" | "bottom";
   /** The pretend box admin password bg.checkVenuePassword() accepts (default "box-password"). */
   venuePassword?: string;
   /** SDK 0.10.0: serve the game under this prefix ("/bingo"), like the box's path routing. */
@@ -212,7 +219,7 @@ export function mockBox(o: MockBoxOptions) {
     }
     if (req.url?.startsWith("/internal/profiles")) return json(501, { error: "player profiles aren't built yet" });
     if (req.url === "/internal/venue") {
-      const ctx = mockContext(o.gameId, o.displayName, publicUrl, { announcement: o.announcement, app: o.manifest ? isApp(o.manifest) : false });
+      const ctx = mockContext(o.gameId, o.displayName, publicUrl, { announcement: o.announcement, announcementShow: o.announcementShow, announcementPosition: o.announcementPosition, app: o.manifest ? isApp(o.manifest) : false });
       if (countdown && Date.parse(countdown.endsAt) > Date.now()) ctx.venue.countdown = countdown;
       return json(200, ctx);
     }
@@ -323,6 +330,10 @@ export function mockBox(o: MockBoxOptions) {
       res.writeHead(303, { location: next, "set-cookie": `${MOCK_STAFF_COOKIE}=${off ? "" : "1"}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${off ? 0 : 43200}` });
       console.log(`${c.ok(off ? "staff signed out" : "staff signed in")} (requests now ${off ? "without" : "with"} ${HEADERS.staff}: 1)`);
       return void res.end();
+    }
+    if (req.url?.split("?")[0] === MOCK_ADMIN_PATH) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      return void res.end("<!doctype html><meta charset=utf-8><title>Box admin (mock)</title><h1>Box admin (mock)</h1><p>On a real box this is the venue's admin. Your BoxAdminLink works.</p>");
     }
     if (req.url?.split("?")[0] === MOCK_GAMES_PATH) return void mockGamesList(o, publicUrl).then((html) => {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });

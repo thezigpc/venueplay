@@ -87,7 +87,7 @@ switch (cmd) {
       console.error(`--base "${flags.base}" isn't a path like /my-game. In Git Bash, run with MSYS_NO_PATHCONV=1 (it turns /my-game into C:/Program Files/Git/my-game).`);
       process.exit(1);
     }
-    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined, announcement: flags.announce, basePath: flags.base });
+    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined, announcement: flags.announce, announcementShow: flags["announce-show"] as never, announcementPosition: flags["announce-position"] as never, basePath: flags.base });
     const gamePort = new URL(gameUrl).port;
     const baseEnv = new URL(box.publicUrl).pathname.replace(/\/$/, "");
     console.log(`mock box for "${gameId}"
@@ -146,6 +146,7 @@ Events and casts from your game print below (✗ = would be rejected, or isn't d
   bargames mock-box [dir]        pretend box: fake core on :7199 + fake gateway on :7080 in front of your game
                                  --tv-pin 1234: require a TV PIN for casting · --no-cast: casting turned off
                                  --announce "Last call at 1:30": a pretend staff announcement
+                                 --announce-show phones|tvs|everywhere · --announce-position top|bottom (SDK 0.11.1)
                                  --base /my-game: serve the game under a path prefix, like the box's path routing
       [--game http://127.0.0.1:PORT] [--port 7080] [--core-port 7199] [--name "Display Name"]
   bargames check [dir]           conformance checks against your running game (rooms only on the mock box's game; add --live last to override)
