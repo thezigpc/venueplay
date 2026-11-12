@@ -410,3 +410,36 @@ test("casting from a game: a slow TV gets \"starting\" before the phone gives up
     b.close();
   }
 });
+
+test("box password: logging in signs staff in venue-wide; games can check it; guesses are limited", async () => {
+  const b = await boot();
+  try {
+    await b.json("PUT", "/api/venue", { domain: "example.com", publicScheme: "https", publicPort: null }, b.authed);
+    // Logging in on the venue's admin address also sets the venue-wide staff cookie.
+    const r = await b.json("POST", "/api/auth/login", { password: "correct horse" }, { "x-forwarded-host": "admin.example.com" });
+    const cookies = r.headers.getSetCookie().join(" | ");
+    assert.match(cookies, /bg_staff=staff\.\d+\.[\w-]+\.[\w-]+; Max-Age=43200; Domain=example\.com; Path=\/;/);
+    // From an IP address there's no shared domain: no staff cookie (the Settings hand-off covers it).
+    const ip = await b.json("POST", "/api/auth/login", { password: "correct horse" }, { "x-forwarded-host": "192.168.77.13" });
+    assert.doesNotMatch(ip.headers.getSetCookie().join(" | "), /bg_staff=/);
+    const out = await b.json("POST", "/api/auth/logout", undefined, { "x-forwarded-host": "admin.example.com" });
+    assert.match(out.headers.getSetCookie().join(" | "), /bg_staff=;.*Domain=example\.com/, "logout clears it");
+
+    // A game asks whether what was typed is the box password.
+    await b.json("POST", "/api/games/install", { manifest: menu, devTarget: "http://menu" }, b.authed);
+    const g = { authorization: `Bearer ${b.games.get("menu")!.token}` };
+    const check = async (password: string, clientIp = "10.0.0.5") => ((await (await b.json("POST", "/internal/venue-password", { password, clientIp }, g)).json()) as { ok: boolean; reason?: string });
+    assert.equal((await b.json("POST", "/internal/venue-password", { password: "correct horse" })).status, 401, "games only");
+    assert.deepEqual(await check("correct horse"), { ok: true });
+    assert.deepEqual(await check("nope"), { ok: false, reason: "wrong" });
+    for (let i = 0; i < 10; i++) await check("guess", "10.0.0.66");
+    assert.deepEqual(await check("correct horse", "10.0.0.66"), { ok: false, reason: "blocked" }, "that guest is locked out");
+    assert.deepEqual(await check("correct horse", "10.0.0.5"), { ok: true }, "others aren't");
+
+    // The box's own login is limited too.
+    for (let i = 0; i < 10; i++) await b.json("POST", "/api/auth/login", { password: "x" });
+    assert.equal((await b.json("POST", "/api/auth/login", { password: "correct horse" })).status, 429);
+  } finally {
+    b.close();
+  }
+});

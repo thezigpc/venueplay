@@ -142,7 +142,7 @@ test("server sdk: connected flow (venue, emit, command auth)", async () => {
   game.close();
 });
 
-test("server sdk: gateway headers are trusted only on a box", () => {
+test("server sdk: gateway headers are trusted only on a box", async () => {
   const req = (headers: Record<string, string>) =>
     ({ headers, socket: { remoteAddress: "10.0.0.9" } }) as unknown as import("node:http").IncomingMessage;
   const spoof = { "x-bargames-via": "1", "x-bargames-client-ip": "6.6.6.6", "x-bargames-access": "pin" };
@@ -160,6 +160,7 @@ test("server sdk: gateway headers are trusted only on a box", () => {
   assert.equal(onBox.isStaff(req(staff)), true);
   assert.equal(onBox.isStaff(req({ "x-bargames-staff": "1" })), false, "not via the gateway");
   assert.equal(standalone.isStaff(req(staff)), false, "standalone never trusts it");
+  assert.equal(await standalone.checkVenuePassword("anything"), false, "standalone: never the box password");
 });
 
 test("client sdk: standalone context never restyles the game", async () => {

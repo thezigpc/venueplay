@@ -1,4 +1,4 @@
-import { GATEWAY_PROOF_HEADER, signToken, verifyToken, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
+import { GATEWAY_PROOF_HEADER, signToken, STAFF_COOKIE, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
 import { GAMES_LINK_CSS, gamesLinkHtml, HEADERS, PATHS, themeToCss, type VenueContext } from "@bargames/sdk";
 import httpProxy from "http-proxy";
 import { createHmac, randomBytes } from "node:crypto";
@@ -8,10 +8,7 @@ import { checkAccess, type AccessDecision } from "./ipgate.js";
 import { closedPage, hubPage, joinWifiPage, pinPage, simplePage } from "./pages.js";
 
 const PIN_COOKIE = "bg_pin";
-/** Staff signed in to the box admin (set by the /__bargames/staff hand-off). Never passed to games. */
-export const STAFF_COOKIE = "bg_staff";
-/** As long as a box admin login. */
-const STAFF_TTL_MS = 12 * 3600e3;
+export { STAFF_COOKIE };
 
 export interface GatewayDeps {
   config: () => GatewayConfig | undefined;

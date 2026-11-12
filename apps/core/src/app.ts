@@ -1,4 +1,5 @@
-import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, type Logger } from "@bargames/common";
+import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_TTL_MS, type Logger } from "@bargames/common";
+import { PasswordLimiter } from "./limiter.js";
 import {
   checkTheme,
   HEADERS,
@@ -353,9 +354,34 @@ export function createApp(d: AppDeps) {
     res.json({ setup: d.auth.isSetup(), loggedIn: d.auth.check(readCookie(req.headers.cookie, ADMIN_COOKIE)), canSetup: fromLan(req) });
   });
 
+  /** The client's address: the gateway's word when it proves itself, else the socket. */
+  const clientIpOf = (req: Request): string => {
+    const proof = req.headers[GATEWAY_PROOF_HEADER];
+    const viaGateway = typeof proof === "string" && proof && safeEqual(proof, d.config.gatewayToken);
+    return (viaGateway ? String(req.headers[HEADERS.clientIp] ?? "") : "") || req.socket.remoteAddress || "unknown";
+  };
+  const passwords = new PasswordLimiter();
+
+  /**
+   * The venue domain for the staff cookie, when the admin is on it (admin.example.com).
+   * From an IP or Tailscale address there's no shared domain: the Settings hand-off covers it.
+   */
+  const staffCookieDomain = (req: Request): string | undefined => {
+    const domain = d.state.venue.get().domain;
+    const host = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "").split(":")[0].toLowerCase();
+    return domain && domain !== "localhost" && host.endsWith(`.${domain}`) ? domain : undefined;
+  };
+
   const login = (req: Request, res: Response) => {
     const secure = req.headers["x-forwarded-proto"] === "https";
     res.cookie(ADMIN_COOKIE, d.auth.issue(), { httpOnly: true, sameSite: "strict", secure, maxAge: 12 * 3600e3, path: "/" });
+    // Signed in here = signed in to every game's and app's own admin (SDK 0.7.0+): the
+    // gateway checks this cookie and tells games "staff", never passing the cookie on.
+    const domain = staffCookieDomain(req);
+    if (domain) {
+      const token = signToken(d.config.gatewayToken, "staff", Date.now() + STAFF_TTL_MS, randomBytes(8).toString("base64url"));
+      res.cookie(STAFF_COOKIE, token, { httpOnly: true, sameSite: "lax", secure, maxAge: STAFF_TTL_MS, path: "/", domain, encode: String });
+    }
   };
 
   app.post(
@@ -372,15 +398,46 @@ export function createApp(d: AppDeps) {
   );
 
   app.post("/api/auth/login", (req, res) => {
-    if (!d.auth.verify(String(req.body?.password ?? ""))) return void res.status(401).json({ error: "wrong password" });
+    const ip = clientIpOf(req);
+    if (!passwords.allowed(ip)) return void res.status(429).json({ error: "too many wrong passwords; try again in 15 minutes" });
+    if (!d.auth.verify(String(req.body?.password ?? ""))) {
+      passwords.failed(ip);
+      return void res.status(401).json({ error: "wrong password" });
+    }
+    passwords.succeeded(ip);
     login(req, res);
     res.json({ ok: true });
   });
 
-  app.post("/api/auth/logout", (_req, res) => {
+  app.post("/api/auth/logout", (req, res) => {
     res.clearCookie(ADMIN_COOKIE, { path: "/" });
+    const domain = staffCookieDomain(req);
+    if (domain) res.clearCookie(STAFF_COOKIE, { path: "/", domain });
     res.json({ ok: true });
   });
+
+  /**
+   * SDK 0.8.0: a game/app login form accepts the box admin password too. The game sends
+   * what was typed (and who typed it); the box answers yes or no, with the same limits as
+   * its own login, per game + client and box-wide.
+   */
+  app.post(
+    "/internal/venue-password",
+    h(async (req, res) => {
+      const game = gameAuth(req);
+      const { password, clientIp } = (req.body ?? {}) as { password?: unknown; clientIp?: unknown };
+      const source = `${game.id}:${typeof clientIp === "string" ? clientIp.slice(0, 64) : "?"}`;
+      if (!passwords.allowed(source)) return void res.json({ ok: false, reason: "blocked" });
+      const ok = typeof password === "string" && password.length > 0 && password.length <= 256 && d.auth.verify(password);
+      if (!ok) {
+        passwords.failed(source);
+        return void res.json({ ok: false, reason: "wrong" });
+      }
+      passwords.succeeded(source);
+      d.log.info("auth", "box password used in a game", { game: game.id, clientIp });
+      res.json({ ok: true });
+    }),
+  );
 
   app.use("/api", (req, _res, next) => {
     if (!d.auth.check(readCookie(req.headers.cookie, ADMIN_COOKIE))) return next(new HttpError(401, "login required"));

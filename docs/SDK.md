@@ -185,6 +185,12 @@ watchVenue((c) => { link.update(c); news.update(c); }, 30_000);
 - In status, `joinPath` on a room (e.g. `/join/KQ7P`) puts a **Join** button for it on
   the venue's games list (venue and patron rooms only).
 
+**SDK 0.8.0 additions:**
+- `bg.checkVenuePassword(password, clientIp?)` (server): true when it's the venue box's admin
+  password, so the game's admin login accepts it too (the box limits guesses). Kit 0.5.0:
+  `createAdminAuth({ venuePassword: (pw, ip) => bg.checkVenuePassword(pw, ip) })`.
+- Box admin login sets the venue-wide staff cookie, so `bg.isStaff` holds on direct visits.
+
 **SDK 0.7.0 additions:**
 - `bg.isStaff(req)` (server): true for staff signed in to the box admin (the gateway's
   `x-bargames-staff: 1`, trusted only on a box). With the game kit:

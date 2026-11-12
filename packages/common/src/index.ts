@@ -91,6 +91,11 @@ export function verifyToken(secret: string, kind: string, token: string | undefi
   return { expiresAt, nonce };
 }
 
+/** The venue-wide staff cookie (gateway-signed "staff" token): staff signed in to the box admin. */
+export const STAFF_COOKIE = "bg_staff";
+/** Staff cookies last as long as a box admin login. */
+export const STAFF_TTL_MS = 12 * 3600e3;
+
 /** "Bearer xyz" → "xyz" */
 export function bearer(header: string | string[] | undefined): string {
   const h = Array.isArray(header) ? header[0] : header;

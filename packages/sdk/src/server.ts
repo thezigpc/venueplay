@@ -101,6 +101,12 @@ export interface BarGames {
    * game kit: adminRouter({ ..., trusted: (req) => bg.isStaff(req) }). Always false off a box.
    */
   isStaff(req: IncomingMessage): boolean;
+  /**
+   * True when `password` is the venue box's admin password (SDK 0.8.0), so the game's admin
+   * login can accept it too. The box limits wrong guesses itself (per game + client and
+   * box-wide); pass the client's IP (bg.clientIp(req)). Always false off a box.
+   */
+  checkVenuePassword(password: string, clientIp?: string): Promise<boolean>;
   /** Flush queued events (call on shutdown). */
   flush(): Promise<void>;
 }
@@ -312,6 +318,15 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
     gateway,
     clientIp: (req) => gateway(req).clientIp ?? "unknown",
     isStaff: (req) => gateway(req).staff,
+    async checkVenuePassword(password, clientIp) {
+      if (!connected || typeof password !== "string" || !password) return false;
+      try {
+        const r = await core("POST", "/internal/venue-password", { password, clientIp });
+        return r.ok && ((await r.json()) as { ok?: boolean }).ok === true;
+      } catch {
+        return false;
+      }
+    },
     flush: async () => {
       await draining;
     },

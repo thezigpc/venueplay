@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "image": "ghcr.io/thezigpc/bingo:1.0.0",
   "port": 3002,
-  "sdk": { "version": "0.7.1", "level": 3 },
+  "sdk": { "version": "0.8.0", "level": 3 },
   "routes": {
     "player": "/",
     "table": "/join/{code}?as=table",

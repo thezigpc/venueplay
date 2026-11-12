@@ -95,6 +95,8 @@ export interface MockBoxOptions {
   castFromGames?: boolean;
   /** A pretend staff announcement, shown by announcementBanner(). */
   announcement?: string;
+  /** The pretend box admin password bg.checkVenuePassword() accepts (default "box-password"). */
+  venuePassword?: string;
 }
 
 /** The mock box's pretend venue TVs. */
@@ -142,6 +144,12 @@ export function mockBox(o: MockBoxOptions) {
     if (req.headers.authorization !== `Bearer ${DEV_TOKEN}`) {
       console.log(c.bad(`✗ core: ${req.method} ${req.url} with a wrong/missing token (expected BG_GAME_TOKEN=${DEV_TOKEN})`));
       return json(401, { error: "bad game token" });
+    }
+    if (req.url === "/internal/venue-password" && req.method === "POST") {
+      const { password } = JSON.parse((await readBody(req)) || "{}") as { password?: string };
+      const ok = password === (o.venuePassword ?? "box-password");
+      console.log(`${ok ? c.ok("box password accepted") : c.warn("box password refused")} (bg.checkVenuePassword)`);
+      return json(200, { ok });
     }
     if (req.url === "/internal/venue") return json(200, mockContext(o.gameId, o.displayName, publicUrl, { announcement: o.announcement, app: o.manifest ? isApp(o.manifest) : false }));
     if (req.url === "/internal/displays" && req.method === "GET") {
