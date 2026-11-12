@@ -82,13 +82,15 @@ switch (cmd) {
     const gameUrl = gameUrlFor(m?.port);
     const name = flags.name ?? `${m?.name ?? gameId} (mock)`;
     const tvPin = flags["tv-pin"] ?? "";
-    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined, announcement: flags.announce });
+    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined, announcement: flags.announce, basePath: flags.base });
     const gamePort = new URL(gameUrl).port;
+    const baseEnv = new URL(box.publicUrl).pathname.replace(/\/$/, "");
     console.log(`mock box for "${gameId}"
 
   1. Start your game server with these env vars (port ${gamePort}):
-       bash:        BG_GAME_ID=${gameId} BG_CORE_URL=http://127.0.0.1:${corePort} BG_GAME_TOKEN=${DEV_TOKEN} PORT=${gamePort} <your start command>
-       PowerShell:  $env:BG_GAME_ID="${gameId}"; $env:BG_CORE_URL="http://127.0.0.1:${corePort}"; $env:BG_GAME_TOKEN="${DEV_TOKEN}"; $env:PORT="${gamePort}"
+       bash:        BG_GAME_ID=${gameId} BG_CORE_URL=http://127.0.0.1:${corePort} BG_GAME_TOKEN=${DEV_TOKEN} PORT=${gamePort}${baseEnv ? ` BG_BASE_PATH=${baseEnv}` : ""} <your start command>
+       PowerShell:  $env:BG_GAME_ID="${gameId}"; $env:BG_CORE_URL="http://127.0.0.1:${corePort}"; $env:BG_GAME_TOKEN="${DEV_TOKEN}"; $env:PORT="${gamePort}"${baseEnv ? `; $env:BG_BASE_PATH="${baseEnv}"` : ""}
+     ${baseEnv ? `Served under ${baseEnv}/ (path routing, SDK 0.10.0).` : "Try --base /" + gameId + " to test path routing (https://venue/" + gameId + "/), SDK 0.10.0."}
   2. Open ${box.publicUrl} : your game behind a pretend gateway, in test branding
      (teal / pink / yellow, Georgia font, named "${name}").
   3. In another terminal, from the game repo:
@@ -139,6 +141,7 @@ Events and casts from your game print below (✗ = would be rejected, or isn't d
   bargames mock-box [dir]        pretend box: fake core on :7199 + fake gateway on :7080 in front of your game
                                  --tv-pin 1234: require a TV PIN for casting · --no-cast: casting turned off
                                  --announce "Last call at 1:30": a pretend staff announcement
+                                 --base /my-game: serve the game under a path prefix, like the box's path routing
       [--game http://127.0.0.1:PORT] [--port 7080] [--core-port 7199] [--name "Display Name"]
   bargames check [dir]           conformance checks against your running game (rooms only on the mock box's game; add --live last to override)
       [--room CODE]              also check one live room (its pendingClaims, times, table view)

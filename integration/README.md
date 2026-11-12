@@ -21,6 +21,35 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.10.0 (games under a path: venue.example.com/bingo)
+
+The box is moving to one hostname per venue: the games list at `https://<venue host>/`, each
+game at `/<game>/`. A game that can't run under a path keeps its own subdomain, so nothing
+breaks; adopt this when you can. It also lets a self-hosted game sit behind any reverse
+proxy (`BASE_PATH=/bingo`). Unset, the game runs at the root exactly as before.
+
+- **The proxy strips the prefix.** Your server keeps its routes: `/api`, `/admin`,
+  `/socket.io`, `/__bargames/*`. Nothing to change on the server's routing.
+- **Your server learns the prefix** from `BG_BASE_PATH` (set by the box) or `BASE_PATH`
+  (self-hosted): `bg.basePath`, or `basePathFromEnv()`. `VenueContext.game.basePath` too.
+- **Put it in your HTML** when you serve index.html: `injectBasePath(html, bg.basePath)` adds
+  `<meta name="bargames-base" content="/bingo">` and `<base href="/bingo/">`. With the game
+  kit (0.6.0+) use `serveSpa(app, { dist })`, which does it for you.
+- **Build the client with Vite `base: "./"`** so asset URLs are relative.
+- **Client links:** `bgUrl("/api/rooms")` → `/bingo/api/rooms`; `basePath()` for React
+  Router's `basename`; socket.io: `io(origin, { path: socketIoPath() })` (not
+  `io(origin + "/bingo")`: socket.io reads a URL's path as a namespace). The SDK's own
+  `getVenue()` / `watchVenue()` already use the prefix.
+- **`bg.publicUrl(path)`** keeps the prefix (`https://venue.example.com/bingo/join/ABCD`).
+  `joinUrl(base, path)` does the same for your own links.
+- **Declare it** in bargames.json: `"routing": { "basePath": true }`. Without it the box keeps
+  the game on its subdomain.
+- **Test it:** `npx bargames mock-box --base /my-game`, start the game with the
+  `BG_BASE_PATH` it prints, and click through `http://localhost:7080/my-game/`: every page,
+  join link, QR, socket and the admin. The mock gateway strips the prefix, redirects `/` to
+  it, puts it back on your redirects, and 404s anything outside it (a bare `"/api/…"` fetch
+  shows up there).
+
 ## What's new in SDK 0.9.0 (results, countdowns, attention, media apps)
 
 **Use 0.9.1:** `bargames check` now runs the media checks for apps too (0.9.0 skipped them), and `validate` no longer warns about level 3 on media apps.

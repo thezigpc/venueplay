@@ -6,6 +6,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { basePathFromEnv, joinUrl } from "./base.js";
 import { standaloneContext } from "./context.js";
 import {
   ENV,
@@ -64,6 +65,12 @@ export interface BarGames {
   readonly gameId: string;
   /** True on a box (core URL and token present). Off a box every call is a no-op. */
   readonly connected: boolean;
+  /**
+   * SDK 0.10.0: the path prefix this game is served under ("/bingo"), from BG_BASE_PATH (the box)
+   * or BASE_PATH (self-hosted behind your own proxy). "" at the root. The proxy strips it, so your
+   * routes stay "/api", "/socket.io"…; put it in the HTML you serve with injectBasePath().
+   */
+  readonly basePath: string;
   venue(): Promise<VenueContext>;
   /**
    * An absolute link on the venue's address for this game, e.g. publicUrl(`/join/${code}`)
@@ -317,11 +324,12 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
   return {
     gameId,
     connected,
+    basePath: basePathFromEnv(),
     venue,
     publicUrl: async (path) => {
       if (!connected) return undefined;
       const base = (await venue()).game.publicUrl;
-      return base ? new URL(path, base).toString() : undefined;
+      return base ? joinUrl(base, path) : undefined;
     },
     emit,
     onCommand: (name, handler) => void commands.set(name, handler),
@@ -444,3 +452,6 @@ export type {
   RoomSummary,
   VenueContext,
 } from "./protocol.js";
+
+// SDK 0.10.0: running under a path prefix (see base.ts).
+export { BASE_META, basePathFromEnv, injectBasePath, joinUrl, normalizeBasePath } from "./base.js";

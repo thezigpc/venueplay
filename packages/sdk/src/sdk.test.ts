@@ -486,3 +486,74 @@ test("0.9.0: off a box the new calls do nothing; on the mock box they work; mani
     game.close();
   }
 });
+
+test("0.10.0: base path helpers, manifest routing, publicUrl keeps the prefix", async () => {
+  const { normalizeBasePath, injectBasePath, joinUrl, basePath, bgUrl, socketIoPath, basePathFromEnv } = await import("./base.js");
+  assert.equal(normalizeBasePath("bingo/"), "/bingo");
+  assert.equal(normalizeBasePath("/a/b//"), "/a/b");
+  assert.equal(normalizeBasePath("/"), "");
+  assert.equal(normalizeBasePath(undefined), "");
+  assert.equal(normalizeBasePath('/x"><script>'), "");
+  assert.equal(basePathFromEnv({ BASE_PATH: "/pool" }), "/pool");
+  assert.equal(basePathFromEnv({ BG_BASE_PATH: "/bingo", BASE_PATH: "/pool" }), "/bingo");
+  assert.equal(basePathFromEnv({}), "");
+
+  const html = "<!doctype html><html><head><title>x</title></head></html>";
+  assert.equal(injectBasePath(html, ""), html);
+  const once = injectBasePath(html, "/bingo");
+  assert.ok(once.includes('<head><meta name="bargames-base" content="/bingo"><base href="/bingo/">'));
+  assert.equal(injectBasePath(once, "/bingo"), once);
+
+  assert.equal(joinUrl("https://v.example.com/bingo", "/join/AB"), "https://v.example.com/bingo/join/AB");
+  assert.equal(joinUrl("https://v.example.com/", "/join/AB"), "https://v.example.com/join/AB");
+  assert.equal(joinUrl("https://v.example.com/bingo/", "/"), "https://v.example.com/bingo/");
+
+  const fakeDoc = (content?: string) => ({ querySelector: () => (content === undefined ? null : { getAttribute: () => content }) }) as unknown as Document;
+  assert.equal(basePath(fakeDoc("/bingo")), "/bingo");
+  assert.equal(bgUrl("/api/rooms", fakeDoc("/bingo")), "/bingo/api/rooms");
+  assert.equal(bgUrl("//cdn.example/x", fakeDoc("/bingo")), "//cdn.example/x");
+  assert.equal(bgUrl("/api/rooms", fakeDoc()), "/api/rooms");
+  assert.equal(socketIoPath(fakeDoc("/bingo")), "/bingo/socket.io");
+  assert.equal(basePath(), ""); // no document in Node
+
+  const m = validateManifest({ ...base, routing: { basePath: true } });
+  assert.ok(m.ok && m.manifest.routing?.basePath === true);
+  assert.ok(!validateManifest({ ...base, routing: { basePath: "yes" } }).ok);
+  assert.ok(validateManifest(base).ok && !(validateManifest(base) as { manifest: { routing?: unknown } }).manifest.routing);
+});
+
+test("0.10.0: the mock box serves a game under a prefix (strip, redirect, Location, publicUrl)", async () => {
+  const { mockBox, DEV_TOKEN } = await import("./devbox.js");
+  const seen: string[] = [];
+  const game = createServer((req, res) => {
+    seen.push(req.url ?? "");
+    if (req.url === "/old") return void res.writeHead(302, { location: "/new" }).end();
+    res.end("ok");
+  });
+  await new Promise<void>((r) => game.listen(0, "127.0.0.1", r));
+  const box = mockBox({ gameId: "pool", displayName: "Pool (mock)", gameUrl: `http://127.0.0.1:${(game.address() as AddressInfo).port}`, corePort: 0, gatewayPort: 0, basePath: "pool/" });
+  await Promise.all([new Promise((r) => box.core.once("listening", r)), new Promise((r) => box.gateway.once("listening", r))]);
+  const gw = `http://127.0.0.1:${(box.gateway.address() as AddressInfo).port}`;
+  try {
+    assert.ok(box.publicUrl.endsWith("/pool"));
+    let r = await fetch(`${gw}/pool/api/x?y=1`);
+    assert.equal(await r.text(), "ok");
+    assert.equal(seen.at(-1), "/api/x?y=1");
+    r = await fetch(`${gw}/`, { redirect: "manual" });
+    assert.equal(r.headers.get("location"), "/pool/");
+    r = await fetch(`${gw}/pool?a=1`, { redirect: "manual" });
+    assert.equal(r.headers.get("location"), "/pool/?a=1");
+    r = await fetch(`${gw}/other/thing`);
+    assert.equal(r.status, 404);
+    r = await fetch(`${gw}/pool/old`, { redirect: "manual" });
+    assert.equal(r.headers.get("location"), "/pool/new");
+
+    const bg = createBarGames({ gameId: "pool", coreUrl: `http://127.0.0.1:${(box.core.address() as AddressInfo).port}`, token: DEV_TOKEN });
+    assert.equal(await bg.publicUrl("/join/ABCD"), `${box.publicUrl}/join/ABCD`);
+    assert.equal((await bg.venue()).game.basePath, "/pool");
+  } finally {
+    box.core.close();
+    box.gateway.close();
+    game.close();
+  }
+});

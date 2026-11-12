@@ -11,6 +11,7 @@ import { connect } from "node:net";
 import { isApp, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
 import { HEADERS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
 import { DEFAULT_THEME } from "./theme.js";
+import { joinUrl, normalizeBasePath } from "./base.js";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
@@ -59,7 +60,7 @@ export function mockContext(gameId: string, displayName: string, publicUrl: stri
       units: "imperial",
       ...(opts.announcement ? { announcement: { id: "mock-1", text: opts.announcement } } : {}),
     },
-    game: { id: gameId, displayName, tagline: "Branded by the mock box", publicUrl, theme: TEST_THEME },
+    game: { id: gameId, displayName, tagline: "Branded by the mock box", publicUrl, theme: TEST_THEME, ...(normalizeBasePath(new URL(publicUrl).pathname) ? { basePath: normalizeBasePath(new URL(publicUrl).pathname) } : {}) },
     standalone: false,
     generatedAt: new Date().toISOString(),
   };
@@ -97,6 +98,8 @@ export interface MockBoxOptions {
   announcement?: string;
   /** The pretend box admin password bg.checkVenuePassword() accepts (default "box-password"). */
   venuePassword?: string;
+  /** SDK 0.10.0: serve the game under this prefix ("/bingo"), like the box's path routing. */
+  basePath?: string;
 }
 
 /** The mock box's pretend venue TVs. */
@@ -109,7 +112,9 @@ export const FAKE_TVS: readonly { id: string; name: string; group: string; unpai
 
 export function mockBox(o: MockBoxOptions) {
   let countdown: Countdown | undefined;
-  const publicUrl = `http://localhost:${o.gatewayPort}`;
+  const base = normalizeBasePath(o.basePath);
+  const origin = `http://localhost:${o.gatewayPort}`;
+  const publicUrl = origin + base;
   const declared = new Set(o.manifest?.events ?? []);
   /** fake TV id -> room code it shows. */
   const showing = new Map<string, string>();
@@ -239,7 +244,7 @@ export function mockBox(o: MockBoxOptions) {
         }
       }
       // Apps have no rooms: the box casts their TV view as is.
-      const url = new URL(display ? o.manifest.routes.table : tableUrl(o.manifest, room as string)!, publicUrl).toString();
+      const url = joinUrl(publicUrl, display ? o.manifest.routes.table : tableUrl(o.manifest, room as string)!);
       for (const id of ids) {
         const tv = FAKE_TVS.find((t) => t.id === id);
         if (!tv) {
@@ -292,6 +297,14 @@ export function mockBox(o: MockBoxOptions) {
     h["x-forwarded-host"] = req.headers.host ?? "";
     return h;
   };
+  /** Where a request goes under the prefix: the game's own path, a redirect, or nowhere. */
+  const underBase = (url: string): { path?: string; redirect?: string } => {
+    if (!base) return { path: url };
+    const [p, q] = [url.split("?")[0], url.includes("?") ? url.slice(url.indexOf("?")) : ""];
+    if (p === base) return { redirect: `${base}/${q}` };
+    if (p === "/") return { redirect: `${base}/` };
+    return p.startsWith(base + "/") ? { path: url.slice(base.length) } : {};
+  };
   const gateway = createServer((req, res) => {
     // Pretend staff sign-in: what the box's "Settings" link does (no box login to check here).
     // /__bargames/staff?next=/admin signs you in; ?off=1 signs you out.
@@ -307,7 +320,20 @@ export function mockBox(o: MockBoxOptions) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(html);
     });
-    const up = request({ host: target.hostname, port: target.port, method: req.method, path: req.url, headers: forwardHeaders(req) }, (r) => {
+    // Path routing (SDK 0.10.0): like the box, strip the prefix before the game sees the request.
+    const routed = underBase(req.url ?? "/");
+    if (routed.redirect) {
+      res.writeHead(302, { location: routed.redirect });
+      return void res.end();
+    }
+    if (routed.path === undefined) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      return void res.end(`mock gateway: the game is served under ${base}/ (started with --base ${base})`);
+    }
+    const up = request({ host: target.hostname, port: target.port, method: req.method, path: routed.path, headers: forwardHeaders(req) }, (r) => {
+      // The game's own redirects ("/admin") get the prefix back, as the box gateway does.
+      const loc = r.headers.location;
+      if (base && typeof loc === "string" && loc.startsWith("/") && !loc.startsWith("//") && !loc.startsWith(base + "/")) r.headers.location = base + loc;
       res.writeHead(r.statusCode ?? 502, r.headers);
       r.pipe(res);
     });
@@ -318,9 +344,11 @@ export function mockBox(o: MockBoxOptions) {
     req.pipe(up);
   });
   gateway.on("upgrade", (req, socket, head) => {
+    const path = underBase(req.url ?? "/").path;
+    if (path === undefined) return void socket.destroy();
     const up = connect(Number(target.port || 80), target.hostname, () => {
       const h = forwardHeaders(req);
-      const lines = [`${req.method} ${req.url} HTTP/1.1`, ...Object.entries(h).flatMap(([k, v]) => (Array.isArray(v) ? v.map((x) => `${k}: ${x}`) : v === undefined ? [] : [`${k}: ${v}`]))];
+      const lines = [`${req.method} ${path} HTTP/1.1`, ...Object.entries(h).flatMap(([k, v]) => (Array.isArray(v) ? v.map((x) => `${k}: ${x}`) : v === undefined ? [] : [`${k}: ${v}`]))];
       up.write(lines.join("\r\n") + "\r\n\r\n");
       if (head.length) up.write(head);
       up.pipe(socket);
@@ -352,7 +380,7 @@ async function mockGamesList(o: MockBoxOptions, publicUrl: string): Promise<stri
   const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
   const rooms = (st.rooms ?? []).filter((r) => r.kind !== "private");
   const items = rooms
-    .map((r) => `<li>${esc(r.code)} · ${r.players} player(s)${r.joinPath ? ` · <a href="${esc(new URL(r.joinPath, publicUrl).toString())}">Join</a>` : " · <i>no joinPath, so no Join link</i>"}</li>`)
+    .map((r) => `<li>${esc(r.code)} · ${r.players} player(s)${r.joinPath ? ` · <a href="${esc(joinUrl(publicUrl, r.joinPath))}">Join</a>` : " · <i>no joinPath, so no Join link</i>"}</li>`)
     .join("");
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Games (mock box)</title>
 <body style="font-family:system-ui;max-width:520px;margin:24px auto;padding:0 16px"><h1>Test Venue: games (mock)</h1>

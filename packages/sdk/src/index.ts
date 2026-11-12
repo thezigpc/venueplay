@@ -6,3 +6,4 @@ export * from "./theme.js";
 export * from "./manifest.js";
 export * from "./context.js";
 export * from "./links.js";
+export * from "./base.js";

@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.9.1";
+export const SDK_VERSION = "0.10.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -117,8 +117,10 @@ export interface VenueContext {
     displayName: string;
     tagline?: string;
     iconUrl?: string;
-    /** This game's public origin, e.g. https://bingo.example.com */
+    /** This game's public address, e.g. https://bingo.example.com or https://venue.example.com/bingo */
     publicUrl?: string;
+    /** SDK 0.10.0: the path prefix when the game is served under one ("/bingo"), else absent. */
+    basePath?: string;
     /** Venue theme with the game's overrides applied. */
     theme: VenueTheme;
   };
@@ -302,6 +304,8 @@ export const ENV = {
   token: "BG_GAME_TOKEN",
   publicUrl: "BG_PUBLIC_URL",
   dataDir: "BG_DATA_DIR",
+  /** SDK 0.10.0: the path prefix the box serves the game under ("/bingo"), when it does. */
+  basePath: "BG_BASE_PATH",
 } as const;
 
 /** Reserved paths on every game hostname. */

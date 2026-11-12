@@ -66,6 +66,12 @@ export interface GameManifest {
    * (e.g. ["youtube"]). Declares it a media provider (media_list/media_play/media_stop).
    */
   media?: { launch: string[] };
+  /**
+   * SDK 0.10.0: basePath true = the game works under a path prefix (https://venue/<game>/):
+   * it reads BG_BASE_PATH, injects it into its HTML and builds links with it. Without it the
+   * box keeps the game on its own subdomain.
+   */
+  routing?: { basePath: boolean };
   /** Static, non-secret environment. Keys starting with BG_ are reserved. */
   env: Record<string, string>;
   minBoxVersion?: string;
@@ -169,6 +175,13 @@ export function validateManifest(input: unknown): ManifestResult {
   if (!isObj(env) || !Object.values(env).every((v) => typeof v === "string")) errors.push("env: object of string values");
   else for (const k of Object.keys(env)) if (k.startsWith("BG_")) errors.push(`env.${k}: BG_ variables are reserved for the box`);
 
+  let routing: { basePath: boolean } | undefined;
+  if (m.routing !== undefined) {
+    const bp = isObj(m.routing) ? m.routing.basePath : undefined;
+    if (typeof bp !== "boolean") errors.push("routing.basePath: boolean");
+    else routing = { basePath: bp };
+  }
+
   if (m.minBoxVersion !== undefined && (!isStr(m.minBoxVersion) || !SEMVER.test(m.minBoxVersion))) errors.push("minBoxVersion: semver");
   let media: { launch: string[] } | undefined;
   if (m.media !== undefined) {
@@ -210,6 +223,7 @@ export function validateManifest(input: unknown): ManifestResult {
     env: env as Record<string, string>,
     minBoxVersion: m.minBoxVersion as string | undefined,
     ...(media ? { media } : {}),
+    ...(routing ? { routing } : {}),
   };
   return { ok: true, manifest, warnings };
 }

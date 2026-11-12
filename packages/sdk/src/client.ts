@@ -3,6 +3,7 @@
 
 import { PATHS, type VenueContext } from "./protocol.js";
 import { themeCssVars } from "./theme.js";
+import { basePath, bgUrl } from "./base.js";
 import { activeAnnouncement, activeCountdown, formatCountdown, GAMES_LINK_CSS, gamesLinkHtml, type GamesLinkOptions } from "./links.js";
 
 let cache: Promise<VenueContext | null> | undefined;
@@ -21,7 +22,7 @@ export interface VenueOptions {
  */
 export function getVenue(opts: VenueOptions & { refresh?: boolean } = {}): Promise<VenueContext | null> {
   if (!cache || opts.refresh) {
-    const url = opts.base ? new URL(PATHS.venue, opts.base).toString() : PATHS.venue;
+    const url = opts.base ? new URL(basePath() + PATHS.venue, opts.base).toString() : bgUrl(PATHS.venue);
     cache = fetch(url, { cache: "no-store" })
       .then((r) => (r.ok ? (r.json() as Promise<VenueContext>) : null))
       .catch(() => null);
@@ -308,6 +309,7 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
   };
 }
 
+export { BASE_META, basePath, bgUrl, normalizeBasePath, socketIoPath } from "./base.js";
 export { activeAnnouncement, activeCountdown, ANNOUNCEMENT_HIDE_CSS, formatCountdown, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
 export type { Announcement, Countdown, LeaderboardSummary, PlayerProfile, VenueGameLink, VenueLocation } from "./protocol.js";
 
