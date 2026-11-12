@@ -143,7 +143,8 @@ export interface SystemStats {
   containers?: { name: string; state: string; status: string; cpuPercent?: number; memBytes?: number; memLimitBytes?: number }[];
   network?: { name: string; rxBytes: number; txBytes: number }[];
   casting?: { tvs: number; streaming: number; pages: number };
-  box: { version: string; coreUptimeSec: number; games: number; openRooms: number };
+  box: { version: string; latest?: string; coreUptimeSec: number; games: number; openRooms: number };
+  update?: { available: boolean; running: boolean; lastExit?: number; logTail?: string[] };
   reboot: { available: boolean; pending: boolean };
 }
 export interface Display {
@@ -264,6 +265,7 @@ export const api = {
   saveSchedule: (s: Schedule) => call<Schedule>("PUT", `/schedules/${encodeURIComponent(s.id)}`, s),
   deleteSchedule: (id: string) => call("DELETE", `/schedules/${encodeURIComponent(id)}`),
   systemStats: () => call<SystemStats>("GET", "/system/stats"),
+  updateBox: (version?: string) => call<{ ok: boolean; message?: string }>("POST", "/system/update", { version }),
   reboot: () => call<{ ok: boolean; message?: string }>("POST", "/system/reboot", { confirm: "reboot" }),
   updates: () => call<Updates>("GET", "/games/updates"),
   checkUpdates: () => call<Updates>("POST", "/games/updates/check"),

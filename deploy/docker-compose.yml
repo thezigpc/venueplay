@@ -1,13 +1,15 @@
-# Bar Games box. Copy to the box (e.g. /opt/bargames), add .env, then:
-#   docker compose up -d --build
+# Bar Games box. Two ways to run it:
+#   - Released images (boxes): set BARGAMES_VERSION in .env (e.g. 0.9.0), then
+#       docker compose pull && docker compose up -d      (or: bgctl self-update)
+#   - From source (development): leave BARGAMES_VERSION unset, then docker compose up -d --build
 # Games are NOT listed here: core creates them on demand (bg-game-<id>) through the
 # socket proxy, each on its own network.
 name: bargames
 
 services:
   core:
-    build: { context: .., dockerfile: deploy/Dockerfile, target: app }
-    image: bargames:dev
+    build: { context: .., dockerfile: deploy/Dockerfile, target: app, args: { BOX_VERSION: "${BARGAMES_VERSION:-dev}" } }
+    image: ghcr.io/thezigpc/bargames:${BARGAMES_VERSION:-dev}
     container_name: bargames-core
     restart: unless-stopped
     command: ["node", "apps/core/dist/index.js"]
@@ -34,7 +36,7 @@ services:
       start_period: 10s
 
   gateway:
-    image: bargames:dev
+    image: ghcr.io/thezigpc/bargames:${BARGAMES_VERSION:-dev}
     container_name: bargames-gateway
     restart: unless-stopped
     command: ["node", "apps/gateway/dist/index.js"]
@@ -53,8 +55,8 @@ services:
       core: { condition: service_healthy }
 
   broker:
-    build: { context: .., dockerfile: deploy/Dockerfile, target: broker }
-    image: bargames-broker:dev
+    build: { context: .., dockerfile: deploy/Dockerfile, target: broker, args: { BOX_VERSION: "${BARGAMES_VERSION:-dev}" } }
+    image: ghcr.io/thezigpc/bargames-broker:${BARGAMES_VERSION:-dev}
     container_name: bargames-broker
     restart: unless-stopped
     command: ["node", "apps/broker/dist/index.js"]

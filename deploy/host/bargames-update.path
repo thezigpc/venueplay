@@ -1,0 +1,10 @@
+# Bar Games: update the box when the admin asks (core writes update.request in its data folder).
+# Installed by deploy/host/install.sh, which fills in the real paths.
+[Unit]
+Description=Bar Games update request watcher
+
+[Path]
+PathExists=@DATA@/update.request
+
+[Install]
+WantedBy=multi-user.target

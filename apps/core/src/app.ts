@@ -893,7 +893,7 @@ export function createApp(d: AppDeps) {
   const sampler = new HostSampler({ diskPath: d.config.dataDir });
   const coreStarted = Date.now();
   /** The host helper (deploy/host/install.sh) leaves this marker; without it the box can't reboot itself. */
-  const hostHooks = (): { reboot?: boolean; installedAt?: string } => {
+  const hostHooks = (): { reboot?: boolean; update?: boolean; installedAt?: string } => {
     if (!d.config.dataDir) return {};
     try {
       return JSON.parse(readFileSync(path.join(d.config.dataDir, "host-hooks.json"), "utf8"));
@@ -902,6 +902,48 @@ export function createApp(d: AppDeps) {
     }
   };
   const rebootFile = () => (d.config.dataDir ? path.join(d.config.dataDir, "reboot.request") : undefined);
+  const dataFile = (name: string) => (d.config.dataDir ? path.join(d.config.dataDir, name) : undefined);
+  const readText = (name: string) => {
+    const f = dataFile(name);
+    try {
+      return f ? readFileSync(f, "utf8") : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** The latest released box version (repo VERSION on main), checked at most hourly. */
+  let latestCache: { at: number; version?: string } = { at: 0 };
+  const latestVersion = async (): Promise<string | undefined> => {
+    if (Date.now() - latestCache.at < 3600_000) return latestCache.version;
+    latestCache = { at: Date.now(), version: latestCache.version };
+    const repo = process.env.BARGAMES_REPO ?? "thezigpc/venueplay";
+    const tries = [
+      () => doFetch(`https://api.github.com/repos/${repo}/contents/VERSION?ref=main`, { headers: { accept: "application/vnd.github.raw+json", "user-agent": "bargames-box" }, signal: AbortSignal.timeout(8000) }),
+      () => doFetch(`https://raw.githubusercontent.com/${repo}/main/VERSION`, { signal: AbortSignal.timeout(8000) }),
+    ];
+    for (const t of tries) {
+      try {
+        const r = await t();
+        const v = r.ok ? (await r.text()).trim() : "";
+        if (/^\d+\.\d+\.\d+$/.test(v)) return (latestCache = { at: Date.now(), version: v }).version;
+      } catch {
+        /* next */
+      }
+    }
+    return latestCache.version;
+  };
+  const updateStatus = () => {
+    const running = Boolean(readText("update.request") !== undefined || readText("update.state") !== undefined);
+    const exit = readText("update.exit")?.trim();
+    const log = readText("update.log");
+    return {
+      available: Boolean(hostHooks().update),
+      running,
+      ...(exit !== undefined ? { lastExit: Number(exit) } : {}),
+      ...(log ? { logTail: log.split("\n").filter(Boolean).slice(-12) } : {}),
+    };
+  };
 
   app.get(
     "/api/system/stats",
@@ -918,9 +960,25 @@ export function createApp(d: AppDeps) {
         containers,
         network: broker?.network,
         casting: broker?.casting,
-        box: { version: d.config.boxVersion, coreUptimeSec: Math.round((Date.now() - coreStarted) / 1000), games: d.games.list().filter((g) => g.enabled).length, openRooms: rooms },
+        box: { version: d.config.boxVersion, latest: await latestVersion(), coreUptimeSec: Math.round((Date.now() - coreStarted) / 1000), games: d.games.list().filter((g) => g.enabled).length, openRooms: rooms },
+        update: updateStatus(),
         reboot: { available: Boolean(hostHooks().reboot), pending: Boolean(pending && existsSync(pending)) },
       });
+    }),
+  );
+
+  /** { version? }: updates Bar Games itself (host helper runs bgctl self-update; it snapshots and rolls back on failure). */
+  app.post(
+    "/api/system/update",
+    h(async (req, res) => {
+      const file = dataFile("update.request");
+      if (!file || !hostHooks().update) throw new HttpError(409, "This box can't update itself yet: run deploy/host/install.sh on it once (sudo).");
+      if (updateStatus().running) throw new HttpError(409, "An update is already running.");
+      const v = typeof req.body?.version === "string" ? req.body.version.trim() : "";
+      if (v && !/^\d+\.\d+\.\d+$/.test(v)) throw new HttpError(400, "version: x.y.z");
+      writeFileSync(file, v);
+      d.log.warn("system", "update requested from the admin", { to: v || "latest", by: clientIpOf(req) });
+      res.json({ ok: true, message: "Updating. The box restarts its services; this page reconnects by itself." });
     }),
   );
 

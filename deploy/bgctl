@@ -1,5 +1,103 @@
 #!/bin/sh
-# bgctl: the Bar Games box command line (updates, status). Runs inside the core container.
-#   ./bgctl status | check [game] | update <game...> | update --all [--wait 15] [--json]
+# bgctl: the Bar Games box command line.
+#   ./bgctl status | check [game] | update <game...> | update --all [--wait 15] | install <url> | startup [--json]
+#       → games and TVs (runs inside the core container)
+#   ./bgctl self-update [--check] [version]
+#       → Bar Games itself, from the released images (runs here, on the box)
 # Needs Docker access (the docker group, or sudo).
-exec docker exec -i bargames-core node apps/core/dist/ops.js "$@"
+set -eu
+here=$(cd "$(dirname "$0")" && pwd)
+
+[ "${1:-}" = "self-update" ] || exec docker exec -i bargames-core node apps/core/dist/ops.js "$@"
+shift
+
+REPO=${BARGAMES_REPO:-thezigpc/venueplay}
+OWNER=$(echo "${REPO%%/*}" | tr '[:upper:]' '[:lower:]')
+ENV_FILE="$here/.env"
+BACKUPS=${BARGAMES_BACKUPS:-$here/../backups}
+check=0
+target=""
+for a in "$@"; do
+  case "$a" in
+    --check) check=1 ;;
+    -*) echo "unknown option $a" >&2; exit 2 ;;
+    *) target="$a" ;;
+  esac
+done
+
+say() { printf '%s\n' "$*"; }
+fail() { printf 'self-update failed: %s\n' "$*" >&2; exit 1; }
+
+current=$(sed -n 's/^BARGAMES_VERSION=//p' "$ENV_FILE" 2>/dev/null | tail -n 1)
+current=${current:-dev}
+latest=$(curl -fsS -m 15 "https://api.github.com/repos/$REPO/contents/VERSION?ref=main" -H "Accept: application/vnd.github.raw+json" 2>/dev/null | tr -d '[:space:]' || true)
+[ -n "$latest" ] || latest=$(curl -fsS -m 15 "https://raw.githubusercontent.com/$REPO/main/VERSION" | tr -d '[:space:]' || true)
+[ -n "$latest" ] || fail "couldn't read the latest version from github.com/$REPO"
+target=${target:-$latest}
+say "installed: $current  latest: $latest  target: $target"
+[ "$check" = 1 ] && exit 0
+echo "$target" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || fail "version must be x.y.z (got $target)"
+[ "$current" = "$target" ] && { say "already on $target"; exit 0; }
+
+for img in bargames bargames-broker; do
+  docker manifest inspect "ghcr.io/$OWNER/$img:$target" > /dev/null 2>&1 || fail "ghcr.io/$OWNER/$img:$target can't be pulled (not published yet, or the package isn't public)"
+done
+
+# Snapshot the whole deploy folder (compose, .env, bgctl, host helpers, core/broker data).
+# Game data lives in Docker volumes and isn't touched by an update.
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$BACKUPS"
+snap="$BACKUPS/bargames-$current-to-$target-$stamp.tgz"
+tar -czf "$snap" -C "$here" .
+say "snapshot: $snap"
+
+rollback() {
+  say "rolling back to $current…"
+  tar -xzf "$snap" -C "$here"
+  docker compose --project-directory "$here" -f "$here/docker-compose.yml" up -d --remove-orphans || true
+  fail "$1 (rolled back to $current; snapshot kept at $snap)"
+}
+
+# This release's deploy files, from its tag (fall back to main for a release without one).
+tmp=$(mktemp -d)
+ref="v$target"
+curl -fsS -m 20 -o /dev/null "https://raw.githubusercontent.com/$REPO/$ref/VERSION" 2>/dev/null || ref=main
+for f in docker-compose.yml bgctl host/install.sh host/bargames-reboot.path host/bargames-reboot.service host/bargames-update.path host/bargames-update.service; do
+  mkdir -p "$tmp/$(dirname "$f")"
+  if ! curl -fsS -m 30 "https://raw.githubusercontent.com/$REPO/$ref/deploy/$f" -o "$tmp/$f"; then
+    case "$f" in host/bargames-update.*) continue ;; esac
+    rm -rf "$tmp"
+    fail "couldn't download deploy/$f at $ref"
+  fi
+done
+mkdir -p "$here/host"
+for f in docker-compose.yml bgctl host/install.sh host/bargames-reboot.path host/bargames-reboot.service host/bargames-update.path host/bargames-update.service; do
+  [ -f "$tmp/$f" ] && cp "$tmp/$f" "$here/$f"
+done
+chmod +x "$here/bgctl" "$here/host/install.sh"
+rm -rf "$tmp"
+
+# Pin the version.
+if grep -q '^BARGAMES_VERSION=' "$ENV_FILE" 2>/dev/null; then
+  sed -i "s/^BARGAMES_VERSION=.*/BARGAMES_VERSION=$target/" "$ENV_FILE"
+else
+  printf '\n# Bar Games release (bgctl self-update sets this)\nBARGAMES_VERSION=%s\n' "$target" >> "$ENV_FILE"
+fi
+
+say "pulling $target…"
+docker compose --project-directory "$here" -f "$here/docker-compose.yml" pull core gateway broker || rollback "pull failed"
+docker compose --project-directory "$here" -f "$here/docker-compose.yml" up -d --remove-orphans || rollback "start failed"
+
+say "waiting for core to come up healthy…"
+i=0
+while [ "$i" -lt 60 ]; do
+  state=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' bargames-core 2>/dev/null || echo missing)
+  [ "$state" = "healthy" ] && break
+  i=$((i + 1))
+  sleep 2
+done
+[ "$state" = "healthy" ] || rollback "core didn't become healthy (state: $state)"
+
+# Host helpers may have changed with the release: reinstall them when running as root.
+if [ "$(id -u)" = 0 ] && [ -x "$here/host/install.sh" ]; then "$here/host/install.sh" > /dev/null || say "note: host helpers didn't reinstall; run host/install.sh"; fi
+say "updated $current → $target"

@@ -8,7 +8,9 @@ RUN npm ci && npm run build && npm prune --omit=dev
 # core + gateway (compose target "app")
 FROM node:22-slim AS app
 WORKDIR /app
-ENV NODE_ENV=production
+# The box version (repo VERSION file), set by the release workflow; "dev" for local builds.
+ARG BOX_VERSION=dev
+ENV NODE_ENV=production BARGAMES_VERSION=$BOX_VERSION
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages ./packages

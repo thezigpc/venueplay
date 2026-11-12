@@ -1,0 +1,8 @@
+# Takes the request (a version, or empty for the latest), then runs bgctl self-update.
+# Its output and exit code land in core's data folder for the admin's System page.
+[Unit]
+Description=Bar Games update (requested from the admin)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'v=$(tr -dc "0-9." < @DATA@/update.request 2>/dev/null); rm -f @DATA@/update.request @DATA@/update.exit; echo running > @DATA@/update.state; @DEPLOY@/bgctl self-update $v > @DATA@/update.log 2>&1; echo $? > @DATA@/update.exit; rm -f @DATA@/update.state'

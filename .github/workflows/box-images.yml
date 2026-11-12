@@ -1,0 +1,109 @@
+# Builds the Bar Games box images and pushes them to GitHub Container Registry whenever
+# VERSION changes on main (or by hand: Actions > Box images > Run workflow):
+#   ghcr.io/<owner>/bargames:<VERSION>         core + gateway
+#   ghcr.io/<owner>/bargames-broker:<VERSION>  the casting broker
+# Versions are immutable: a published version is skipped, never overwritten. After the
+# images are pushed it tags the commit v<VERSION>, which `bgctl self-update` uses to fetch
+# that release's deploy files (compose file, bgctl, host helpers).
+# First publish only: make both packages Public in GitHub (Packages > package settings >
+# Change visibility), so boxes can pull without logging in.
+
+name: Box images
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: box-images
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read VERSION
+        id: v
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error file=VERSION::VERSION must be x.y.z (found: $version)"
+            exit 1
+          fi
+          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "app=ghcr.io/$owner/bargames" >> "$GITHUB_OUTPUT"
+          echo "broker=ghcr.io/$owner/bargames-broker" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if this version is already published
+        id: exists
+        run: |
+          if docker manifest inspect "${{ steps.v.outputs.app }}:${{ steps.v.outputs.version }}" > /dev/null 2>&1 &&
+             docker manifest inspect "${{ steps.v.outputs.broker }}:${{ steps.v.outputs.version }}" > /dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ steps.v.outputs.version }} is already published. Bump VERSION to publish a new one."
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+        if: steps.exists.outputs.skip != 'true'
+
+      - name: core + gateway image
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: app
+          platforms: linux/amd64
+          push: true
+          build-args: BOX_VERSION=${{ steps.v.outputs.version }}
+          tags: |
+            ${{ steps.v.outputs.app }}:${{ steps.v.outputs.version }}
+            ${{ steps.v.outputs.app }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.v.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: broker image
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: broker
+          platforms: linux/amd64
+          push: true
+          build-args: BOX_VERSION=${{ steps.v.outputs.version }}
+          tags: |
+            ${{ steps.v.outputs.broker }}:${{ steps.v.outputs.version }}
+            ${{ steps.v.outputs.broker }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.v.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Tag the release
+        if: steps.exists.outputs.skip != 'true'
+        run: |
+          tag="v${{ steps.v.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "::notice::$tag already exists"
+          else
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "$tag"
+          fi

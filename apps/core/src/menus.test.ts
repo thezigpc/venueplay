@@ -756,3 +756,22 @@ test("0.9.0 scenes and schedules: closing time, scheduled bingo with a countdown
     b.close();
   }
 });
+
+test("box self-update: the admin button only works with the host helper, one at a time", async () => {
+  const { writeFileSync, readFileSync, existsSync } = await import("node:fs");
+  const b = await boot();
+  try {
+    assert.equal((await b.json("POST", "/api/system/update", { version: "0.9.1" }, b.authed)).status, 409, "no host helper yet");
+    writeFileSync(path.join(b.dir, "host-hooks.json"), JSON.stringify({ reboot: true, update: true }));
+    assert.equal((await b.json("POST", "/api/system/update", { version: "bad" }, b.authed)).status, 400);
+    assert.equal((await b.json("POST", "/api/system/update", { version: "0.9.1" })).status, 401, "admin only");
+    assert.equal((await b.json("POST", "/api/system/update", { version: "0.9.1" }, b.authed)).status, 200);
+    assert.ok(existsSync(path.join(b.dir, "update.request")));
+    assert.equal(readFileSync(path.join(b.dir, "update.request"), "utf8"), "0.9.1");
+    assert.equal((await b.json("POST", "/api/system/update", {}, b.authed)).status, 409, "already running");
+    const st = (await (await b.json("GET", "/api/system/stats", undefined, b.authed)).json()) as { update: { available: boolean; running: boolean } };
+    assert.deepEqual([st.update.available, st.update.running], [true, true]);
+  } finally {
+    b.close();
+  }
+});

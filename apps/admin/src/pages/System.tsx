@@ -189,6 +189,53 @@ export function SystemPage() {
       </section>
 
       <section className="card wide">
+        <h2>Bar Games version</h2>
+        <p>
+          Installed: <b>{s.box.version}</b>
+          {s.box.latest ? (
+            <>
+              {" "}
+              · latest release: <b>{s.box.latest}</b>
+            </>
+          ) : (
+            " · latest release: unknown (no internet?)"
+          )}
+        </p>
+        {s.update?.running ? (
+          <p className="warn">Updating… the box restarts its services; this page reconnects by itself.</p>
+        ) : s.box.version === "dev" ? (
+          <p className="muted">This box runs from source (development). Switch it to releases once with: bgctl self-update</p>
+        ) : s.box.latest && s.box.latest !== s.box.version ? (
+          s.update?.available ? (
+            <button
+              className="primary"
+              onClick={() => {
+                const what = [s.box.openRooms ? `${s.box.openRooms} open room(s) will close` : "", s.casting?.tvs ? "TVs pause for a moment" : ""].filter(Boolean);
+                const nl = String.fromCharCode(10);
+                if (!window.confirm(`Update Bar Games from ${s.box.version} to ${s.box.latest}?${what.length ? nl + nl + what.join(nl) : ""}${nl}${nl}A snapshot is taken first; a failed update rolls back by itself.`)) return;
+                void api.updateBox(s.box.latest).then(
+                  (r) => setRebooting(r.message ?? "Updating…"),
+                  (e: Error) => setError(e.message),
+                );
+              }}
+            >
+              Update to {s.box.latest}
+            </button>
+          ) : (
+            <p className="warn">An update is available. This box can't update itself yet: once, on the box, run sudo ~/bargames/deploy/host/install.sh</p>
+          )
+        ) : (
+          <p className="ok">Up to date.</p>
+        )}
+        {s.update?.lastExit !== undefined && !s.update.running && (
+          <details>
+            <summary className={s.update.lastExit === 0 ? "ok" : "error"}>Last update: {s.update.lastExit === 0 ? "succeeded" : "failed (rolled back)"}</summary>
+            <pre className="note">{(s.update.logTail ?? []).join(String.fromCharCode(10))}</pre>
+          </details>
+        )}
+      </section>
+
+      <section className="card wide">
         <h2>Reboot</h2>
         <p className="muted">Restarts the whole box. Open rooms close; TVs come back on their startup choices.</p>
         {s.reboot.available ? (

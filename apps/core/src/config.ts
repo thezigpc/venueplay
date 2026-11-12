@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR ?? path.resolve(here, "../../../data/core");
 
-export const BOX_VERSION = "0.1.0";
+/** The box release (repo VERSION, baked into the image by the release workflow); "dev" from source. */
+export const BOX_VERSION = process.env.BARGAMES_VERSION || "dev";
 
 export const config = {
   port: envNum("PORT", 7100),
