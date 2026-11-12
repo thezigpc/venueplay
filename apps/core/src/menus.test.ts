@@ -199,7 +199,7 @@ test("updates: offered only when newer and published; Update restarts it, a bad 
   let served = { ...bingo, image: "ghcr.io/acme/bingo:1.0.0" } as Record<string, unknown>;
   const published = new Set(["ghcr.io/acme/bingo:1.0.0"]);
   const raw = "https://raw.githubusercontent.com/acme/bingo/HEAD/bargames.json";
-  const b = await boot((url) => (url.split("?")[0] === raw ? (assert.match(url, /[?]bargames=/), reply(served)) : undefined));
+  const b = await boot((url) => (url === raw ? reply(served) : undefined));
   const checker = new UpdateChecker({
     games: () => b.games.list(),
     fetchManifest: async () => ({ manifest: { ...(served as never), kind: "game" } }),
@@ -496,4 +496,25 @@ test("system: stats from /proc and /sys, container CPU, and a reboot only with t
   } finally {
     b.close();
   }
+});
+
+test("manifests from GitHub: read through the API (uncached), raw as the fallback", async () => {
+  const { fetchManifest, githubApiUrl } = await import("./manifestSource.js");
+  assert.equal(githubApiUrl("https://raw.githubusercontent.com/acme/menu/HEAD/bargames.json"), "https://api.github.com/repos/acme/menu/contents/bargames.json");
+  assert.equal(githubApiUrl("https://raw.githubusercontent.com/acme/menu/v1.2/app/bargames.json"), "https://api.github.com/repos/acme/menu/contents/app/bargames.json?ref=v1.2");
+  assert.equal(githubApiUrl("https://example.com/bargames.json"), undefined);
+  const fresh = { ...menu, version: "0.4.0" };
+  const stale = { ...menu, version: "0.3.2" };
+  let apiUp = true;
+  const seen: string[] = [];
+  const fake = (async (input: string | URL | Request) => {
+    const url = String(input);
+    seen.push(url.split("/")[2]);
+    if (url.startsWith("https://api.github.com/")) return apiUp ? reply(fresh) : reply({ message: "API rate limit exceeded" }, 403);
+    return reply(stale);
+  }) as typeof fetch;
+  assert.equal((await fetchManifest("https://github.com/acme/menu", fake)).manifest.version, "0.4.0", "the API's current file");
+  apiUp = false;
+  assert.equal((await fetchManifest("https://github.com/acme/menu", fake)).manifest.version, "0.3.2", "rate-limited: raw still works");
+  assert.deepEqual(seen, ["api.github.com", "api.github.com", "raw.githubusercontent.com"]);
 });

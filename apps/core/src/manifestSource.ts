@@ -27,11 +27,11 @@ export function resolveManifestUrl(input: string): string {
 
 export async function fetchManifest(input: string, doFetch: typeof fetch = fetch): Promise<{ manifest: GameManifest; warnings: string[]; url: string }> {
   const url = resolveManifestUrl(input);
-  // raw.githubusercontent.com caches files ~5 minutes per edge, so a release pushed a
-  // minute ago can still read as the old version. A unique query string gets a fresh copy.
-  const fetchUrl = new URL(url);
-  if (fetchUrl.hostname === "raw.githubusercontent.com") fetchUrl.searchParams.set("bargames", Date.now().toString(36));
-  const res = await doFetch(fetchUrl.toString(), { signal: AbortSignal.timeout(10_000), redirect: "follow" });
+  // raw.githubusercontent.com caches files ~5 minutes per edge (query strings don't bust
+  // it), so a release pushed a minute ago can still read as the old version. GitHub's API
+  // serves the current file; fall back to raw when it's unavailable or rate-limited
+  // (60 anonymous requests an hour per box is plenty for update checks).
+  const res = (await fromGithubApi(url, doFetch)) ?? (await doFetch(url, { signal: AbortSignal.timeout(10_000), redirect: "follow" }));
   if (!res.ok) throw new Error(`could not fetch ${url}: HTTP ${res.status}`);
   const text = await res.text();
   if (text.length > 256 * 1024) throw new Error("manifest is too large");
@@ -48,3 +48,25 @@ export async function fetchManifest(input: string, doFetch: typeof fetch = fetch
 
 // TODO(phase 2b): market catalogs: fetch catalog.json + detached signature, verify with the
 // pinned market public key (ed25519), then install entries with verified: true.
+
+/** raw.githubusercontent.com/<owner>/<repo>/<ref>/<path> → the same file through GitHub's API (uncached). */
+export function githubApiUrl(rawUrl: string): string | undefined {
+  const u = new URL(rawUrl);
+  if (u.hostname !== "raw.githubusercontent.com") return undefined;
+  const [owner, repo, ref, ...rest] = u.pathname.split("/").filter(Boolean);
+  if (!owner || !repo || !ref || !rest.length) return undefined;
+  const api = new URL(`https://api.github.com/repos/${owner}/${repo}/contents/${rest.join("/")}`);
+  if (ref !== "HEAD") api.searchParams.set("ref", ref);
+  return api.toString();
+}
+
+async function fromGithubApi(rawUrl: string, doFetch: typeof fetch): Promise<Response | undefined> {
+  const api = githubApiUrl(rawUrl);
+  if (!api) return undefined;
+  try {
+    const r = await doFetch(api, { signal: AbortSignal.timeout(10_000), headers: { accept: "application/vnd.github.raw+json", "user-agent": "bargames-box" } });
+    return r.ok ? r : undefined;
+  } catch {
+    return undefined;
+  }
+}
