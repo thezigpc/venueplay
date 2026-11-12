@@ -50,6 +50,8 @@ export interface AppDeps {
     internalUrl: string;
     adminDist: string;
     boxVersion: string;
+    /** How long a cast from inside a game waits before answering "starting" (default 6000). */
+    castAnswerMs?: number;
     /** bgctl's token (ops endpoints). Absent: they're off. */
     opsToken?: string;
   };
@@ -271,12 +273,22 @@ export function createApp(d: AppDeps) {
       if (!st.rooms?.some((r) => r.code === roomCode)) throw new HttpError(404, `no room ${roomCode}`);
       const ctx = buildContext(d.state.venue.get(), game);
       const url = new URL(tableUrl(game.manifest, roomCode)!, ctx.game.publicUrl!).toString();
-      const results = (await brokerCall("POST", "/show", { displayIds: displayIds.map(String), content: { kind: "url", url, title: `${ctx.game.displayName} · ${roomCode}` } })) as Record<
-        string,
-        { ok: boolean; message?: string; needsCode?: boolean }
-      >;
+      type Results = Record<string, { ok: boolean; message?: string; needsCode?: boolean }>;
+      const ids = displayIds.map(String);
+      const showing = (brokerCall("POST", "/show", { displayIds: ids, content: { kind: "url", url, title: `${ctx.game.displayName} · ${roomCode}` } }) as Promise<Results>).then((results) => {
+        const failed = Object.values(results).filter((r) => !r.ok).length;
+        d.log.info("cast", "cast from game", { game: game.id, room: roomCode, displays: Object.keys(results).length, failed });
+        return results;
+      });
+      // Games call this from a phone, where the game kit gives up after 8 s, but an AirPlay
+      // TV can take longer to connect. Answer within 6 s: "starting" if the TVs
+      // are still connecting (the cast carries on; the game's TV list shows when they're on).
+      const results = await Promise.race([showing, new Promise<undefined>((r) => setTimeout(() => r(undefined), d.config.castAnswerMs ?? 6000).unref?.())]);
+      if (!results) {
+        showing.catch((err) => d.log.warn("cast", "cast from game failed", { game: game.id, room: roomCode, err: String(err) }));
+        return void res.json({ ok: true, message: "Starting the TVs; they can take a few seconds to come on.", results: Object.fromEntries(ids.map((id) => [id, { ok: true, message: "starting" }])) });
+      }
       const failed = Object.values(results).filter((r) => !r.ok).length;
-      d.log.info("cast", "cast from game", { game: game.id, room: roomCode, displays: Object.keys(results).length, failed });
       res.json({ ok: failed === 0, message: failed ? `${failed} TV(s) didn't start` : undefined, results });
     }),
   );

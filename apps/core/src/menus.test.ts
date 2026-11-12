@@ -55,7 +55,7 @@ class SpyRuntime extends NoopRuntime {
   }
 }
 
-async function boot(extraFetch?: (url: string, init?: RequestInit) => Response | undefined) {
+async function boot(extraFetch?: (url: string, init?: RequestInit) => Response | undefined, opts: { showDelayMs?: number; castAnswerMs?: number } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "bg-menus-"));
   const state = openState(dir);
   const games = new GameRegistry(state.games);
@@ -70,6 +70,7 @@ async function boot(extraFetch?: (url: string, init?: RequestInit) => Response |
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     if (url === "http://broker/displays" || url === "http://broker/displays?health=1") return reply(displays.map((x) => ({ ...x, health: { online: x.id !== "tv-offline" } })));
     if (url === "http://broker/show") {
+      if (opts.showDelayMs) await new Promise((r) => setTimeout(r, opts.showDelayMs));
       shows.push(body);
       for (const id of body.displayIds ?? []) {
         const disp = displays.find((x) => x.id === id);
@@ -87,7 +88,7 @@ async function boot(extraFetch?: (url: string, init?: RequestInit) => Response |
     auth: new AdminAuth(state.auth, "secret"),
     cloudflare: new CloudflareService({ store: state.cloudflare, connector: new NoopRuntime(), desiredHosts: () => [], tunnelName: () => "t", origin: "http://gw", log: createLogger("test", "error") }),
     log: createLogger("test", "error"),
-    config: { gatewayToken: "gw", brokerUrl: "http://broker", brokerToken: "b", internalUrl: "http://core:7100", adminDist: path.join(dir, "none"), boxVersion: "0.5.0", opsToken: "ops-secret" },
+    config: { gatewayToken: "gw", brokerUrl: "http://broker", brokerToken: "b", internalUrl: "http://core:7100", adminDist: path.join(dir, "none"), boxVersion: "0.5.0", opsToken: "ops-secret", castAnswerMs: opts.castAnswerMs },
     fetch: fakeFetch,
   });
   const server = app.listen(0);
@@ -388,4 +389,24 @@ test("tv startup runner: waits for TVs to come online, retries, gives up", async
   await runner.tick();
   assert.deepEqual(applied, ["a", "b"]);
   assert.deepEqual(runner.waiting, []);
+});
+
+test("casting from a game: a slow TV gets \"starting\" before the phone gives up, and still comes on", async () => {
+  const b = await boot((url) => (url === "http://bingo/__bargames/status" ? reply({ rooms: [{ code: "ROOM1", kind: "venue", players: 0 }] }) : undefined), { showDelayMs: 300, castAnswerMs: 50 });
+  try {
+    const m = { ...bingo, sdk: { version: "0.6.0", level: 3 }, commands: ["start"] };
+    await b.json("POST", "/api/games/install", { manifest: m, devTarget: "http://bingo" }, b.authed);
+    await b.json("PATCH", "/api/games/bingo", { enabled: true }, b.authed);
+    await b.json("PUT", "/api/cast-settings", { fromGames: true, pin: "" }, b.authed);
+    const g = { authorization: `Bearer ${b.games.get("bingo")!.token}` };
+    const t0 = Date.now();
+    const r = (await (await b.json("POST", "/internal/cast", { roomCode: "ROOM1", displayIds: ["tv2"] }, g)).json()) as { ok: boolean; message?: string; results: Record<string, { ok: boolean; message?: string }> };
+    assert.ok(Date.now() - t0 < 250, "answered before the TV finished");
+    assert.equal(r.ok, true);
+    assert.equal(r.results.tv2.message, "starting");
+    await new Promise((res) => setTimeout(res, 400));
+    assert.equal(b.displays[1].content?.url, "http://bingo.localhost:7080/room/ROOM1?role=table", "the cast carried on");
+  } finally {
+    b.close();
+  }
 });
