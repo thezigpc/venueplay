@@ -191,6 +191,30 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
     h(async (req, res) => res.json({ screenId: await d.registry.dialScreenId(req.params.id, req.params.app) })),
   );
 
+  // The remote's Apps list (Roku channels).
+  const APP_ID = /^[A-Za-z0-9_.-]{1,40}$/;
+  app.get(
+    "/displays/:id/apps",
+    h(async (req, res) => res.json(await d.registry.listApps(req.params.id))),
+  );
+  app.get(
+    "/displays/:id/apps/:appId/icon",
+    h(async (req, res) => {
+      if (!APP_ID.test(req.params.appId)) return void res.status(400).json({ error: "bad app id" });
+      const icon = await d.registry.appIcon(req.params.id, req.params.appId);
+      if (!icon) return void res.status(204).end();
+      res.set("cache-control", "private, max-age=86400").type(icon.type).send(icon.data);
+    }),
+  );
+  app.post(
+    "/displays/:id/apps/:appId/launch",
+    h(async (req, res) => {
+      if (!APP_ID.test(req.params.appId)) return void res.status(400).json({ error: "bad app id" });
+      await d.registry.launchChannel(req.params.id, req.params.appId);
+      res.json({ ok: true });
+    }),
+  );
+
   /** { key }: a remote-control key (capabilities.remoteKeys). */
   app.post(
     "/displays/:id/key",

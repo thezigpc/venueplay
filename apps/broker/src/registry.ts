@@ -144,6 +144,43 @@ export class DisplayRegistry {
     return screenId;
   }
 
+  /** Installed apps (cached a minute; the one on screen is always fresh). */
+  private readonly appsCache = new Map<string, { at: number; apps: { id: string; name: string }[] }>();
+  async listApps(id: string): Promise<{ apps: { id: string; name: string }[]; active?: string }> {
+    const d = this.get(id);
+    if (!d) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    const drv = this.driverFor(d);
+    if (!drv.listApps) throw Object.assign(new Error(`${d.label || d.name} can't list its apps`), { status: 400 });
+    const r = await drv.listApps(d);
+    this.appsCache.set(id, { at: Date.now(), apps: r.apps });
+    return r;
+  }
+
+  /** App icons, kept in memory (they rarely change). */
+  private readonly iconCache = new Map<string, { type: string; data: Buffer } | null>();
+  async appIcon(id: string, appId: string): Promise<{ type: string; data: Buffer } | undefined> {
+    const d = this.get(id);
+    if (!d) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    const key = `${id}|${appId}`;
+    if (this.iconCache.has(key)) return this.iconCache.get(key) ?? undefined;
+    const icon = await this.driverFor(d).appIcon?.(d, appId);
+    if (this.iconCache.size > 500) this.iconCache.clear();
+    this.iconCache.set(key, icon ?? null);
+    return icon;
+  }
+
+  /** Starts an installed app from the remote: stops the box's cast first, then records it. */
+  async launchChannel(id: string, appId: string): Promise<void> {
+    const d = this.get(id);
+    if (!d) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    const drv = this.driverFor(d);
+    if (!drv.launchChannel) throw Object.assign(new Error(`${d.label || d.name} can't start apps`), { status: 400 });
+    if (drv.streamState?.(d)) await drv.stop(d).catch(() => undefined);
+    await drv.launchChannel(d, appId);
+    const name = this.appsCache.get(id)?.apps.find((a) => a.id === appId)?.name ?? appId;
+    await this.setContent(id, { kind: "external", provider: "remote", app: name });
+  }
+
   /** A small JPEG of what this TV is being sent, or undefined when it isn't casting. */
   async preview(id: string): Promise<Buffer | undefined> {
     const d = this.get(id);

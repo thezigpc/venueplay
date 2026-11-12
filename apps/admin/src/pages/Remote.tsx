@@ -129,6 +129,7 @@ export function Remote({ d, keys }: { d: Display; keys: string[] }) {
           {btn("ChannelUp", "CH +")}
         </div>
       )}
+      {d.driver === "roku" && <TvApps d={d} online={online} />}
       <form
         className="inline"
         onSubmit={(e) => {
@@ -148,5 +149,61 @@ export function Remote({ d, keys }: { d: Display; keys: string[] }) {
       <p className="muted small-print">Hold arrows or volume to repeat. On a keyboard: arrows, Enter, Backspace. Home or Back leaves what the box is casting.</p>
       {msg && <p className="error">{msg}</p>}
     </div>
+  );
+}
+
+/** The TV's installed apps (Roku channels): tap one to open it on the TV. */
+function TvApps({ d, online }: { d: Display; online: boolean }) {
+  const [apps, setApps] = useState<{ id: string; name: string }[] | undefined>();
+  const [active, setActive] = useState<string | undefined>();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [filter, setFilter] = useState("");
+
+  const load = () =>
+    api.tvApps(d.id).then(
+      (r) => {
+        setApps(r.apps);
+        setActive(r.active);
+        setError("");
+      },
+      (e: Error) => setError(e.message),
+    );
+  useEffect(() => {
+    if (online) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.id, online]);
+
+  const launch = (a: { id: string; name: string }) => {
+    if (d.content?.kind && d.content.kind !== "external" && d.content.kind !== "off" && !window.confirm(`Open ${a.name}? The box stops sending to this TV.`)) return;
+    setBusy(a.id);
+    api.launchTvApp(d.id, a.id).then(
+      () => {
+        setActive(a.id);
+        setBusy("");
+      },
+      (e: Error) => {
+        setError(e.message);
+        setBusy("");
+      },
+    );
+  };
+
+  if (error) return <p className="warn small-print">Apps: {error}</p>;
+  if (!apps) return online ? <p className="muted small-print">Loading the TV's apps…</p> : null;
+  const shown = apps.filter((a) => a.name.toLowerCase().includes(filter.trim().toLowerCase()));
+  return (
+    <details className="tv-apps" open>
+      <summary>Apps on this TV ({apps.length})</summary>
+      {apps.length > 12 && <input placeholder="Find an app" value={filter} onChange={(e) => setFilter(e.target.value)} />}
+      <div className="tv-app-grid">
+        {shown.map((a) => (
+          <button type="button" key={a.id} className={`tv-app${a.id === active ? " active" : ""}`} disabled={!online || busy === a.id} onClick={() => launch(a)} title={`Open ${a.name} on the TV`}>
+            <img src={api.tvAppIconUrl(d.id, a.id)} alt="" loading="lazy" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+            <span>{a.name}</span>
+          </button>
+        ))}
+      </div>
+    </details>
   );
 }

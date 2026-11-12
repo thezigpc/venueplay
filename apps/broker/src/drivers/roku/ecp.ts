@@ -91,6 +91,14 @@ export class RokuEcp {
     return parseApps(await this.req("GET", "/query/apps"));
   }
 
+  /** A channel's icon (PNG/JPEG bytes), or undefined when it has none. */
+  async icon(appId: string): Promise<{ type: string; data: Buffer } | undefined> {
+    const res = await this.doFetch(`${this.base.replace(/\/$/, "")}/query/icon/${encodeURIComponent(appId)}`, { signal: AbortSignal.timeout(this.timeoutMs) });
+    if (res.status === 403) throw new Error("Roku refused /query/icon: enable Control by mobile apps → Permissive");
+    if (!res.ok) return undefined;
+    return { type: res.headers.get("content-type") ?? "image/png", data: Buffer.from(await res.arrayBuffer()) };
+  }
+
   async activeApp(): Promise<RokuApp | undefined> {
     return parseApps(await this.req("GET", "/query/active-app"))[0];
   }

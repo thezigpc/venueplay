@@ -113,6 +113,11 @@ export interface DisplayDriver {
   streamState?(device: DisplayDevice): StreamState | undefined;
   /** Presses a remote-control key (one of capabilities.remoteKeys). */
   keypress?(device: DisplayDevice, key: string): Promise<void>;
+  /** The TV's installed apps and the one on screen (Roku channels). */
+  listApps?(device: DisplayDevice): Promise<{ apps: { id: string; name: string }[]; active?: string }>;
+  appIcon?(device: DisplayDevice, appId: string): Promise<{ type: string; data: Buffer } | undefined>;
+  /** Starts an installed app by the id listApps gave. */
+  launchChannel?(device: DisplayDevice, appId: string): Promise<void>;
   /** Types text into the TV's current text field (search boxes, Wi-Fi passwords). */
   typeText?(device: DisplayDevice, text: string): Promise<void>;
   /** A small JPEG of what the box is rendering for this TV, if it's casting. */

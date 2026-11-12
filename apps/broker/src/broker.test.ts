@@ -310,6 +310,10 @@ test("0.9.0: Roku launches YouTube (837), explains a 403, and reads YouTube's DI
     // Like a real Roku: DIAL without an Origin is refused.
     if (req.url === "/dial/YouTube" && !req.headers.origin) return void res.writeHead(403).end();
     if (req.url === "/dial/YouTube") return void res.end('<?xml version="1.0"?><service xmlns="urn:dial-multiscreen-org:schemas:dial"><name>YouTube</name><state>running</state><additionalData><screenId>abc123screen</screenId></additionalData></service>');
+    if (req.url === "/query/apps") return void res.end('<apps><app id="837" type="appl" version="2">YouTube</app><app id="12" type="appl" version="1">Netflix &amp; Co</app></apps>');
+    if (req.url === "/query/active-app") return void res.end('<active-app><app id="12">Netflix</app></active-app>');
+    if (req.url === "/query/icon/12") return void res.writeHead(200, { "content-type": "image/png" }).end(Buffer.from([0x89, 0x50]));
+    if (req.url?.startsWith("/query/icon/")) return void res.writeHead(404).end();
     if (req.url?.startsWith("/launch/")) return void (block ? res.writeHead(403).end() : res.end(""));
     res.end("");
   });
@@ -335,6 +339,18 @@ test("0.9.0: Roku launches YouTube (837), explains a 403, and reads YouTube's DI
     await registry.dialScreenId(dev.id, "youtube");
     assert.equal(calls.filter((c) => c === "GET /dial/YouTube").length, dialCalls, "cached");
     assert.ok(!calls.some((c) => c.startsWith("POST /dial")), "DIAL is read-only: never launches");
+
+    // The remote's Apps list: installed channels, the one on screen, icons, launching any of them.
+    block = false;
+    assert.deepEqual(await registry.listApps(dev.id), { apps: [{ id: "837", name: "YouTube" }, { id: "12", name: "Netflix & Co" }], active: "12" });
+    assert.deepEqual(await registry.appIcon(dev.id, "12"), { type: "image/png", data: Buffer.from([0x89, 0x50]) });
+    const iconCalls = calls.filter((c) => c === "GET /query/icon/12").length;
+    await registry.appIcon(dev.id, "12");
+    assert.equal(calls.filter((c) => c === "GET /query/icon/12").length, iconCalls, "icons are cached");
+    assert.equal(await registry.appIcon(dev.id, "999"), undefined);
+    await registry.launchChannel(dev.id, "12");
+    assert.ok(calls.includes("POST /launch/12"));
+    assert.deepEqual(registry.get(dev.id)?.content, { kind: "external", provider: "remote", app: "Netflix & Co" });
   } finally {
     fake.close();
   }

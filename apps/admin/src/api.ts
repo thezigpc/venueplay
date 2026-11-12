@@ -289,6 +289,9 @@ export const api = {
   setTvStartup: (id: string, rule: StartupRule) => call<Record<string, StartupRule>>("PUT", `/tv-startup/${encodeURIComponent(id)}`, rule),
   runTvStartup: () => call<{ waiting: string[] }>("POST", "/tv-startup/run"),
   key: (id: string, key: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/key`, { key }),
+  tvApps: (id: string) => call<{ apps: { id: string; name: string }[]; active?: string }>("GET", `/broker/displays/${encodeURIComponent(id)}/apps`),
+  launchTvApp: (id: string, appId: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/apps/${encodeURIComponent(appId)}/launch`),
+  tvAppIconUrl: (id: string, appId: string) => bgUrl(`/api/broker/displays/${encodeURIComponent(id)}/apps/${encodeURIComponent(appId)}/icon`),
   typeText: (id: string, text: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/text`, { text }),
   /** For <img src>: changes every call so the browser fetches a fresh picture. */
   previewUrl: (id: string) => bgUrl(`/api/broker/displays/${encodeURIComponent(id)}/preview?t=${Date.now()}`),

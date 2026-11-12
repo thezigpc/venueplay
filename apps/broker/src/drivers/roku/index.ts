@@ -110,6 +110,22 @@ export class RokuDriver implements DisplayDriver {
     }
   }
 
+  /** Installed channels and the one on screen (remote's Apps list). */
+  async listApps(device: DisplayDevice): Promise<{ apps: { id: string; name: string }[]; active?: string }> {
+    const ecp = this.ecp(device);
+    const [apps, active] = await Promise.all([ecp.apps(), ecp.activeApp().catch(() => undefined)]);
+    return { apps, active: active?.id };
+  }
+
+  appIcon(device: DisplayDevice, appId: string): Promise<{ type: string; data: Buffer } | undefined> {
+    return this.ecp(device).icon(appId);
+  }
+
+  /** Starts any installed channel by its Roku id (from listApps). */
+  async launchChannel(device: DisplayDevice, appId: string): Promise<void> {
+    await this.ecp(device).launch(appId);
+  }
+
   async keypress(device: DisplayDevice, key: string): Promise<void> {
     if (!(await this.capabilities(device)).remoteKeys?.includes(key)) throw Object.assign(new Error(`${device.name} has no "${key}" key`), { status: 400 });
     await this.ecp(device).keypress(key);
