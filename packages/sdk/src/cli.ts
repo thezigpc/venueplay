@@ -5,7 +5,7 @@
 //   bargames mock-box [dir] [--game URL] [--port N] [--core-port N] [--name S] [--tv-pin N] [--no-cast]
 //   bargames command <name> [--room CODE] [--args JSON] [--game URL]
 //   bargames status [--game URL]
-//   bargames check [dir] [--game URL] [--room CODE]
+//   bargames check [dir] [--game URL] [--room CODE] [--live (last: also create/end rooms on a game not on the mock box)]
 
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -128,7 +128,7 @@ Events and casts from your game print below (✗ = would be rejected, or isn't d
       console.error(`✗ no valid ${MANIFEST_FILE} in ${target} (run: bargames validate ${target})`);
       process.exit(1);
     }
-    process.exit((await check(m, gameUrlFor(m.port), { room: flags.room })) ? 0 : 1);
+    process.exit((await check(m, gameUrlFor(m.port), { room: flags.room, live: flags.live !== undefined })) ? 0 : 1);
     break;
   }
   default:
@@ -140,7 +140,7 @@ Events and casts from your game print below (✗ = would be rejected, or isn't d
                                  --tv-pin 1234: require a TV PIN for casting · --no-cast: casting turned off
                                  --announce "Last call at 1:30": a pretend staff announcement
       [--game http://127.0.0.1:PORT] [--port 7080] [--core-port 7199] [--name "Display Name"]
-  bargames check [dir]           conformance checks against your running game
+  bargames check [dir]           conformance checks against your running game (rooms only on the mock box's game; add --live last to override)
       [--room CODE]              also check one live room (its pendingClaims, times, table view)
   bargames status                room status, as the box's iPad sees it
   bargames command <name>        send a command, as the box's iPad does:

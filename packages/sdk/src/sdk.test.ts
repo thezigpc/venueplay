@@ -437,3 +437,52 @@ test("devbox: mock context carries location, time zone, units; display modules l
   assert.ok(!d.venue.games?.some((x) => x.id === "menu"), "a display module is not in the game lineup");
   assert.deepEqual(otherGames(d).map((x) => x.id), ["other-game"]);
 });
+
+test("0.9.0: off a box the new calls do nothing; on the mock box they work; manifest media", async () => {
+  const { mockBox, DEV_TOKEN } = await import("./devbox.js");
+  const { activeCountdown, formatCountdown } = await import("./links.js");
+  // Off a box: inert (rule 1).
+  const off = createBarGames({ gameId: "yt", coreUrl: "", token: "" });
+  await off.setAttention([{ level: "warn", message: "x" }]);
+  assert.equal(await off.startCountdown({ label: "x", minutes: 1 }), undefined);
+  assert.deepEqual(await off.tvs(), []);
+  assert.equal((await off.launchApp("tv", "youtube")).ok, false);
+  assert.equal(await off.profile({} as import("node:http").IncomingMessage), undefined);
+  assert.deepEqual(await off.audioOutputs(), []);
+  assert.deepEqual(await off.playSound("ding"), { ok: false, reason: "not-built" });
+
+  // Manifest: media needs level 3 (warning), launch names are checked.
+  const m = validateManifest({ ...base, kind: "app", sdk: { version: "0.9.0", level: 3 }, routes: { player: "/" }, commands: ["media_list", "media_play", "media_stop"], media: { launch: ["youtube"] } });
+  assert.ok(m.ok && m.manifest.media?.launch[0] === "youtube");
+  assert.ok(!validateManifest({ ...base, media: { launch: ["You Tube!"] } }).ok);
+  assert.ok((validateManifest({ ...base, sdk: { version: "0.9.0", level: 1 }, media: { launch: ["youtube"] } }) as { warnings: string[] }).warnings.some((w) => w.startsWith("media:")));
+
+  // On the mock box.
+  const game = createServer((_req, res) => res.end("ok"));
+  await new Promise<void>((r) => game.listen(0, "127.0.0.1", r));
+  const box = mockBox({ gameId: "yt", displayName: "YouTube (mock)", gameUrl: `http://127.0.0.1:${(game.address() as AddressInfo).port}`, corePort: 0, gatewayPort: 0, manifest: m.ok ? m.manifest : undefined });
+  await new Promise((r) => box.core.once("listening", r));
+  const bg = createBarGames({ gameId: "yt", coreUrl: `http://127.0.0.1:${(box.core.address() as AddressInfo).port}`, token: DEV_TOKEN });
+  const log = console.log;
+  console.log = () => undefined;
+  try {
+    const tvs = await bg.tvs();
+    assert.deepEqual(tvs[0].canLaunch, ["youtube"]);
+    assert.equal(tvs[0].youtubeScreenId, "fake-screen-id-bar");
+    assert.deepEqual(await bg.launchApp(tvs[0].id, "youtube"), { ok: true });
+    assert.equal((await bg.launchApp(tvs[0].id, "netflix")).ok, false);
+    const cd = await bg.startCountdown({ label: "Trivia starts in", minutes: 5 });
+    assert.equal(cd?.label, "Trivia starts in");
+    const ctx = await (await fetch(`http://127.0.0.1:${(box.core.address() as AddressInfo).port}/internal/venue`, { headers: { authorization: `Bearer ${DEV_TOKEN}` } })).json();
+    const live = activeCountdown(ctx);
+    assert.ok(live && live.secondsLeft > 290 && live.secondsLeft <= 300);
+    assert.equal(formatCountdown(245), "4:05");
+    await bg.reportResults({ results: [{ player: { name: "Ann" }, place: 1 }] });
+    await bg.setAttention([]);
+  } finally {
+    console.log = log;
+    box.core.close();
+    box.gateway.close();
+    game.close();
+  }
+});

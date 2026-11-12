@@ -21,6 +21,42 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.9.0 (results, countdowns, attention, media apps)
+
+All optional; a game on 0.8.0 keeps working. Off a box every new call is a no-op. Full plan:
+`C:\CodeProjects\GameBroker\docs\SDK-0.9.md`. Vendor `bargames-sdk-0.9.0.tgz` (kit 0.5.1
+still fits).
+
+1. **Results → leaderboards.** When a game ends, call
+   `bg.reportResults({ roomCode, results: [{ player: { name }, place: 1 }, { player: { name }, place: 2, score: 1200 }] })`.
+   The box keeps tonight's (from 4 AM venue time) and all-time boards per game, shows
+   "Tonight's winners" on the games list and idle TVs, and the venue context carries
+   `venue.leaderboards`. It also emits the standard event `game_result`. Rewards will hook
+   into these results later, with nothing more to do in games.
+2. **Lobby countdown.** `bg.startCountdown({ label: "Bingo starts in", minutes: 5, roomCode })`
+   shows a ticking countdown, with a Join link to that room, on phones, the games list and
+   idle TVs; `bg.clearCountdown()` ends yours. On pages: `countdownBanner(ctx)` (client),
+   or `activeCountdown(ctx)` + `formatCountdown(s)` for your own markup. Staff can start
+   one from the box too, and scheduled sessions do.
+3. **Needs attention.** `bg.setAttention([{ level: "warn", message: "Google disconnected", actionPath: "/admin#google" }])`
+   puts items on the box's Tonight page with an "Open" link into your admin (staff are
+   signed in through the box). Send `[]` to clear; send the full list each time.
+4. **Media apps** (apps that put their own content on TVs; the YouTube app): manifest
+   `"media": { "launch": ["youtube"] }`, sdk.level 3, commands `media_list`, `media_play`,
+   `media_stop` (helpers `bg.onMediaList/onMediaPlay/onMediaStop`), `status.media.targets`,
+   `bg.tvs()` (every venue TV, with `canLaunch` and, for YouTube on Rokus, a DIAL
+   `youtubeScreenId`), `bg.launchApp(displayId, app)`. The box's command timeout is 5 s:
+   answer `media_play` with `pending: true` while a TV app starts, and let status show
+   `starting` → `playing`. Types: `MediaItem`, `MediaTarget`, `MediaPlayArgs`, `BoxTv`.
+5. **Stubs to build on later** (they compile today, do nothing yet): `bg.profile(req)` →
+   undefined and `venueProfile()` → null (player profiles); `bg.audioOutputs()` → [] and
+   `bg.playSound()` → `{ ok: false, reason: "not-built" }` (venue sound outputs: keep
+   playing sounds locally for now).
+6. **Checks:** `npx bargames check` no longer creates or ends rooms on a game that isn't
+   connected to the mock box (pass `--live`, last, to override). It checks media apps'
+   `media_list` and `status.media`. The mock box answers every new call (results,
+   countdown, attention, tvs/launchApp with a fake Roku, profiles 501).
+
 ## What's new in SDK 0.8.0 (the box's password works in every game)
 
 1. **Vendor** `bargames-sdk-0.8.0.tgz` and game kit **0.5.0**
@@ -198,8 +234,8 @@ Nothing else changed; 0.2.0 games keep working on a 0.2.1 box.
 ## What's new in SDK 0.2.0 (for games already on 0.1.0)
 
 1. **Vendor the new tarball** (step 1, "Updating later"):
-   the newest tarball (now `bargames-sdk-0.8.0.tgz`), both `package.json` entries, `npm install`, and set
-   `"sdk": { "version": "0.8.0", … }` in `bargames.json`.
+   the newest tarball (now `bargames-sdk-0.9.0.tgz`), both `package.json` entries, `npm install`, and set
+   `"sdk": { "version": "0.9.0", … }` in `bargames.json`.
 2. **`create_room`** (step 6): the box can start a venue room for the TVs.
 3. **Casting from inside the game** (step 6b, optional): the host's screen can put
    the room on the venue's TVs, with the venue's TV PIN. It's box-only, so nothing
@@ -274,7 +310,7 @@ Work through them in order, and get each level fully working before starting the
    `<repo>\vendor\` (create the folder).
 2. Add the dependency to **both** the `server` and `client` workspace `package.json`:
    ```json
-   "@bargames/sdk": "file:../vendor/bargames-sdk-0.8.0.tgz"
+   "@bargames/sdk": "file:../vendor/bargames-sdk-0.9.0.tgz"
    ```
 3. Run `npm install` at the repo root and commit the lockfile change along with it.
 4. **Dockerfile:** the `npm ci` layer needs the tarball. Next to the other
@@ -285,7 +321,7 @@ Work through them in order, and get each level fully working before starting the
 5. The CLI is now available as `npx bargames` (try `npx bargames` with no arguments).
 
 **Updating later:** a newer SDK arrives as a new file name, for example
-`bargames-sdk-0.8.0.tgz`. Replace the file, update both `package.json` entries, and run
+`bargames-sdk-0.9.0.tgz`. Replace the file, update both `package.json` entries, and run
 `npm install`. Never overwrite a tarball under the same name: the lockfile's integrity
 hash would then fail `npm ci`.
 

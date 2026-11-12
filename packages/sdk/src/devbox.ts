@@ -9,7 +9,7 @@
 import { createServer, request, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { connect } from "node:net";
 import { isApp, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
-import { HEADERS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type CastDisplay, type CastTargets, type GameStatus, type VenueContext, type VenueTheme } from "./protocol.js";
+import { HEADERS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
 import { DEFAULT_THEME } from "./theme.js";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -108,6 +108,7 @@ export const FAKE_TVS: readonly { id: string; name: string; group: string; unpai
 ];
 
 export function mockBox(o: MockBoxOptions) {
+  let countdown: Countdown | undefined;
   const publicUrl = `http://localhost:${o.gatewayPort}`;
   const declared = new Set(o.manifest?.events ?? []);
   /** fake TV id -> room code it shows. */
@@ -151,7 +152,60 @@ export function mockBox(o: MockBoxOptions) {
       console.log(`${ok ? c.ok("box password accepted") : c.warn("box password refused")} (bg.checkVenuePassword)`);
       return json(200, { ok });
     }
-    if (req.url === "/internal/venue") return json(200, mockContext(o.gameId, o.displayName, publicUrl, { announcement: o.announcement, app: o.manifest ? isApp(o.manifest) : false }));
+    // SDK 0.9.0
+    if (req.url === "/internal/attention" && req.method === "POST") {
+      const { items } = JSON.parse((await readBody(req)) || "{}") as { items?: { level: string; message: string }[] };
+      console.log(`${c.warn("attention")} ${(items ?? []).length ? (items ?? []).map((i) => `[${i.level}] ${i.message}`).join(" · ") : "(cleared)"}`);
+      return json(200, { ok: true, count: (items ?? []).length });
+    }
+    if (req.url === "/internal/countdown" && req.method === "POST") {
+      const b = JSON.parse((await readBody(req)) || "{}") as { label?: string; minutes?: number };
+      if (!b.label || !(Number(b.minutes) > 0)) return json(400, { error: "label and minutes required" });
+      countdown = { id: Date.now().toString(36), label: b.label, endsAt: new Date(Date.now() + Number(b.minutes) * 60_000).toISOString(), gameId: o.gameId, joinUrl: publicUrl };
+      console.log(`${c.ok("countdown")} "${b.label}" ${b.minutes} min (in the venue context now)`);
+      return json(200, countdown);
+    }
+    if (req.url === "/internal/countdown" && req.method === "DELETE") {
+      countdown = undefined;
+      return json(200, { ok: true });
+    }
+    if (req.url === "/internal/results" && req.method === "POST") {
+      const r = JSON.parse((await readBody(req)) || "{}") as { results?: { player?: { name?: string }; place?: number; score?: number }[] };
+      if (!Array.isArray(r.results) || !r.results.length || r.results.some((x) => !x?.player?.name)) {
+        console.log(c.bad("✗ results: need results: [{ player: { name }, place?, score? }]"));
+        return json(400, { error: "results: [{ player: { name }, place?, score? }]" });
+      }
+      console.log(`${c.ok("results")} ${r.results.map((x) => `${x.place ? `#${x.place} ` : ""}${x.player!.name}${x.score !== undefined ? ` (${x.score})` : ""}`).join(", ")}`);
+      return json(200, { ok: true });
+    }
+    if (req.url === "/internal/tvs" && req.method === "GET") {
+      if (!o.manifest?.media) return json(403, { error: "declare media in bargames.json to use this" });
+      const launch = o.manifest.media.launch;
+      return json(200, {
+        tvs: FAKE_TVS.map((t, i) => ({
+          id: t.id,
+          name: t.name,
+          group: t.group,
+          kind: i === 0 ? "roku" : "airplay",
+          online: !t.unpaired,
+          canLaunch: i === 0 ? launch.filter((a) => a === "youtube") : [],
+          ...(i === 0 && launch.includes("youtube") ? { youtubeScreenId: "fake-screen-id-bar" } : {}),
+        })),
+      });
+    }
+    if (req.url === "/internal/launch-app" && req.method === "POST") {
+      const b = JSON.parse((await readBody(req)) || "{}") as { displayId?: string; app?: string };
+      if (!o.manifest?.media?.launch.includes(String(b.app))) return json(200, { ok: false, reason: "not-allowed", message: `${b.app} isn't in media.launch` });
+      if (b.displayId !== FAKE_TVS[0].id) return json(200, { ok: false, reason: "unsupported", message: "only the fake Roku (fake-bar) can start apps" });
+      console.log(`${c.ok("launch")} ${b.app} on ${b.displayId} (pretend)`);
+      return json(200, { ok: true });
+    }
+    if (req.url?.startsWith("/internal/profiles")) return json(501, { error: "player profiles aren't built yet" });
+    if (req.url === "/internal/venue") {
+      const ctx = mockContext(o.gameId, o.displayName, publicUrl, { announcement: o.announcement, app: o.manifest ? isApp(o.manifest) : false });
+      if (countdown && Date.parse(countdown.endsAt) > Date.now()) ctx.venue.countdown = countdown;
+      return json(200, ctx);
+    }
     if (req.url === "/internal/displays" && req.method === "GET") {
       if (o.castFromGames === false) return json(200, { enabled: false, pinRequired: false, displays: [] } satisfies CastTargets);
       const displays: CastDisplay[] = FAKE_TVS.map((t) => ({ id: t.id, name: t.name, group: t.group, busy: showing.has(t.id), showingThisGame: showing.has(t.id), roomCode: showing.get(t.id) }));
@@ -332,7 +386,8 @@ export async function callGame(gameUrl: string, p: string, body?: unknown, token
  * Conformance checks against a running game started with the mock-box env
  * (BG_CORE_URL, BG_GAME_TOKEN=dev-token). Returns false if any check failed.
  */
-export async function check(manifest: GameManifest, gameUrl: string, opts: { room?: string } = {}): Promise<boolean> {
+export async function check(manifest: GameManifest, gameUrl: string, opts: { room?: string; live?: boolean } = {}): Promise<boolean> {
+  let onMock = false;
   let failed = 0;
   const pass = (m: string) => console.log(`${c.ok("✓")} ${m}`);
   const fail = (m: string, hint?: string) => {
@@ -355,7 +410,10 @@ export async function check(manifest: GameManifest, gameUrl: string, opts: { roo
     const ctx = v.body as VenueContext;
     if (v.status !== 200 || typeof ctx !== "object") fail(`${PATHS.venue} → ${v.status}`, "mount bg.middleware() before your routes (and before any SPA catch-all)");
     else if (ctx.standalone) fail(`${PATHS.venue} says standalone`, "start the game with BG_CORE_URL / BG_GAME_TOKEN from mock-box");
-    else if (ctx.game.displayName.includes("(mock)")) pass(`${PATHS.venue} returns the box's branding ("${ctx.game.displayName}")`);
+    else if (ctx.game.displayName.includes("(mock)")) {
+      onMock = true;
+      pass(`${PATHS.venue} returns the box's branding ("${ctx.game.displayName}")`);
+    }
     else warn(`${PATHS.venue} returned "${ctx.game.displayName}" (expected the mock's name; is BG_CORE_URL pointing at mock-box?)`);
     const css = await callGame(gameUrl, PATHS.themeCss, undefined, "");
     css.status === 200 && String(css.body).includes("--venue-bg") ? pass(`${PATHS.themeCss} served`) : fail(`${PATHS.themeCss} → ${css.status}`);
@@ -419,7 +477,26 @@ export async function check(manifest: GameManifest, gameUrl: string, opts: { roo
     }
   }
 
-  if (level >= 3 && manifest.commands.includes("create_room")) {
+  // SDK 0.9.0: media providers.
+  if (manifest.media && level >= 3) {
+    const st = await callGame(gameUrl, PATHS.status);
+    const media = (st.body as { media?: { targets?: unknown } })?.media;
+    if (media === undefined) warn("media provider: status has no media.targets yet (fine until a TV is mapped)");
+    else if (!Array.isArray(media.targets)) fail("status.media.targets must be an array of { displayId, label, state }");
+    else pass(`status.media.targets → ${media.targets.length} TV(s)`);
+    const list = await callGame(gameUrl, PATHS.command, { command: "media_list" });
+    const items = ((list.body as { data?: { items?: MediaItem[] } })?.data?.items ?? undefined) as MediaItem[] | undefined;
+    if (list.status === 200 && Array.isArray(items) && items.every((i) => typeof i.id === "string" && (i.kind === "list" || i.kind === "plan"))) pass(`media_list → ${items.length} item(s)`);
+    else fail(`media_list → ${list.status} ${JSON.stringify(list.body).slice(0, 120)}`, "bg.onMediaList(() => [{ id, name, kind: \"list\" | \"plan\" }])");
+    for (const cmd of ["media_play", "media_stop"]) if (!manifest.commands.includes(cmd)) fail(`"${cmd}" isn't in bargames.json "commands"`);
+  }
+
+  // Creating rooms on a live game by mistake: only against the mock box's game unless --live.
+  const roomsOk = onMock || opts.live === true;
+  if (!roomsOk && level >= 3 && manifest.commands.includes("create_room")) {
+    warn(`skipping create_room/end: ${gameUrl} isn't connected to the mock box (a live game?). Point --game at your mock-box game, or pass --live to run them anyway`);
+  }
+  if (roomsOk && level >= 3 && manifest.commands.includes("create_room")) {
     const r = await callGame(gameUrl, PATHS.command, { command: "create_room", args: { kind: "venue", purpose: "display" } });
     const res = r.body as { ok?: boolean; data?: { roomCode?: unknown; hostUrl?: unknown }; message?: string };
     const code = res?.data?.roomCode;
