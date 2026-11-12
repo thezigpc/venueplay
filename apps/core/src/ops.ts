@@ -5,6 +5,7 @@
 //   bgctl status                      games, versions, and any update waiting
 //   bgctl check [game]                re-check the games' sources now
 //   bgctl update <game…> | --all      install newer versions and restart them
+//   bgctl install <repo URL> [--enable]   install a game (first time) from its GitHub repo
 //         --wait <minutes>            wait for an image that's still building
 //         --json                      machine-readable output
 
@@ -40,6 +41,8 @@ const HELP = `bgctl: Bar Games box command line
   bgctl check [game]               re-check the games' sources now
   bgctl update <game...>           install newer versions and restart them
   bgctl update --all               every game with an update
+  bgctl install <repo URL>         install a game from its GitHub repo
+     --enable                      and turn it on (start it)
      --wait <minutes>              keep checking while a new image is still building
      --json                        machine-readable output
 
@@ -63,6 +66,8 @@ export function opsClient(baseUrl: string, token: string, doFetch: typeof fetch 
   return {
     games: () => call<Listing>("GET", "/internal/ops/games"),
     check: (gameId?: string) => call<Listing>("POST", "/internal/ops/check", { gameId }),
+    install: (url: string, enable: boolean) =>
+      call<{ id: string; version: string; upgraded: boolean; enabled: boolean; warnings: string[]; game: Row }>("POST", "/internal/ops/install", { url, enable }),
     update: (id: string) => call<{ id: string; from: string; to: string; warnings: string[] }>("POST", `/internal/ops/update/${encodeURIComponent(id)}`),
   };
 }
@@ -103,6 +108,34 @@ export async function runOps(argv: string[], client: Client, out: (line: string)
   if (cmd === "check") {
     print(await client.check(rest[0]));
     return 0;
+  }
+  if (cmd === "install") {
+    const url = rest[0];
+    if (!url) {
+      out("install what? bgctl install https://github.com/<owner>/<repo> [--enable] [--wait 20]");
+      return 2;
+    }
+    const deadline = Date.now() + waitMin * 60_000;
+    for (;;) {
+      try {
+        const r = await client.install(url, argv.includes("--enable"));
+        if (json) out(JSON.stringify(r, null, 2));
+        else {
+          out(`ok   ${r.id}: ${r.upgraded ? "upgraded to" : "installed"} ${r.version}, ${r.enabled ? `on (${r.game.state})` : "off (turn it on in the Games tab, or use --enable)"}`);
+          for (const w of r.warnings) out(`     note: ${w}`);
+        }
+        return 0;
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (/^image not available yet/.test(msg) && Date.now() < deadline) {
+          if (!json) out(`waiting: ${msg.replace(/^image not available yet: /, "")}… checking again in 30 s`);
+          await sleep(30_000);
+          continue;
+        }
+        out(json ? JSON.stringify({ ok: false, error: msg }) : `FAIL install: ${msg}`);
+        return 1;
+      }
+    }
   }
   if (cmd !== "update") {
     out(`unknown command "${cmd}"\n\n${HELP}`);

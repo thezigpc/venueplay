@@ -707,6 +707,38 @@ export function createApp(d: AppDeps) {
       res.json({ box: d.config.boxVersion, lastCheck: updates.lastRun, games: await Promise.all(d.games.list().map(opsRow)) });
     }),
   );
+  /**
+   * { url, enable? }: install a game from its repo (or upgrade it). Refuses with "image not
+   * available yet" while its image can't be pulled, so bgctl can wait for a build.
+   */
+  app.post(
+    "/internal/ops/install",
+    opsAuth,
+    h(async (req, res) => {
+      const { url, enable } = (req.body ?? {}) as { url?: unknown; enable?: unknown };
+      if (typeof url !== "string" || !url.trim()) throw new HttpError(400, "url required (the game's GitHub repo)");
+      const fetched = await fetchManifest(url, doFetch).catch((e: Error) => {
+        throw new HttpError(400, e.message);
+      });
+      const m = fetched.manifest;
+      const img = await imageState(m.image, doFetch).catch(() => "unknown" as const);
+      if (img === "missing" || img === "private") {
+        throw new HttpError(409, `image not available yet: ${m.image} can't be downloaded (its build may still be running, or the package is private)`);
+      }
+      const prev = d.games.get(m.id);
+      const installed = await d.games.install({ manifest: m, source: { kind: "url", ref: fetched.url }, verified: false });
+      await restartUpgraded(prev, installed.game);
+      let game = installed.game;
+      if (enable === true && !game.enabled) {
+        game = await d.games.patch(game.id, { enabled: true });
+        await d.runtime.ensureRunning(game);
+      }
+      void updates.check(game).catch(() => undefined);
+      d.log.info("games", installed.upgraded ? "upgraded" : "installed", { game: game.id, version: m.version, by: "bgctl" });
+      res.json({ id: game.id, version: m.version, upgraded: installed.upgraded, enabled: game.enabled, warnings: fetched.warnings, game: await opsRow(game) });
+    }),
+  );
+
   app.post(
     "/internal/ops/update/:id",
     opsAuth,

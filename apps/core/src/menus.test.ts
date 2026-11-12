@@ -301,3 +301,36 @@ test("bgctl: ops endpoints need the ops token; update waits for a building image
     b.close();
   }
 });
+
+test("bgctl install: waits for the image, installs, and turns the game on", async () => {
+  const raw = "https://raw.githubusercontent.com/acme/bingo/HEAD/bargames.json";
+  let published = false;
+  const b = await boot((url, init) => {
+    if (url === raw) return reply(bingo);
+    if (url.startsWith("https://ghcr.io/token")) return reply({ token: "anon" });
+    if (url.startsWith("https://ghcr.io/v2/acme/bingo/manifests/")) {
+      if (!new Headers(init?.headers).get("authorization")) return reply({}, 401, { "www-authenticate": 'Bearer realm="https://ghcr.io/token",service="ghcr.io"' });
+      return new Response(null, { status: published ? 200 : 404 });
+    }
+    return undefined;
+  });
+  try {
+    const client = opsClient(b.base, "ops-secret");
+    const lines: string[] = [];
+    assert.equal(await runOps(["install", "https://github.com/acme/bingo", "--enable"], client, (l) => lines.push(l)), 1, "no --wait: fails while building");
+    assert.match(lines.join(" | "), /FAIL install: image not available yet/);
+    assert.equal(b.games.get("bingo"), undefined, "nothing installed");
+
+    lines.length = 0;
+    const code = await runOps(["install", "https://github.com/acme/bingo", "--enable", "--wait", "5"], client, (l) => lines.push(l), async () => {
+      published = true;
+    });
+    assert.equal(code, 0, lines.join(" | "));
+    assert.match(lines.join(" | "), /waiting: .*bingo:1\.0\.0/);
+    assert.match(lines.join(" | "), /ok\s+bingo: installed 1\.0\.0, on \(running\)/);
+    assert.equal(b.games.get("bingo")?.enabled, true);
+    assert.equal(b.runtime.started.at(-1), "ghcr.io/acme/bingo:1.0.0");
+  } finally {
+    b.close();
+  }
+});
