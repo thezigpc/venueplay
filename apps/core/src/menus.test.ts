@@ -123,7 +123,7 @@ test("menus: listed apart from games, venue location reaches games, cast without
 
     // Gateway config marks it for the games list.
     const cfg = (await (await b.json("GET", "/internal/gateway-config", undefined, { authorization: "Bearer gw" })).json()) as { hub: { games: { id: string; kind?: string }[] } };
-    assert.equal(cfg.hub.games.find((g) => g.id === "menu")?.kind, "display");
+    assert.equal(cfg.hub.games.find((g) => g.id === "menu")?.kind, "app", "a 0.5.0 \"display\" manifest is an app");
     assert.equal(cfg.hub.games.find((g) => g.id === "bingo")?.kind, "game");
 
     // Casting a menu: its TV view, no room.

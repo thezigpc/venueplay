@@ -1,5 +1,5 @@
 import type { GatewayConfig, GatewayRoute, HubGame, HubRoom } from "@bargames/common";
-import { isDisplayModule, PROTOCOL_VERSION, withAccent, type Announcement, type VenueContext, type VenueGameLink, type VenueInfo } from "@bargames/sdk";
+import { isApp, PROTOCOL_VERSION, withAccent, type Announcement, type VenueContext, type VenueGameLink, type VenueInfo } from "@bargames/sdk";
 import { hostFor, publicUrl } from "./hostnames.js";
 import type { AccessSettings, InstalledGame, VenueSettings } from "./state.js";
 
@@ -14,9 +14,10 @@ export function venueInfo(v: VenueSettings, extras: VenueExtras = {}): VenueInfo
   const info: VenueInfo = { name: v.name, theme: v.theme, wifi: v.wifi, playUrl: publicUrl(v, hostFor(v, v.playLabel)) };
   if (extras.games) {
     const on = extras.games.filter((g) => g.enabled);
-    // Menus and other display modules are listed apart, so games' "Also playing" skips them.
-    info.games = on.filter((g) => !isDisplayModule(g.manifest)).map((g) => gameLink(v, g));
-    info.modules = on.filter((g) => isDisplayModule(g.manifest)).map((g) => gameLink(v, g));
+    // Apps (menus…) are listed apart, so games' "Also playing" skips them.
+    info.games = on.filter((g) => !isApp(g.manifest)).map((g) => gameLink(v, g));
+    info.apps = on.filter((g) => isApp(g.manifest)).map((g) => gameLink(v, g));
+    info.modules = info.apps; // SDK 0.5.0 name
   }
   if (v.location) info.location = v.location;
   if (v.timezone) info.timezone = v.timezone;
@@ -89,7 +90,7 @@ export function buildGatewayConfig(input: {
     routes.push({ host, kind: "game", gameId: g.id, target: gameTarget(g), enabled: g.enabled, injectTheme: g.manifest.sdk.level === 0 });
     const ctx = buildContext(venue, g, extras);
     contexts[g.id] = ctx;
-    hub.push({ id: g.id, displayName: ctx.game.displayName, tagline: ctx.game.tagline, iconUrl: ctx.game.iconUrl, url: ctx.game.publicUrl!, enabled: g.enabled, kind: isDisplayModule(g.manifest) ? "display" : "game", rooms: input.rooms?.[g.id] });
+    hub.push({ id: g.id, displayName: ctx.game.displayName, tagline: ctx.game.tagline, iconUrl: ctx.game.iconUrl, url: ctx.game.publicUrl!, enabled: g.enabled, kind: isApp(g.manifest) ? "app" : "game", rooms: input.rooms?.[g.id] });
   }
   contexts._hub = {
     protocol: PROTOCOL_VERSION,

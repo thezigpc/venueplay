@@ -14,7 +14,7 @@ import {
   type GameEventInput,
   type GameStatus,
   compareVersions,
-  isDisplayModule,
+  isApp,
 } from "@bargames/sdk";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import { timingSafeEqual } from "node:crypto";
@@ -157,7 +157,7 @@ export function createApp(d: AppDeps) {
   const idleModuleOf = (): InstalledGame | undefined => {
     const id = d.state.venue.get().idleModule;
     const g = id ? d.games.get(id) : undefined;
-    return g && g.enabled && isDisplayModule(g.manifest) && g.manifest.routes.table ? g : undefined;
+    return g && g.enabled && isApp(g.manifest) && g.manifest.routes.table ? g : undefined;
   };
   const idleContent = async () => {
     const venue = d.state.venue.get();
@@ -192,7 +192,7 @@ export function createApp(d: AppDeps) {
   };
   const originOf = (g: InstalledGame | undefined) => {
     try {
-      return g && isDisplayModule(g.manifest) ? new URL(buildContext(d.state.venue.get(), g).game.publicUrl!).origin : undefined;
+      return g && isApp(g.manifest) ? new URL(buildContext(d.state.venue.get(), g).game.publicUrl!).origin : undefined;
     } catch {
       return undefined;
     }
@@ -683,7 +683,7 @@ export function createApp(d: AppDeps) {
     id: g.id,
     name: buildContext(d.state.venue.get(), g).game.displayName,
     version: g.manifest.version,
-    kind: g.manifest.kind ?? "game",
+    kind: isApp(g.manifest) ? "app" : "game",
     enabled: g.enabled,
     state: await d.runtime.state(g.id).catch(() => "unknown"),
     source: g.source.kind === "url" ? g.source.ref : g.source.kind,
@@ -817,8 +817,8 @@ export function createApp(d: AppDeps) {
     const publicUrl = ctx.game.publicUrl!;
     type Results = Record<string, { ok: boolean; message?: string; needsCode?: boolean }>;
 
-    // Menus and other display modules: no rooms, their TV view as is.
-    if (isDisplayModule(game.manifest)) {
+    // Apps (menus…): no rooms, their TV view as is.
+    if (isApp(game.manifest)) {
       const url = new URL(game.manifest.routes.table, publicUrl).toString();
       const results = (await brokerCall("POST", "/show", { ...target, content: { kind: "url", url, title: name } })) as Results;
       d.log.info("cast", "shown", { game: game.id, displays: Object.keys(results).length, failed: Object.values(results).filter((x) => !x.ok).length });
@@ -1057,7 +1057,7 @@ export function checkVenueExtras(v: VenueSettings, gameOf: (id: string) => Insta
   if (v.units != null && v.units !== "imperial" && v.units !== "metric") return "units: imperial or metric";
   if (v.idleModule != null && v.idleModule !== "") {
     const g = gameOf(String(v.idleModule));
-    if (!g || !isDisplayModule(g.manifest)) return "idleModule: pick an installed menu (display module)";
+    if (!g || !isApp(g.manifest)) return "idleModule: pick an installed app with a TV view (a menu)";
   }
   return undefined;
 }

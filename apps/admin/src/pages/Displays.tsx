@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { isDisplayModule } from "@bargames/sdk";
+import { isApp } from "@bargames/sdk";
 import { api, type CastSettings, type Display, type Game, type StartupRule, type StreamSettings } from "../api";
 
 const PREVIEWS_KEY = "bargames.tvPreviews";
@@ -204,7 +204,7 @@ function StartupChoice({ d, rule, games, run, busy }: { d: Display; rule?: Start
         <option value="last">Keep what it was showing</option>
         <option value="idle">The idle screen</option>
         {castable
-          .filter((g) => isDisplayModule(g.manifest))
+          .filter((g) => isApp(g.manifest))
           .map((g) => (
             <option key={g.id} value={`game:${g.id}`}>
               {g.context.game.displayName}
@@ -212,7 +212,7 @@ function StartupChoice({ d, rule, games, run, busy }: { d: Display; rule?: Start
             </option>
           ))}
         {castable
-          .filter((g) => !isDisplayModule(g.manifest) && g.manifest.commands.includes("create_room"))
+          .filter((g) => !isApp(g.manifest) && g.manifest.commands.includes("create_room"))
           .map((g) => (
             <option key={g.id} value={`game:${g.id}`}>
               {g.context.game.displayName}: a new room

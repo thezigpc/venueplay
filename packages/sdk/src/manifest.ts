@@ -13,15 +13,19 @@ export interface ContentPack {
   description?: string;
 }
 
-/** "game" (default): rooms and players. "display": a screen module (menus, signage) with no rooms (SDK 0.5.0+). */
-export const MODULE_KINDS = ["game", "display"] as const;
+/**
+ * "game" (default): rooms and players.
+ * "app" (SDK 0.6.0): anything else the venue runs on the box (menus, signage, a jukebox):
+ * no rooms, listed under Apps. "display" (SDK 0.5.0) is the old name for "app", still accepted.
+ */
+export const MODULE_KINDS = ["game", "app", "display"] as const;
 export type ModuleKind = (typeof MODULE_KINDS)[number];
 
 export interface GameManifest {
   /** Unique slug; also the default hostname label (pool → pool.example.com). */
   id: string;
   name: string;
-  /** What this package is. Boxes older than SDK 0.5.0 ignore it and treat everything as a game. */
+  /** What this package is ("display" is read as "app"). Boxes older than SDK 0.5.0 ignore it and treat everything as a game. */
   kind?: ModuleKind;
   /** Semver. */
   version: string;
@@ -50,7 +54,7 @@ export interface GameManifest {
   commands: string[];
   brandable: BrandableSlot[];
   contentPacks: ContentPack[];
-  /** Session kinds this game supports (always empty for display modules). */
+  /** Session kinds this game supports (always empty for apps). */
   sessionKinds: SessionKind[];
   resources: { memory: string; cpus: number };
   /** internet: false keeps the game on an internal-only network. */
@@ -88,7 +92,8 @@ export function validateManifest(input: unknown): ManifestResult {
 
   const kind = m.kind === undefined ? "game" : m.kind;
   if (!(MODULE_KINDS as readonly unknown[]).includes(kind)) errors.push(`kind: ${MODULE_KINDS.join(" or ")}`);
-  const display = kind === "display";
+  const display = kind === "app" || kind === "display";
+  if (kind === "display") warnings.push('kind: "display" is now "app" (both work)');
 
   // sdk
   let level: IntegrationLevel = 0;
@@ -108,11 +113,10 @@ export function validateManifest(input: unknown): ManifestResult {
     }
   }
   if (routes && routes.table === undefined) {
-    if (display) errors.push("routes.table: display modules need their TV view");
-    else warnings.push("routes.table: no big-screen view; this game cannot be cast to TVs");
+    warnings.push(display ? "routes.table: no TV view; this app can't be cast to TVs or used on idle TVs" : "routes.table: no big-screen view; this game cannot be cast to TVs");
   }
-  if (display && routes && isStr(routes.table) && routes.table.includes("{code}")) errors.push("routes.table: display modules have no rooms, so no {code}");
-  if (display && level >= 2) warnings.push("sdk.level: display modules have no rooms; level 2+ room events and commands won't be used");
+  if (display && routes && isStr(routes.table) && routes.table.includes("{code}")) errors.push("routes.table: apps have no rooms, so no {code}");
+  if (display && level >= 2) warnings.push("sdk.level: apps have no rooms; level 2+ room events and commands won't be used");
 
   const health = m.health === undefined ? "/health" : m.health;
   if (!isStr(health) || !health.startsWith("/")) errors.push("health: path starting with /");
@@ -139,7 +143,7 @@ export function validateManifest(input: unknown): ManifestResult {
   }
 
   const kinds = display ? [] : m.sessionKinds === undefined ? [...SESSION_KINDS] : m.sessionKinds;
-  if (display && m.sessionKinds !== undefined) warnings.push("sessionKinds: ignored for display modules");
+  if (display && m.sessionKinds !== undefined) warnings.push("sessionKinds: ignored for apps");
   if (!display && (!strArray(kinds) || kinds.length === 0 || !kinds.every((k) => (SESSION_KINDS as readonly string[]).includes(k)))) {
     errors.push(`sessionKinds: non-empty subset of ${SESSION_KINDS.join(", ")}`);
   }
@@ -166,7 +170,7 @@ export function validateManifest(input: unknown): ManifestResult {
   const manifest: GameManifest = {
     id: m.id as string,
     name: m.name as string,
-    kind: kind as ModuleKind,
+    kind: display ? "app" : (kind as ModuleKind),
     version: m.version as string,
     description: m.description as string | undefined,
     author: m.author as string | undefined,
@@ -194,8 +198,11 @@ export function validateManifest(input: unknown): ManifestResult {
   return { ok: true, manifest, warnings };
 }
 
-/** True for display modules (menus, signage). Manifests saved before SDK 0.5.0 have no kind: games. */
-export const isDisplayModule = (m: Pick<GameManifest, "kind">): boolean => m.kind === "display";
+/** True for apps (menus, signage…), including SDK 0.5.0's "display". No kind: a game. */
+export const isApp = (m: Pick<GameManifest, "kind">): boolean => m.kind === "app" || m.kind === "display";
+
+/** @deprecated SDK 0.5.0 name; use isApp. */
+export const isDisplayModule = isApp;
 
 /** Fills a table route template with a room code. */
 export function tableUrl(manifest: Pick<GameManifest, "routes">, roomCode: string): string | undefined {

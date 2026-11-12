@@ -8,7 +8,7 @@
 
 import { createServer, request, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { connect } from "node:net";
-import { isDisplayModule, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
+import { isApp, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
 import { HEADERS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type CastDisplay, type CastTargets, type GameStatus, type VenueContext, type VenueTheme } from "./protocol.js";
 import { DEFAULT_THEME } from "./theme.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -34,7 +34,8 @@ export function loadManifest(dirOrFile: string): GameManifest | undefined {
 /** The mock box's games list page, served by its fake gateway. */
 export const MOCK_GAMES_PATH = "/__bargames/dev/games";
 
-export function mockContext(gameId: string, displayName: string, publicUrl: string, opts: { announcement?: string; display?: boolean } = {}): VenueContext {
+export function mockContext(gameId: string, displayName: string, publicUrl: string, opts: { announcement?: string; app?: boolean; /** @deprecated */ display?: boolean } = {}): VenueContext {
+  const app = Boolean(opts.app ?? opts.display);
   const self = { id: gameId, displayName, tagline: "Branded by the mock box", url: publicUrl };
   return {
     protocol: PROTOCOL_VERSION,
@@ -44,12 +45,13 @@ export function mockContext(gameId: string, displayName: string, publicUrl: stri
       wifi: { ssid: "TestVenueGuest" },
       playUrl: new URL(MOCK_GAMES_PATH, publicUrl).toString(),
       games: [
-        ...(opts.display ? [] : [self]),
+        ...(app ? [] : [self]),
         // A pretend second game, so "Also playing" has something to show.
         { id: "other-game", displayName: "Other Game (fake)", url: new URL(`${MOCK_GAMES_PATH}#other-game`, publicUrl).toString() },
       ],
-      // Display modules (menus) are listed apart from games.
-      modules: opts.display ? [self] : [],
+      // Apps (menus) are listed apart from games.
+      apps: app ? [self] : [],
+      modules: app ? [self] : [],
       location: { latitude: 40.7128, longitude: -74.006, label: "Test City" },
       timezone: "America/New_York",
       units: "imperial",
@@ -139,7 +141,7 @@ export function mockBox(o: MockBoxOptions) {
       console.log(c.bad(`✗ core: ${req.method} ${req.url} with a wrong/missing token (expected BG_GAME_TOKEN=${DEV_TOKEN})`));
       return json(401, { error: "bad game token" });
     }
-    if (req.url === "/internal/venue") return json(200, mockContext(o.gameId, o.displayName, publicUrl, { announcement: o.announcement, display: o.manifest ? isDisplayModule(o.manifest) : false }));
+    if (req.url === "/internal/venue") return json(200, mockContext(o.gameId, o.displayName, publicUrl, { announcement: o.announcement, app: o.manifest ? isApp(o.manifest) : false }));
     if (req.url === "/internal/displays" && req.method === "GET") {
       if (o.castFromGames === false) return json(200, { enabled: false, pinRequired: false, displays: [] } satisfies CastTargets);
       const displays: CastDisplay[] = FAKE_TVS.map((t) => ({ id: t.id, name: t.name, group: t.group, busy: showing.has(t.id), showingThisGame: showing.has(t.id), roomCode: showing.get(t.id) }));
@@ -164,7 +166,7 @@ export function mockBox(o: MockBoxOptions) {
       }
       const room = body.roomCode;
       if (!o.manifest?.routes.table) return json(400, { error: "this game has no TV view (routes.table in bargames.json)" });
-      const display = isDisplayModule(o.manifest);
+      const display = isApp(o.manifest);
       if (!display) {
         if (typeof room !== "string" || !room) return json(400, { error: "roomCode required" });
         if (!(await gameRooms()).rooms?.some((r) => r.code === room)) {
@@ -172,7 +174,7 @@ export function mockBox(o: MockBoxOptions) {
           return json(404, { error: `no room ${room}` });
         }
       }
-      // Display modules have no rooms: the box casts their TV view as is.
+      // Apps have no rooms: the box casts their TV view as is.
       const url = new URL(display ? o.manifest.routes.table : tableUrl(o.manifest, room as string)!, publicUrl).toString();
       for (const id of ids) {
         const tv = FAKE_TVS.find((t) => t.id === id);
@@ -256,11 +258,11 @@ export function mockBox(o: MockBoxOptions) {
 
 /** What the real games list shows for this game: its open rooms and their Join links. */
 async function mockGamesList(o: MockBoxOptions, publicUrl: string): Promise<string> {
-  if (o.manifest && isDisplayModule(o.manifest)) {
+  if (o.manifest && isApp(o.manifest)) {
     const e = (s: string) => s.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
     return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Games (mock box)</title>
 <body style="font-family:system-ui;max-width:520px;margin:24px auto;padding:0 16px"><h1>Test Venue (mock)</h1>
-<p>The real box lists display modules apart from the games, as a link.</p>
+<p>The real box lists apps apart from the games, as a link.</p>
 <p><a href="${e(publicUrl)}">${e(o.displayName)}</a></p>
 <h2 id="other-game">Other Game (fake)</h2><p>A pretend game.</p></body>`;
   }
@@ -333,14 +335,14 @@ export async function check(manifest: GameManifest, gameUrl: string, opts: { roo
     css.status === 200 && String(css.body).includes("--venue-bg") ? pass(`${PATHS.themeCss} served`) : fail(`${PATHS.themeCss} → ${css.status}`);
   }
 
-  if (isDisplayModule(manifest)) {
-    // Display modules: a phone page and a TV view, no rooms. Room checks don't apply.
+  if (isApp(manifest)) {
+    // Apps: a phone page and (usually) a TV view, no rooms. Room checks don't apply.
     for (const [what, p] of [["phone page (routes.player)", manifest.routes.player], ["TV view (routes.table)", manifest.routes.table]] as const) {
       if (!p) continue;
       const page = await callGame(gameUrl, p, undefined, "").catch(() => ({ status: 0, body: "" }));
       page.status === 200 ? pass(`${what} ${p} → 200`) : fail(`${what} ${p} → ${page.status}`);
     }
-    if (manifest.sdk.level < 1) warn("display modules should be level 1, so they get the venue's theme, location and time zone");
+    if (manifest.sdk.level < 1) warn("apps should be level 1, so they get the venue's theme, location and time zone");
     console.log(failed ? c.bad(`\n${failed} check(s) failed`) : c.ok("\nall checks passed"));
     return failed === 0;
   }

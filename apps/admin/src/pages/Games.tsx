@@ -1,9 +1,20 @@
-import { isDisplayModule } from "@bargames/sdk";
+import { isApp } from "@bargames/sdk";
 import { useState } from "react";
 import { api, type Game, type UpdateInfo } from "../api";
 import { useAction, useLoad } from "../useLoad";
 
 export function GamesPage() {
+  return <CatalogPage kind="game" />;
+}
+
+/** Apps (SDK 0.6.0): menus, signage and other non-games. Installed and updated like games. */
+export function AppsPage() {
+  return <CatalogPage kind="app" />;
+}
+
+function CatalogPage({ kind }: { kind: "game" | "app" }) {
+  const app = kind === "app";
+  const noun = app ? "app" : "game";
   const games = useLoad(api.games);
   const updates = useLoad(api.updates);
   const reloadAll = async () => {
@@ -19,7 +30,8 @@ export function GamesPage() {
   const install = () =>
     run(async () => {
       const r = await api.install(url, sub.trim().toLowerCase());
-      setNotes([`${r.upgraded ? "Updated" : "Installed"} ${r.game.manifest.name} ${r.game.manifest.version}${r.game.verified ? "" : " (unverified source)"}`, ...r.warnings]);
+      const elsewhere = isApp(r.game.manifest) !== app ? ` It's ${app ? "a game" : "an app"}, so it's under ${app ? "Games" : "Apps"}.` : "";
+      setNotes([`${r.upgraded ? "Updated" : "Installed"} ${r.game.manifest.name} ${r.game.manifest.version}${r.game.verified ? "" : " (unverified source)"}.${elsewhere}`, ...r.warnings]);
       setUrl("");
       setSub("");
     });
@@ -27,10 +39,12 @@ export function GamesPage() {
   return (
     <div className="grid">
       <section className="card wide">
-        <h2>Add a game</h2>
-        <p className="muted">Paste a GitHub repo or a bargames.json URL. Market installs come later. Leave the subdomain empty to use the game's id; you can change it later.</p>
+        <h2>Add {app ? "an app" : "a game"}</h2>
+        <p className="muted">
+          {app ? "Apps are the things that aren't games: the menu, signage, and more to come. " : ""}Paste a GitHub repo or a bargames.json URL. Leave the subdomain empty to use the {noun}'s id; you can change it later.
+        </p>
         <div className="inline">
-          <input placeholder="https://github.com/owner/game" value={url} onChange={(e) => setUrl(e.target.value)} />
+          <input placeholder={`https://github.com/owner/${noun}`} value={url} onChange={(e) => setUrl(e.target.value)} />
           <input placeholder="Subdomain (optional)" value={sub} onChange={(e) => setSub(e.target.value)} autoCapitalize="none" style={{ maxWidth: 200 }} />
           <button className="primary" disabled={!url || busy} onClick={install}>
             Install
@@ -62,7 +76,12 @@ export function GamesPage() {
           </span>
         </div>
       </section>
-      {(games.data ?? []).map((g) => (
+      {(games.data ?? []).filter((g) => isApp(g.manifest) === app).length === 0 && games.data && (
+        <section className="card">
+          <p className="muted">No {noun}s installed yet.</p>
+        </section>
+      )}
+      {(games.data ?? []).filter((g) => isApp(g.manifest) === app).map((g) => (
         <GameCard key={g.id} game={g} busy={busy} run={run} update={updates.data?.games.find((u) => u.gameId === g.id)} />
       ))}
     </div>
@@ -120,10 +139,17 @@ function GameCard({ game, busy, run, update }: { game: Game; busy: boolean; run:
         <small>{game.manifest.version}</small>
       </h2>
       <p className="muted">
-        {isDisplayModule(game.manifest) ? "Menu / display · " : ""}
+        {isApp(game.manifest) ? "App · " : ""}
         {game.host} · SDK level {game.manifest.sdk.level} · {game.state} · {game.verified ? "verified" : <span className="warn">unverified source</span>}
       </p>
       <UpdateBanner game={game} update={update} busy={busy} run={run} />
+      {game.manifest.routes.host && url && (
+        <p>
+          <a href={new URL(game.manifest.routes.host, url).toString()} target="_blank" rel="noreferrer">
+            Open {game.context.game.displayName}'s own settings ↗
+          </a>
+        </p>
+      )}
       {slots.has("displayName") && (
         <label>
           Display name

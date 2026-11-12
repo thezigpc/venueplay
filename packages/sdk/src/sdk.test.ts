@@ -377,18 +377,24 @@ test("mock box: venue context carries the games list, a second game and the anno
 
 // ---------------------------------------------------------------- 0.5.0: display modules, venue location, on-primary
 
-test("manifest: display modules need a TV view, have no rooms, default to kind game", () => {
+test("manifest: apps (SDK 0.6.0) have no rooms; \"display\" still works and reads as app; games are the default", async () => {
+  const { isApp, isDisplayModule } = await import("./manifest.js");
   const g = validateManifest(base);
-  assert.ok(g.ok && g.manifest.kind === "game");
-  const d = validateManifest({ ...base, kind: "display", sdk: { version: "0.5.0", level: 1 }, routes: { player: "/", table: "/tv" }, events: [] });
-  assert.ok(d.ok, JSON.stringify(d));
-  if (d.ok) {
-    assert.equal(d.manifest.kind, "display");
-    assert.deepEqual(d.manifest.sessionKinds, []);
+  assert.ok(g.ok && g.manifest.kind === "game" && !isApp(g.manifest));
+  const a = validateManifest({ ...base, kind: "app", sdk: { version: "0.6.0", level: 1 }, routes: { player: "/", table: "/tv" }, events: [] });
+  assert.ok(a.ok, JSON.stringify(a));
+  if (a.ok) {
+    assert.equal(a.manifest.kind, "app");
+    assert.deepEqual(a.manifest.sessionKinds, []);
+    assert.ok(isApp(a.manifest));
   }
-  const noTv = validateManifest({ ...base, kind: "display", routes: { player: "/" } });
-  assert.ok(!noTv.ok && noTv.errors.some((e) => e.startsWith("routes.table")));
-  const code = validateManifest({ ...base, kind: "display", routes: { player: "/", table: "/tv/{code}" } });
+  const d = validateManifest({ ...base, kind: "display", sdk: { version: "0.5.0", level: 1 }, routes: { player: "/", table: "/tv" }, events: [] });
+  assert.ok(d.ok && d.manifest.kind === "app", "0.5.0 display modules are apps");
+  assert.ok(d.warnings.some((w) => w.includes('"display" is now "app"')));
+  assert.ok(isApp({ kind: "display" }) && isDisplayModule({ kind: "app" }), "a manifest saved by a 0.5.0 box still counts");
+  const noTv = validateManifest({ ...base, kind: "app", routes: { player: "/" }, events: [] });
+  assert.ok(noTv.ok && noTv.warnings.some((w) => w.startsWith("routes.table: no TV view")), "an app without a TV view is fine, with a note");
+  const code = validateManifest({ ...base, kind: "app", routes: { player: "/", table: "/tv/{code}" } });
   assert.ok(!code.ok && code.errors.some((e) => e.includes("{code}")));
   const bad = validateManifest({ ...base, kind: "kiosk" });
   assert.ok(!bad.ok && bad.errors.some((e) => e.startsWith("kind")));
@@ -412,8 +418,9 @@ test("devbox: mock context carries location, time zone, units; display modules l
   assert.equal(g.venue.timezone, "America/New_York");
   assert.equal(g.venue.units, "imperial");
   assert.equal(typeof g.venue.location?.latitude, "number");
-  const d = mockContext("menu", "Menu", "http://localhost:7080", { display: true });
-  assert.deepEqual(d.venue.modules?.map((m) => m.id), ["menu"]);
+  const d = mockContext("menu", "Menu", "http://localhost:7080", { app: true });
+  assert.deepEqual(d.venue.apps?.map((m) => m.id), ["menu"]);
+  assert.deepEqual(d.venue.modules?.map((m) => m.id), ["menu"], "0.5.0 name, same list");
   assert.ok(!d.venue.games?.some((x) => x.id === "menu"), "a display module is not in the game lineup");
   assert.deepEqual(otherGames(d).map((x) => x.id), ["other-game"]);
 });

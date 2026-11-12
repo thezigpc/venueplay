@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.5.0";
+export const SDK_VERSION = "0.6.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -58,7 +58,9 @@ export interface VenueInfo {
   games?: VenueGameLink[];
   /** A message from the staff for every game page ("Last call at 1:30"), if one is up. */
   announcement?: Announcement;
-  /** Display modules on the box (menus, signage): not games, listed apart (SDK 0.5.0+). */
+  /** Apps on the box (menus, signage…): not games, listed apart (SDK 0.6.0+). */
+  apps?: VenueGameLink[];
+  /** @deprecated SDK 0.5.0 name for `apps` (same list). */
   modules?: VenueGameLink[];
   /** Where the venue is, if the staff set it (weather, sunset times). SDK 0.5.0+. */
   location?: VenueLocation;

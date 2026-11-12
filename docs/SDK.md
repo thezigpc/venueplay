@@ -46,11 +46,13 @@ step-by-step guide, and it comes with the packaged SDK and snippets.
 
 Check it with `bargames validate .` (the CLI ships with the SDK).
 
-**Display modules (SDK 0.5.0):** `"kind": "display"` marks a screen module (a menu,
-signage) instead of a game: no rooms, `routes.table` required with no `{code}`,
-`sessionKinds` unused, level 1. The box lists it apart from the games, casts its TV view
-without a room, and can put it on idle TVs. `kind` defaults to `"game"`; boxes older than
-0.5.0 ignore it.
+**Apps (SDK 0.6.0):** `"kind": "app"` marks an app (a menu, signage…) instead of a game:
+no rooms, `sessionKinds` unused, level 1. `routes.table` (its TV view, no `{code}`) is
+optional; with it the box casts the app without a room and can put it on idle TVs or start
+it on a TV at boot. The box installs and updates apps on its Apps tab and lists them apart
+from the games (`ctx.venue.apps`). `kind` defaults to `"game"`. SDK 0.5.0's
+`"kind": "display"` is read as `"app"`; boxes older than 0.5.0 ignore `kind`.
+Helpers: `isApp(manifest)` (`isDisplayModule` is its 0.5.0 alias).
 
 ## 2. What the box gives your container
 

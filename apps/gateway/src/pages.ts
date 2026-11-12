@@ -69,8 +69,9 @@ function hubRooms(g: HubGame): string {
 }
 
 export function hubPage(venue: VenueInfo | undefined, games: HubGame[]): string {
-  const live = games.filter((g) => g.enabled && g.kind !== "display");
-  const modules = games.filter((g) => g.enabled && g.kind === "display");
+  const isApp = (g: HubGame) => g.kind === "app" || g.kind === "display";
+  const live = games.filter((g) => g.enabled && !isApp(g));
+  const modules = games.filter((g) => g.enabled && isApp(g));
   const moduleLinks = modules.length
     ? `<nav class="modules">${modules.map((m) => `<a class="module" href="${esc(m.url)}">${esc(m.displayName)}</a>`).join("")}</nav>`
     : "";

@@ -1,4 +1,4 @@
-import { isDisplayModule } from "@bargames/sdk";
+import { isApp } from "@bargames/sdk";
 import { useEffect, useState } from "react";
 import { api, type Display, type Game, type RoomSummary } from "../api";
 import { useAction, useLoad } from "../useLoad";
@@ -142,13 +142,13 @@ function CastCard({ games, displays, displaysError, groups }: { games: Game[]; d
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ text: string; hostUrl?: string; pairHint?: boolean } | undefined>();
   const game = games.find((g) => g.id === gameId);
-  const display = Boolean(game && isDisplayModule(game.manifest));
+  const display = Boolean(game && isApp(game.manifest));
   const canCreate = Boolean(game && game.manifest.sdk.level >= 3 && game.manifest.commands.includes("create_room"));
 
   useEffect(() => {
     setRooms([]);
     setResult(undefined);
-    if (!game || isDisplayModule(game.manifest)) return;
+    if (!game || isApp(game.manifest)) return;
     setChoice(game.manifest.sdk.level >= 3 && game.manifest.commands.includes("create_room") ? NEW : TYPED);
     api
       .gameStatus(game.id)
@@ -185,7 +185,7 @@ function CastCard({ games, displays, displaysError, groups }: { games: Game[]; d
     <section className="card">
       <h2>Put a game on the TVs</h2>
       <select value={gameId} onChange={(e) => setGameId(e.target.value)}>
-        <option value="">Game or menu…</option>
+        <option value="">Game or app…</option>
         {games.map((g) => (
           <option key={g.id} value={g.id}>
             {g.context.game.displayName}

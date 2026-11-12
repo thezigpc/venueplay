@@ -21,6 +21,20 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.6.0 (apps)
+
+Games: nothing to do (vendor 0.6.0 with your next release if you like).
+
+- **Apps:** `"kind": "app"` is the official name for what 0.5.0 called a display module
+  (menus, signage, anything that isn't a game). `"display"` still works and is read as
+  `"app"`. The box has an **Apps** tab next to Games, where apps are installed, updated and
+  configured the same way.
+- An app's TV view (`routes.table`) is now optional: an app without one just can't be cast
+  or used on idle TVs.
+- `ctx.venue.apps` lists the apps (`ctx.venue.modules` is the same list under its 0.5.0
+  name). `isApp(manifest)` replaces `isDisplayModule` (kept as an alias).
+- An app's `routes.host` gets an "Open its own settings" link on the box's Apps tab.
+
 ## What's new in SDK 0.5.0 (for games already on 0.4.0)
 
 Nothing breaks, and nothing here is urgent: a 0.4.0 game keeps working on a 0.5.0 box.
@@ -51,27 +65,30 @@ Pick it up with your next release.
    shows "Update available" once the new image can be downloaded. Its Update button
    restarts the game on the new image, and rolls back if it won't start. See step 10.
 
-## Display modules (menus, signage): SDK 0.5.0
+## Apps (menus, signage…): SDK 0.6.0
 
-A package with `"kind": "display"` in `bargames.json` is a screen module, not a game: no
-rooms, no players, no join codes. The menu module is the first one.
+A package with `"kind": "app"` in `bargames.json` is an app, not a game: no rooms, no
+players, no join codes. The menu is the first one. (SDK 0.5.0 called these display
+modules, `"kind": "display"`; that still works.)
 
-- **Manifest:** `"kind": "display"`, `sdk.level` 1, `routes.player` (the phone page),
-  `routes.table` (the TV view, **required**, no `{code}`), optional `routes.host` (its
-  admin). `sessionKinds` isn't used. Ask for `network.internet: true` if it fetches
+- **Manifest:** `"kind": "app"`, `sdk.level` 1, `routes.player` (the phone page),
+  `routes.table` (the TV view, no `{code}`; optional, but without it the app can't be cast
+  or used on idle TVs), optional `routes.host` (its own settings page, linked from the
+  box's Apps tab). `sessionKinds` isn't used. Ask for `network.internet: true` if it fetches
   anything outside the box (weather); game containers have no internet otherwise.
-- **On the box:** listed apart from the games on the venue's games list (a button above
-  them), left out of "Also playing", cast to TVs from the iPad without a room, and
-  selectable under Venue > "Idle TVs show". When a game room's TV goes idle, it shows
-  the module.
+- **On the box:** installed and updated on the **Apps** tab; listed apart from the games
+  on the venue's games list (a button above them); left out of "Also playing"; cast to
+  TVs from the iPad without a room; selectable under Venue > "Idle TVs show" and as a
+  TV's "When the box starts" choice (so a menu TV comes back by itself after a power cut).
+  When a game room's TV goes idle, it shows the app.
 - **TV view:** call `tableMode(ctx)` (pointer, wake lock, shared-screen marker). It runs
   unattended for hours, so it must survive network blips and pick up changes without a
   reload. Show the staff announcement yourself (`activeAnnouncement(ctx)`): idle TVs
-  showing a module don't get the box's idle screen.
+  showing an app don't get the box's idle screen.
 - **Phone page:** the landing page, so `gamesLink`/`<BackToGames />` at the bottom and the
   announcement at the top, as for games.
 - **Checks:** `npx bargames check` checks the phone page and the TV view and skips the
-  room checks; the mock box lists the module apart and casts its TV view without a room.
+  room checks; the mock box lists the app apart and casts its TV view without a room.
 
 ## What's new in SDK 0.4.0 (for games already on 0.3.0)
 
@@ -130,8 +147,8 @@ Nothing else changed; 0.2.0 games keep working on a 0.2.1 box.
 ## What's new in SDK 0.2.0 (for games already on 0.1.0)
 
 1. **Vendor the new tarball** (step 1, "Updating later"):
-   the newest tarball (now `bargames-sdk-0.5.0.tgz`), both `package.json` entries, `npm install`, and set
-   `"sdk": { "version": "0.5.0", … }` in `bargames.json`.
+   the newest tarball (now `bargames-sdk-0.6.0.tgz`), both `package.json` entries, `npm install`, and set
+   `"sdk": { "version": "0.6.0", … }` in `bargames.json`.
 2. **`create_room`** (step 6): the box can start a venue room for the TVs.
 3. **Casting from inside the game** (step 6b, optional): the host's screen can put
    the room on the venue's TVs, with the venue's TV PIN. It's box-only, so nothing
@@ -202,11 +219,11 @@ Work through them in order, and get each level fully working before starting the
 
 ## Step 1: Vendor the SDK
 
-1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.5.0.tgz` to
+1. Copy `C:\CodeProjects\GameBroker\integration\bargames-sdk-0.6.0.tgz` to
    `<repo>\vendor\` (create the folder).
 2. Add the dependency to **both** the `server` and `client` workspace `package.json`:
    ```json
-   "@bargames/sdk": "file:../vendor/bargames-sdk-0.5.0.tgz"
+   "@bargames/sdk": "file:../vendor/bargames-sdk-0.6.0.tgz"
    ```
 3. Run `npm install` at the repo root and commit the lockfile change along with it.
 4. **Dockerfile:** the `npm ci` layer needs the tarball. Next to the other
@@ -217,7 +234,7 @@ Work through them in order, and get each level fully working before starting the
 5. The CLI is now available as `npx bargames` (try `npx bargames` with no arguments).
 
 **Updating later:** a newer SDK arrives as a new file name, for example
-`bargames-sdk-0.5.0.tgz`. Replace the file, update both `package.json` entries, and run
+`bargames-sdk-0.6.0.tgz`. Replace the file, update both `package.json` entries, and run
 `npm install`. Never overwrite a tarball under the same name: the lockfile's integrity
 hash would then fail `npm ci`.
 

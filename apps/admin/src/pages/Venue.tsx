@@ -1,4 +1,4 @@
-import { checkTheme, isDisplayModule, onPrimary, type ThemeColors } from "@bargames/sdk";
+import { checkTheme, isApp, onPrimary, type ThemeColors } from "@bargames/sdk";
 import { useEffect, useState } from "react";
 import { api, type Venue } from "../api";
 
@@ -174,7 +174,7 @@ export function VenuePage() {
           <select value={v.idleModule ?? ""} onChange={(e) => set("idleModule", e.target.value || null)}>
             <option value="">The box's idle screen (games, Wi-Fi, join QR)</option>
             {(games.data ?? [])
-              .filter((g) => isDisplayModule(g.manifest))
+              .filter((g) => isApp(g.manifest))
               .map((g) => (
                 <option key={g.id} value={g.id} disabled={!g.enabled}>
                   {g.context.game.displayName}

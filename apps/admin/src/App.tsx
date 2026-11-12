@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "./api";
 import { AccessPage } from "./pages/Access";
 import { DisplaysPage } from "./pages/Displays";
-import { GamesPage } from "./pages/Games";
+import { AppsPage, GamesPage } from "./pages/Games";
 import { HomePage } from "./pages/Home";
 import { InternetPage } from "./pages/Internet";
 import { RoomsPage } from "./pages/Rooms";
@@ -12,6 +12,7 @@ const TABS = [
   { id: "home", label: "Tonight" },
   { id: "rooms", label: "Rooms" },
   { id: "games", label: "Games" },
+  { id: "apps", label: "Apps" },
   { id: "displays", label: "TVs" },
   { id: "venue", label: "Venue" },
   { id: "access", label: "Access" },
@@ -60,6 +61,7 @@ export function App() {
         {tab === "home" && <HomePage />}
         {tab === "rooms" && <RoomsPage />}
         {tab === "games" && <GamesPage />}
+        {tab === "apps" && <AppsPage />}
         {tab === "displays" && <DisplaysPage />}
         {tab === "internet" && <InternetPage />}
         {tab === "venue" && <VenuePage />}
