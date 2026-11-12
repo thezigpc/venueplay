@@ -49,7 +49,10 @@ display on the box (id `<device id>:<screen id>`).
 
 1. **Discovery.** The box advertises `_venuebox._tcp` over mDNS (address, box id, name).
    Clients list boxes found on the LAN; "enter the box address" is the fallback (other
-   VLAN, mDNS blocked). The box's LAN address and Tailscale address both work.
+   VLAN, mDNS blocked). Clients reach the box over the **venue's own network only**.
+   Tailscale is for our management and remote support, not for clients; connecting
+   remote clients over Tailscale would be an option only for a venue that pays for its
+   own Tailscale plan (not planned for v1).
 2. **Code.** The client asks the box to pair (`POST /pair/start` with its device info:
    platform, model, screens, app version) and gets a **6-digit code**, which it shows on
    screen. Staff type the code on the box's TVs page (like AirPlay pairing today).
@@ -89,8 +92,9 @@ the same rule as the game SDK.
 ## v1 as built (box side, 2026-11-12)
 
 - **Where:** the broker (it owns the displays and shares the host's network), port
-  **7210** (`CLIENT_PORT`), plain HTTP/WebSocket on the LAN and Tailscale only. Clients use
-  `http://<box address>:7210`. `VENUEBOX=off` turns it off.
+  **7210** (`CLIENT_PORT`), plain HTTP/WebSocket for the venue LAN (never through the
+  Cloudflare tunnel; Tailscale is for management only, not a client path). Clients use
+  `http://<box LAN address>:7210`. `VENUEBOX=off` turns it off.
 - **Endpoints and messages:** exactly as typed in
   `apps/broker/src/venuebox/protocol.ts` (the source of truth for field names):
   `GET /health`, `POST /pair/start`, `GET /pair/status?id=`, WebSocket `/client`.

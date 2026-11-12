@@ -1,6 +1,7 @@
 // Venuebox client protocol v1 (docs/NATIVE-CLIENTS.md): apps on TVs and PCs that pair with
 // the box and show what it sends. Served by the broker on CLIENT_PORT (default 7210),
-// LAN/Tailscale only (never through the Cloudflare tunnel).
+// for the venue LAN (never through the Cloudflare tunnel; Tailscale is for management and
+// remote support, not a client path).
 //
 // HTTP (pairing):
 //   POST /pair/start   { name, platform, model?, appVersion?, screens: Screen[] }
