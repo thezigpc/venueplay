@@ -170,6 +170,10 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
   let inflight: Promise<VenueContext> | undefined;
 
   const auth = { authorization: `Bearer ${token}` };
+  const basePath = basePathFromEnv();
+  const rawBase = process.env[ENV.basePath] || process.env.BASE_PATH;
+  // Git Bash turns "/bingo" into "C:/Program Files/Git/bingo"; say so instead of running at the root.
+  if (rawBase && rawBase !== "/" && !basePath) log(`ignoring base path "${rawBase}" (not like "/my-game"; in Git Bash set MSYS_NO_PATHCONV=1). Serving at the root.`);
 
   async function venue(): Promise<VenueContext> {
     if (!connected) return standaloneContext(gameId, defaultName);
@@ -324,7 +328,7 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
   return {
     gameId,
     connected,
-    basePath: basePathFromEnv(),
+    basePath,
     venue,
     publicUrl: async (path) => {
       if (!connected) return undefined;

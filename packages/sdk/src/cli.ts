@@ -11,6 +11,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MANIFEST_FILE, validateManifest } from "./manifest.js";
 import { SDK_VERSION } from "./protocol.js";
+import { normalizeBasePath } from "./base.js";
 import { callGame, check, DEV_TOKEN, loadManifest, mockBox } from "./devbox.js";
 
 const argv = process.argv.slice(2);
@@ -82,6 +83,10 @@ switch (cmd) {
     const gameUrl = gameUrlFor(m?.port);
     const name = flags.name ?? `${m?.name ?? gameId} (mock)`;
     const tvPin = flags["tv-pin"] ?? "";
+    if (flags.base && flags.base !== "/" && !normalizeBasePath(flags.base)) {
+      console.error(`--base "${flags.base}" isn't a path like /my-game. In Git Bash, run with MSYS_NO_PATHCONV=1 (it turns /my-game into C:/Program Files/Git/my-game).`);
+      process.exit(1);
+    }
     const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined, announcement: flags.announce, basePath: flags.base });
     const gamePort = new URL(gameUrl).port;
     const baseEnv = new URL(box.publicUrl).pathname.replace(/\/$/, "");

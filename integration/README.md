@@ -44,6 +44,9 @@ proxy (`BASE_PATH=/bingo`). Unset, the game runs at the root exactly as before.
   `joinUrl(base, path)` does the same for your own links.
 - **Declare it** in bargames.json: `"routing": { "basePath": true }`. Without it the box keeps
   the game on its subdomain.
+- **0.10.3:** `bg.basePath` logs a warning, and `mock-box --base` refuses to start, when the
+  prefix isn't a path (the Git Bash rewrite). Kit 0.6.2: `serveSpa` answers missing files
+  (under /assets/, or with a file extension) with 404 instead of the page.
 - **0.10.2:** the client `joinUrl(ctx, path)` keeps the prefix (it dropped it in 0.10.0/0.10.1;
   update if you build join links or QRs with it). `injectBasePath` at the root now adds
   `<base href="/">` (unless the page has its own), so a Vite `base: "./"` build works on deep
