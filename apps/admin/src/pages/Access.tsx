@@ -8,6 +8,7 @@ export function AccessPage() {
   const [a, setA] = useState<Access | undefined>();
   const [cidr, setCidr] = useState("");
   const [label, setLabel] = useState("");
+  const [venueRange, setVenueRange] = useState("");
   useEffect(() => setA(access.data), [access.data]);
   if (!a) return <div className="card">{access.error || "Loading…"}</div>;
 
@@ -33,10 +34,32 @@ export function AccessPage() {
           <input type="checkbox" checked={a.adminRemote} onChange={(e) => setA({ ...a, adminRemote: e.target.checked })} />
           Allow this admin page from outside the venue (still needs the password)
         </label>
-        <label>
-          Extra venue ranges (one per line, e.g. 203.0.113.0/24)
-          <textarea rows={3} value={a.venueCidrs.join("\n")} onChange={(e) => setA({ ...a, venueCidrs: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })} />
-        </label>
+        <h3 className="sub-head">Extra venue addresses</h3>
+        <p className="muted small-print">An IP or range counted as "the venue", e.g. a second internet line (203.0.113.0/24). Add several at once with commas or spaces.</p>
+        {a.venueCidrs.map((c) => (
+          <div className="row" key={c}>
+            <b>{c}</b>
+            <button className="danger" onClick={() => setA({ ...a, venueCidrs: a.venueCidrs.filter((x) => x !== c) })}>
+              Remove
+            </button>
+          </div>
+        ))}
+        <form
+          className="inline"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const add = venueRange.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+            if (!add.length) return;
+            setA({ ...a, venueCidrs: [...new Set([...a.venueCidrs, ...add])] });
+            setVenueRange("");
+          }}
+        >
+          <input placeholder="IP or range" value={venueRange} onChange={(e) => setVenueRange(e.target.value)} aria-label="Venue IP or range" />
+          <button type="submit" disabled={!venueRange.trim()}>
+            Add
+          </button>
+        </form>
+        {a.venueCidrs.length > 0 && <p className="muted small-print">Save access below to keep changes.</p>}
       </section>
 
       <section className="card">

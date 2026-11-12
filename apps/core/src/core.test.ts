@@ -173,6 +173,13 @@ test("api: setup, install, brand, events, gateway config", async () => {
     assert.equal(gw.adminUrl, "http://play.localhost:7080/admin");
     assert.equal(gw.routes[3].target, "http://127.0.0.1:7300");
 
+    // 0.13.2: venue ranges and whitelist entries must be IPs or ranges.
+    assert.equal((await json("PUT", "/api/access", { venueCidrs: ["198.51.100.58/24", "2001:db8::/64", "203.0.113.7"] }, authed)).status, 200);
+    const badRange = await json("PUT", "/api/access", { venueCidrs: ["198.51.100.58/24, 1.2.3.4"] }, authed);
+    assert.equal(badRange.status, 400);
+    assert.match(((await badRange.json()) as { error: string }).error, /not an IP address or range/);
+    assert.equal((await json("PUT", "/api/access", { whitelist: [{ cidr: "10.0.0.0/33" }] }, authed)).status, 400);
+    assert.equal((await json("PUT", "/api/access", { venueCidrs: [] }, authed)).status, 200);
     // 0.13.1: the venue's own name for the admin, shown on the sign-in screen too.
     assert.equal(((await (await json("GET", "/api/auth/status")).json()) as { title?: string }).title, undefined);
     assert.equal((await json("PUT", "/api/venue", { adminTitle: "  Pacha   Kava  " }, authed)).status, 200);

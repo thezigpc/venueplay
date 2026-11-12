@@ -32,6 +32,7 @@ import express, { type NextFunction, type Request, type RequestHandler, type Res
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { isIP } from "node:net";
 import { ADMIN_COOKIE, AdminAuth, readCookie } from "./auth.js";
 import type { CloudflareService } from "./cloudflare/service.js";
 import type { EventBus } from "./events.js";
@@ -1158,6 +1159,16 @@ export function createApp(d: AppDeps) {
       const b = req.body as Partial<AccessSettings>;
       const next = { ...d.state.access.get(), ...pick(b, ["pinEnabled", "pin", "whitelist", "autoVenueIp", "venueCidrs", "adminRemote"]) };
       if (next.pinEnabled && !/^\d{4,8}$/.test(next.pin)) throw new HttpError(400, "PIN must be 4-8 digits");
+      // An IP ("203.0.113.7", "2001:db8::1") or a range ("203.0.113.0/24"); anything else would be silently ignored.
+      const range = (s: unknown) => {
+        if (typeof s !== "string") return false;
+        const [ip, bits, extra] = s.trim().split("/");
+        const v = isIP(ip);
+        return Boolean(v) && extra === undefined && (bits === undefined || (/^\d{1,3}$/.test(bits) && Number(bits) <= (v === 4 ? 32 : 128)));
+      };
+      const bad = [...(next.venueCidrs ?? []), ...(next.whitelist ?? []).map((w) => w?.cidr)].filter((c) => !range(c));
+      if (bad.length) throw new HttpError(400, `not an IP address or range: ${bad.join(", ")}`);
+      next.venueCidrs = [...new Set(next.venueCidrs.map((c) => c.trim()))];
       await d.state.access.set(next);
       res.json(next);
     }),

@@ -294,3 +294,4 @@ button.tv-tile.selected { border-color: var(--primary); }
 .card form { display: grid; gap: 8px; }
 .hub-logout { justify-self: start; margin-top: 8px; }
 .rail .brand { line-height: 1.2; overflow-wrap: anywhere; white-space: normal; }
+.sub-head { margin: 14px 0 4px; font-size: 1rem; }
