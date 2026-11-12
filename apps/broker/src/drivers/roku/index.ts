@@ -5,6 +5,11 @@ import { ssdpSearch } from "./ssdp.js";
 /** Sideloaded dev channel id; our HLS player app (Phase 3) is installed as the dev app. */
 export const ROKU_DEV_APP = "dev";
 
+/** The remote's keys (ECP names). Power and inputs have their own controls. */
+export const ROKU_REMOTE_KEYS = ["Home", "Back", "Up", "Down", "Left", "Right", "Select", "Play", "Rev", "Fwd", "InstantReplay", "Info", "Search", "Backspace", "Enter"] as const;
+/** Volume and channel keys work on Roku TVs (a player sends volume over HDMI-CEC at best). */
+export const ROKU_TV_KEYS = ["VolumeUp", "VolumeDown", "VolumeMute", "ChannelUp", "ChannelDown"] as const;
+
 export class RokuDriver implements DisplayDriver {
   readonly id = "roku";
 
@@ -57,6 +62,7 @@ export class RokuDriver implements DisplayDriver {
       // or Stick accepts the keypress and ignores it, so don't offer a button that can't work.
       power: Boolean(device.isTv || device.meta?.supportsSuspend),
       inputs: device.isTv ? ["hdmi1", "hdmi2", "hdmi3", "hdmi4", "tuner"] : [],
+      remoteKeys: [...ROKU_REMOTE_KEYS, ...(device.isTv ? ROKU_TV_KEYS : [])],
     };
   }
 
@@ -64,6 +70,21 @@ export class RokuDriver implements DisplayDriver {
     if (!(await this.capabilities(device)).power) throw new Error(`${device.name} is a Roku player that can't be switched off over the network; switch the TV itself (its own remote or HDMI-CEC)`);
     const ecp = this.ecp(device);
     await (on ? ecp.powerOn() : ecp.powerOff());
+  }
+
+  async keypress(device: DisplayDevice, key: string): Promise<void> {
+    if (!(await this.capabilities(device)).remoteKeys?.includes(key)) throw Object.assign(new Error(`${device.name} has no "${key}" key`), { status: 400 });
+    await this.ecp(device).keypress(key);
+  }
+
+  /** ECP types one character per Lit_ keypress. */
+  async typeText(device: DisplayDevice, text: string): Promise<void> {
+    const ecp = this.ecp(device);
+    for (const ch of text) await ecp.keypress(`Lit_${ch}`);
+  }
+
+  preview(device: DisplayDevice): Promise<Buffer | undefined> {
+    return this.streams.preview?.(device.id) ?? Promise.resolve(undefined);
   }
 
   async setInput(device: DisplayDevice, input: string): Promise<void> {

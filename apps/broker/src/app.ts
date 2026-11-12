@@ -3,7 +3,7 @@ import express, { type NextFunction, type Request, type RequestHandler, type Res
 import type { AirplayDriver } from "./drivers/airplay/index.js";
 import type { RokuDriver } from "./drivers/roku/index.js";
 import type { DisplayRegistry } from "./registry.js";
-import type { DeliveryMethod, DisplayContent } from "./types.js";
+import { checkStreamSettings, type DeliveryMethod, type DisplayContent, type StreamSettings } from "./types.js";
 
 const h =
   (fn: (req: Request, res: Response) => unknown): RequestHandler =>
@@ -64,8 +64,13 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
   app.patch(
     "/displays/:id",
     h(async (req, res) => {
-      const { label, group, delivery } = req.body ?? {};
-      res.json(await d.registry.patch(req.params.id, { label, group, delivery: delivery as DeliveryMethod | undefined }));
+      const { label, group, delivery, streamSettings } = req.body ?? {};
+      // null clears a TV's own settings (back to the box default).
+      if (streamSettings !== undefined && streamSettings !== null) {
+        const problem = checkStreamSettings(streamSettings);
+        if (problem) return void res.status(400).json({ error: problem });
+      }
+      res.json(await d.registry.patch(req.params.id, { label, group, delivery: delivery as DeliveryMethod | undefined, streamSettings: streamSettings as StreamSettings | null | undefined }));
     }),
   );
 
@@ -100,6 +105,45 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
       const code = req.body?.code === undefined ? undefined : String(req.body.code).trim();
       if (code !== undefined && !/^[ -~]{1,64}$/.test(code)) return void res.status(400).json({ error: "code: 1-64 printable characters" });
       res.json(await d.registry.pair(req.params.id, code || undefined));
+    }),
+  );
+
+  /** { key }: a remote-control key (capabilities.remoteKeys). */
+  app.post(
+    "/displays/:id/key",
+    h(async (req, res) => {
+      const dev = one(req.params.id);
+      const drv = d.registry.driverFor(dev);
+      if (!drv.keypress) return void res.status(400).json({ error: `${dev.label || dev.name} has no remote control` });
+      await drv.keypress(dev, String(req.body?.key ?? ""));
+      res.json({ ok: true });
+    }),
+  );
+
+  /** { text }: types into the TV's current text field. */
+  app.post(
+    "/displays/:id/text",
+    h(async (req, res) => {
+      const dev = one(req.params.id);
+      const drv = d.registry.driverFor(dev);
+      const text = String(req.body?.text ?? "");
+      if (!drv.typeText) return void res.status(400).json({ error: `${dev.label || dev.name} can't take typed text` });
+      if (!/^[ -~]{1,100}$/.test(text)) return void res.status(400).json({ error: "text: 1-100 printable characters" });
+      await drv.typeText(dev, text);
+      res.json({ ok: true });
+    }),
+  );
+
+  /** A JPEG of what the box is sending this TV; 204 when it isn't casting. */
+  app.get(
+    "/displays/:id/preview",
+    h(async (req, res) => {
+      const jpeg = await d.registry.preview(req.params.id).catch((err: Error & { status?: number }) => {
+        if (err.status === 404) throw err;
+        return undefined; // page still loading, Chromium busy: no picture this time
+      });
+      if (!jpeg) return void res.status(204).end();
+      res.set("cache-control", "no-store").type("image/jpeg").send(jpeg);
     }),
   );
 

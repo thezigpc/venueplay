@@ -1,18 +1,20 @@
 // AirPlay delivery: render a page on a virtual display and mirror it with doubletake.
 //
-// One "channel" per URL being shown:
-//   Xvfb :N (1920x1080, no cursor) → Chromium --kiosk <url> → doubletake daemon (-socket)
-// Every TV showing that URL is a target of the same daemon, so it is captured and
-// encoded once (QuickSync via VA-API) however many TVs watch it. A TV moving to another
-// URL leaves its channel; a channel with no TVs is torn down.
+// One "channel" per URL and stream settings (resolution, frame rate, bitrate):
+//   Xvfb :N (WxH, no cursor) → Chromium --kiosk <url> → doubletake daemon (-socket)
+// Every TV showing that URL with the same settings is a target of the same daemon, so
+// it is captured and encoded once (QuickSync via VA-API) however many TVs watch it. A TV
+// moving to another URL (or settings) leaves its channel; a channel with no TVs is torn
+// down. Previews: each channel's Chromium listens for DevTools on 127.0.0.1 only, and
+// preview() asks it for a small JPEG of the page.
 //
 // Pairing: the first connection to a receiver that wants a code ends in "pin_required";
 // the code the TV shows is sent with pair(). doubletake saves credentials to a file in
 // /data, so it is needed once per TV.
 
 import type { Logger } from "@bargames/common";
-import type { DisplayDevice, ShowResult, StreamService, StreamState } from "./types.js";
-import { NotBuiltYet } from "./types.js";
+import type { DisplayDevice, ShowResult, StreamService, StreamSettings, StreamState } from "./types.js";
+import { NotBuiltYet, RESOLUTIONS } from "./types.js";
 
 /** A child process the streamer started. */
 export interface Proc {
@@ -50,6 +52,8 @@ export interface ProcRunner {
   /** Removes stale X lock/socket files and old daemon sockets before reusing a slot. */
   cleanSlot(n: number, socket: string): void;
   sleep(ms: number): Promise<void>;
+  /** A JPEG of the page in the Chromium listening for DevTools on 127.0.0.1:port, scaled to `width`. */
+  screenshot?(debugPort: number, size: { width: number; height: number }, outWidth: number): Promise<Buffer>;
 }
 
 export interface AirplayOptions {
@@ -68,6 +72,10 @@ export interface AirplayOptions {
   firstDisplay?: number;
   /** First UDP port; each channel gets a block of 30 (doubletake needs 3 per TV). */
   firstPort?: number;
+  /** First Chromium DevTools port (127.0.0.1 only, for previews); one per channel. */
+  firstDebugPort?: number;
+  /** Preview width in pixels. */
+  previewWidth?: number;
   /** How long show()/pair() wait for "streaming" before answering. */
   settleMs?: number;
   /** A TV missing from the daemon this long after connect counts as dropped (retried). */
@@ -92,12 +100,27 @@ interface Target {
 }
 
 interface Channel {
+  /** url + settings: what makes two TVs share this channel. */
+  key: string;
   url: string;
+  profile: Profile;
   slot: number;
   socket: string;
+  debugPort: number;
   procs: { xvfb: Proc; chrome: Proc; daemon: Proc };
   targets: Map<string, Target>;
+  /** Last preview, reused for a couple of seconds. */
+  shot?: { at: number; jpeg: Promise<Buffer> };
 }
+
+interface Profile {
+  width: number;
+  height: number;
+  fps: number;
+  bitrateKbps: number;
+}
+
+const PREVIEW_CACHE_MS = 2000;
 
 /** The standard AirPlay port; receivers on other ports are reached through discovery. */
 export const AIRPLAY_PORT = 7000;
@@ -105,8 +128,10 @@ export const AIRPLAY_PORT = 7000;
 const STREAMING = "streaming";
 const NEEDS_CODE = "pin_required";
 
-export function chromiumArgs(url: string, profileDir: string, width: number, height: number): string[] {
+export function chromiumArgs(url: string, profileDir: string, width: number, height: number, debugPort?: number): string[] {
   return [
+    // Previews: DevTools on loopback only (the broker shares the host's network).
+    ...(debugPort ? [`--remote-debugging-port=${debugPort}`, "--remote-debugging-address=127.0.0.1"] : []),
     "--kiosk",
     `--window-size=${width},${height}`,
     "--window-position=0,0",
@@ -134,7 +159,7 @@ export function chromiumArgs(url: string, profileDir: string, width: number, hei
 
 export class AirplayStreams implements StreamService {
   private readonly channels = new Map<string, Channel>();
-  /** deviceId → url of the channel it belongs to. */
+  /** deviceId → key of the channel it belongs to. */
   private readonly member = new Map<string, string>();
   private queue: Promise<unknown> = Promise.resolve();
   private timer?: NodeJS.Timeout;
@@ -149,6 +174,8 @@ export class AirplayStreams implements StreamService {
       fps: 30,
       firstDisplay: 90,
       firstPort: 60000,
+      firstDebugPort: 9330,
+      previewWidth: 480,
       settleMs: 12_000,
       connectTimeoutMs: 30_000,
       discoverWaitMs: 15_000,
@@ -167,14 +194,16 @@ export class AirplayStreams implements StreamService {
     const ip = new URL(device.address).hostname;
     // The AirPlay port comes from discovery (meta.port); a Roku's address is its ECP port, not AirPlay's.
     const port = Number(device.meta?.port) && Number(device.meta?.port) !== AIRPLAY_PORT ? Number(device.meta?.port) : undefined;
+    const profile = this.profileFor(device.streamSettings);
+    const key = channelKey(content.url, profile);
     const ch = await this.locked(async () => {
       const current = this.member.get(device.id);
-      if (current && current !== content.url) await this.leave(device.id);
-      const channel = this.channels.get(content.url) ?? (await this.open(content.url));
+      if (current && current !== key) await this.leave(device.id);
+      const channel = this.channels.get(key) ?? (await this.open(content.url, profile));
       if (!channel.targets.has(device.id)) {
         const t: Target = { ip, port, name: device.name, state: "connecting", since: Date.now(), failures: 0, nextRetry: 0 };
         channel.targets.set(device.id, t);
-        this.member.set(device.id, content.url);
+        this.member.set(device.id, key);
         await this.connect(channel, t);
       }
       return channel;
@@ -183,8 +212,8 @@ export class AirplayStreams implements StreamService {
   }
 
   async pair(device: DisplayDevice, code: string): Promise<ShowResult> {
-    const url = this.member.get(device.id);
-    const ch = url ? this.channels.get(url) : undefined;
+    const key = this.member.get(device.id);
+    const ch = key ? this.channels.get(key) : undefined;
     const t = ch?.targets.get(device.id);
     if (!ch || !t) return { ok: false, message: `Cast something to ${device.name} first; its AirPlay code appears then.` };
     await this.awaitDiscovered(ch, t);
@@ -201,10 +230,31 @@ export class AirplayStreams implements StreamService {
   }
 
   state(deviceId: string): StreamState | undefined {
-    const url = this.member.get(deviceId);
-    const t = url ? this.channels.get(url)?.targets.get(deviceId) : undefined;
-    if (!url || !t) return undefined;
-    return { delivery: "airplay", url, state: t.state, needsCode: t.state === NEEDS_CODE, detail: t.detail };
+    const key = this.member.get(deviceId);
+    const ch = key ? this.channels.get(key) : undefined;
+    const t = ch?.targets.get(deviceId);
+    if (!ch || !t) return undefined;
+    const p = ch.profile;
+    return { delivery: "airplay", url: ch.url, state: t.state, needsCode: t.state === NEEDS_CODE, detail: t.detail, settings: `${p.height}p · ${p.fps} fps${p.bitrateKbps ? ` · ${p.bitrateKbps} kbps` : ""}` };
+  }
+
+  /** A small JPEG of what this TV's channel renders (cached briefly; one capture per channel). */
+  async preview(deviceId: string): Promise<Buffer | undefined> {
+    const key = this.member.get(deviceId);
+    const ch = key ? this.channels.get(key) : undefined;
+    if (!ch || !this.o.runner.screenshot) return undefined;
+    if (!ch.shot || Date.now() - ch.shot.at > PREVIEW_CACHE_MS) {
+      const jpeg = this.o.runner.screenshot(ch.debugPort, { width: ch.profile.width, height: ch.profile.height }, this.o.previewWidth);
+      ch.shot = { at: Date.now(), jpeg };
+      jpeg.catch(() => ch.shot?.jpeg === jpeg && (ch.shot = undefined));
+    }
+    return ch.shot.jpeg;
+  }
+
+  /** The TV's settings, or the box default. */
+  private profileFor(s?: StreamSettings): Profile {
+    const [width, height] = s ? RESOLUTIONS[s.resolution] : [this.o.width, this.o.height];
+    return { width, height, fps: s?.fps ?? this.o.fps, bitrateKbps: s?.bitrateKbps ?? 0 };
   }
 
   /** Watchdog: restarts dead channels, reconnects TVs that dropped. */
@@ -222,14 +272,16 @@ export class AirplayStreams implements StreamService {
 
   // ---------------------------------------------------------------- internals
 
-  private async open(url: string): Promise<Channel> {
+  private async open(url: string, profile: Profile): Promise<Channel> {
     const used = new Set([...this.channels.values()].map((c) => c.slot));
     let slot = 0;
     while (used.has(slot)) slot++;
     const display = this.o.firstDisplay + slot;
     const socket = `${this.o.runDir}/doubletake-${display}.sock`;
     const port = this.o.firstPort + slot * 30;
-    const { runner, width, height } = this.o;
+    const debugPort = this.o.firstDebugPort + slot;
+    const { runner } = this.o;
+    const { width, height } = profile;
     runner.cleanSlot(display, socket);
 
     const xvfb = runner.spawn(`xvfb:${display}`, "Xvfb", [`:${display}`, "-screen", "0", `${width}x${height}x24`, "-nolisten", "tcp", "-nocursor"]);
@@ -240,14 +292,18 @@ export class AirplayStreams implements StreamService {
       throw new Error(`virtual display :${display} didn't start: ${xvfb.tail().slice(-3).join(" | ") || String(err)}`);
     }
     const env = { DISPLAY: `:${display}`, XDG_RUNTIME_DIR: this.o.runDir };
-    const chrome = runner.spawn(`chromium:${display}`, this.o.chromium, chromiumArgs(url, `${this.o.runDir}/chromium-${display}`, width, height), env);
+    const chrome = runner.spawn(`chromium:${display}`, this.o.chromium, chromiumArgs(url, `${this.o.runDir}/chromium-${display}`, width, height, debugPort), env);
     const daemon = runner.spawn(
       `doubletake:${display}`,
       "doubletake",
-      ["-daemonize", "-socket", socket, "-no-audio", "-hwaccel", this.o.hwaccel, "-fps", String(this.o.fps), "-creds", this.o.credsFile, "-port-range", `${port}-${port + 29}`],
+      [
+        "-daemonize", "-socket", socket, "-no-audio", "-hwaccel", this.o.hwaccel, "-fps", String(profile.fps),
+        ...(profile.bitrateKbps ? ["-bitrate", String(profile.bitrateKbps)] : []),
+        "-creds", this.o.credsFile, "-port-range", `${port}-${port + 29}`,
+      ],
       env,
     );
-    const ch: Channel = { url, slot, socket, procs: { xvfb, chrome, daemon }, targets: new Map() };
+    const ch: Channel = { key: channelKey(url, profile), url, profile, slot, socket, debugPort, procs: { xvfb, chrome, daemon }, targets: new Map() };
     this.parkPointer(ch);
     // The daemon answers once its control socket is up.
     for (let i = 0; i < 25; i++) {
@@ -259,8 +315,8 @@ export class AirplayStreams implements StreamService {
       }
       await runner.sleep(200);
     }
-    this.channels.set(url, ch);
-    this.o.log.info("airplay", "channel opened", { url, display });
+    this.channels.set(ch.key, ch);
+    this.o.log.info("airplay", "channel opened", { url, display, size: `${width}x${height}`, fps: profile.fps, bitrateKbps: profile.bitrateKbps || "auto" });
     return ch;
   }
 
@@ -271,19 +327,19 @@ export class AirplayStreams implements StreamService {
    */
   private parkPointer(ch: Channel): void {
     const display = this.o.firstDisplay + ch.slot;
-    this.o.runner.spawn(`pointer:${display}`, "xdotool", ["mousemove", String(this.o.width - 1), String(this.o.height - 1)], { DISPLAY: `:${display}` });
+    this.o.runner.spawn(`pointer:${display}`, "xdotool", ["mousemove", String(ch.profile.width - 1), String(ch.profile.height - 1)], { DISPLAY: `:${display}` });
   }
 
   private close(ch: Channel): void {
     for (const p of [ch.procs.daemon, ch.procs.chrome, ch.procs.xvfb]) p.kill();
     for (const id of ch.targets.keys()) this.member.delete(id);
-    this.channels.delete(ch.url);
+    this.channels.delete(ch.key);
     this.o.log.info("airplay", "channel closed", { url: ch.url });
   }
 
   private async leave(deviceId: string): Promise<void> {
-    const url = this.member.get(deviceId);
-    const ch = url ? this.channels.get(url) : undefined;
+    const key = this.member.get(deviceId);
+    const ch = key ? this.channels.get(key) : undefined;
     this.member.delete(deviceId);
     if (!ch) return;
     const t = ch.targets.get(deviceId);
@@ -354,14 +410,14 @@ export class AirplayStreams implements StreamService {
         this.o.log.warn("airplay", "channel died, restarting", { url: ch.url, dead });
         const targets = [...ch.targets.entries()];
         this.close(ch);
-        const fresh = await this.open(ch.url).catch((err: Error) => {
+        const fresh = await this.open(ch.url, ch.profile).catch((err: Error) => {
           this.o.log.error("airplay", "channel restart failed", { url: ch.url, err: err.message });
           return undefined;
         });
         if (!fresh) continue;
         for (const [id, t] of targets) {
           fresh.targets.set(id, { ...t, state: "connecting", since: Date.now() });
-          this.member.set(id, ch.url);
+          this.member.set(id, fresh.key);
           await this.connect(fresh, fresh.targets.get(id)!);
         }
         continue;
@@ -381,4 +437,8 @@ export class AirplayStreams implements StreamService {
       }
     }
   }
+}
+
+function channelKey(url: string, p: Profile): string {
+  return `${p.width}x${p.height}@${p.fps}/${p.bitrateKbps}|${url}`;
 }

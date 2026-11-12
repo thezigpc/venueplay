@@ -88,4 +88,39 @@ export class NodeProcRunner implements ProcRunner {
   sleep(ms: number): Promise<void> {
     return sleep(ms);
   }
+
+  /** Page.captureScreenshot over Chromium's DevTools (127.0.0.1 only), scaled down, as JPEG. */
+  async screenshot(debugPort: number, size: { width: number; height: number }, outWidth: number): Promise<Buffer> {
+    const targets = (await (await fetch(`http://127.0.0.1:${debugPort}/json/list`, { signal: AbortSignal.timeout(3000) })).json()) as { type: string; webSocketDebuggerUrl?: string }[];
+    const page = targets.find((t) => t.type === "page" && t.webSocketDebuggerUrl);
+    if (!page) throw new Error("no page to capture");
+    const ws = new WebSocket(page.webSocketDebuggerUrl!);
+    try {
+      const data = await new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("screenshot timed out")), 5000);
+        ws.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error("DevTools connection failed"));
+        };
+        ws.onopen = () =>
+          ws.send(
+            JSON.stringify({
+              id: 1,
+              method: "Page.captureScreenshot",
+              params: { format: "jpeg", quality: 60, clip: { x: 0, y: 0, width: size.width, height: size.height, scale: Math.min(1, outWidth / size.width) } },
+            }),
+          );
+        ws.onmessage = (ev) => {
+          const msg = JSON.parse(String(ev.data)) as { id?: number; result?: { data?: string }; error?: { message?: string } };
+          if (msg.id !== 1) return;
+          clearTimeout(timer);
+          if (msg.result?.data) resolve(msg.result.data);
+          else reject(new Error(msg.error?.message ?? "no image"));
+        };
+      });
+      return Buffer.from(data, "base64");
+    } finally {
+      ws.close();
+    }
+  }
 }

@@ -84,12 +84,18 @@ export interface Display {
   model?: string;
   isTv?: boolean;
   delivery?: string;
-  capabilities?: { delivery: string[]; power: boolean; inputs: string[] };
+  capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[] };
+  streamSettings?: StreamSettings;
   health?: { online: boolean; powerMode?: string; detail?: string };
   content?: { kind: string; url?: string; title?: string };
-  stream?: { delivery: string; url: string; state: string; needsCode: boolean; detail?: string };
+  stream?: { delivery: string; url: string; state: string; needsCode: boolean; detail?: string; settings?: string };
 }
 
+export interface StreamSettings {
+  resolution: "720p" | "1080p";
+  fps: 15 | 24 | 30 | 60;
+  bitrateKbps?: number;
+}
 export interface ShowResult {
   ok: boolean;
   message?: string;
@@ -170,7 +176,12 @@ export const api = {
   discover: () => call<{ found: number; errors: string[] }>("POST", "/broker/discover", {}),
   addRoku: (host: string) => call<Display>("POST", "/broker/displays/roku", { host }),
   addAirplay: (host: string) => call<Display>("POST", "/broker/displays/airplay", { host }),
-  patchDisplay: (id: string, patch: { label?: string; group?: string; delivery?: string }) => call<Display>("PATCH", `/broker/displays/${encodeURIComponent(id)}`, patch),
+  patchDisplay: (id: string, patch: { label?: string; group?: string; delivery?: string; streamSettings?: StreamSettings | null }) =>
+    call<Display>("PATCH", `/broker/displays/${encodeURIComponent(id)}`, patch),
+  key: (id: string, key: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/key`, { key }),
+  typeText: (id: string, text: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/text`, { text }),
+  /** For <img src>: changes every call so the browser fetches a fresh picture. */
+  previewUrl: (id: string) => `/api/broker/displays/${encodeURIComponent(id)}/preview?t=${Date.now()}`,
   power: (id: string, on: boolean) => call("POST", `/broker/displays/${encodeURIComponent(id)}/power`, { on }),
   pair: (id: string, code?: string) => call<ShowResult>("POST", `/broker/displays/${encodeURIComponent(id)}/pair`, code ? { code } : {}),
   command: (id: string, body: { command: string; roomCode?: string; args?: Record<string, unknown> }) =>

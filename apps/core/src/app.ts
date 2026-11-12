@@ -931,7 +931,10 @@ export function createApp(d: AppDeps) {
       }).catch(() => {
         throw new HttpError(502, "broker unreachable");
       });
-      res.status(r.status).type("application/json").send(await r.text());
+      // JSON, or a TV preview (image/jpeg); 204 when there's no picture.
+      res.status(r.status);
+      if (r.status === 204) return void res.end();
+      res.set("cache-control", "no-store").type(r.headers.get("content-type") ?? "application/json").send(Buffer.from(await r.arrayBuffer()));
     }),
   );
 

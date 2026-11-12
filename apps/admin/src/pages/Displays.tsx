@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { api, type CastSettings, type Display } from "../api";
+import { api, type CastSettings, type Display, type StreamSettings } from "../api";
+
+const PREVIEWS_KEY = "bargames.tvPreviews";
+const readPreviews = () => {
+  try {
+    return localStorage.getItem(PREVIEWS_KEY) !== "off";
+  } catch {
+    return true;
+  }
+};
 import { useAction, useLoad } from "../useLoad";
 
 export function DisplaysPage() {
@@ -8,6 +17,15 @@ export function DisplaysPage() {
   const [host, setHost] = useState("");
   const [kind, setKind] = useState<"roku" | "airplay">("roku");
   const [note, setNote] = useState("");
+  const [previews, setPreviews] = useState(readPreviews);
+  const togglePreviews = (on: boolean) => {
+    setPreviews(on);
+    try {
+      localStorage.setItem(PREVIEWS_KEY, on ? "on" : "off");
+    } catch {
+      /* this iPad only */
+    }
+  };
 
   return (
     <div className="grid">
@@ -35,11 +53,15 @@ export function DisplaysPage() {
             Add
           </button>
         </div>
+        <label className="inline">
+          <input type="checkbox" checked={previews} onChange={(e) => togglePreviews(e.target.checked)} style={{ width: "auto" }} /> Show what each TV is showing
+          (previews refresh every few seconds)
+        </label>
         {note && <p className="muted">{note}</p>}
         {displays.error && <p className="error">{displays.error}</p>}
       </section>
       {(displays.data ?? []).map((d) => (
-        <DisplayCard key={d.id} d={d} busy={busy} run={run} reload={displays.reload} />
+        <DisplayCard key={d.id} d={d} busy={busy} run={run} reload={displays.reload} previews={previews} />
       ))}
       <CastFromGames />
     </div>
@@ -54,7 +76,8 @@ const STREAM_LABEL: Record<string, string> = {
   error: "error",
 };
 
-function DisplayCard({ d, busy, run, reload }: { d: Display; busy: boolean; run: (fn: () => Promise<unknown>) => void; reload: () => unknown }) {
+function DisplayCard({ d, busy, run, reload, previews }: { d: Display; busy: boolean; run: (fn: () => Promise<unknown>) => void; reload: () => unknown; previews: boolean }) {
+  const [settings, setSettings] = useState<StreamSettings | null>(d.streamSettings ?? null);
   const [label, setLabel] = useState(d.label ?? "");
   const [group, setGroup] = useState(d.group ?? "");
   const [delivery, setDelivery] = useState(d.delivery ?? "");
@@ -72,11 +95,13 @@ function DisplayCard({ d, busy, run, reload }: { d: Display; busy: boolean; run:
       {stream ? (
         <p className="muted">
           {d.content?.title ?? "Showing"}: <b>{STREAM_LABEL[stream.state] ?? stream.state}</b>
+          {stream.settings ? ` · ${stream.settings}` : ""}
           {stream.detail ? ` (${stream.detail})` : ""}
         </p>
       ) : (
         d.content?.kind === "url" && <p className="muted">Last shown: {d.content.title ?? d.content.url}</p>
       )}
+      {previews && stream && <TvPreview id={d.id} />}
       {canPair && <Pairing d={d} needsCode={Boolean(stream?.needsCode)} reload={reload} />}
       <label>
         Name
@@ -95,8 +120,13 @@ function DisplayCard({ d, busy, run, reload }: { d: Display; busy: boolean; run:
           ))}
         </select>
       </label>
+      {canPair && <StreamSettingsFields value={settings} onChange={setSettings} />}
       <div className="buttons">
-        <button className="primary" disabled={busy} onClick={() => run(() => api.patchDisplay(d.id, { label, group, delivery: delivery || undefined }))}>
+        <button
+          className="primary"
+          disabled={busy}
+          onClick={() => run(() => api.patchDisplay(d.id, { label, group, delivery: delivery || undefined, ...(canPair ? { streamSettings: settings } : {}) }))}
+        >
           Save
         </button>
         {stream && (
@@ -115,7 +145,138 @@ function DisplayCard({ d, busy, run, reload }: { d: Display; busy: boolean; run:
           </>
         )}
       </div>
+      {(d.capabilities?.remoteKeys?.length ?? 0) > 0 && <Remote d={d} keys={d.capabilities!.remoteKeys!} />}
     </section>
+  );
+}
+
+/** What the box is sending this TV, refreshed every few seconds while the card is on screen. */
+function TvPreview({ id }: { id: string }) {
+  const [src, setSrc] = useState(() => api.previewUrl(id));
+  const [ok, setOk] = useState(true);
+  useEffect(() => {
+    const t = setInterval(() => setSrc(api.previewUrl(id)), 4000);
+    return () => clearInterval(t);
+  }, [id]);
+  return (
+    <div className="tv-preview">
+      <img src={src} alt="What this TV is showing" onLoad={() => setOk(true)} onError={() => setOk(false)} style={{ display: ok ? "block" : "none" }} />
+      {!ok && <span className="muted">No picture yet</span>}
+    </div>
+  );
+}
+
+const DEFAULT_SETTINGS: StreamSettings = { resolution: "1080p", fps: 30 };
+
+/** Resolution, frame rate and bitrate for this TV (AirPlay). */
+function StreamSettingsFields({ value, onChange }: { value: StreamSettings | null; onChange: (s: StreamSettings | null) => void }) {
+  const v = value ?? DEFAULT_SETTINGS;
+  const set = (patch: Partial<StreamSettings>) => onChange({ ...v, ...patch });
+  return (
+    <details className="stream-settings">
+      <summary>
+        Picture: {value ? `${v.resolution}, ${v.fps} fps${v.bitrateKbps ? `, ${v.bitrateKbps} kbps` : ""}` : "box default (1080p, 30 fps)"}
+      </summary>
+      <label className="inline">
+        <input type="checkbox" checked={value === null} onChange={(e) => onChange(e.target.checked ? null : DEFAULT_SETTINGS)} style={{ width: "auto" }} /> Use the box default
+      </label>
+      {value !== null && (
+        <>
+          <label>
+            Resolution
+            <select value={v.resolution} onChange={(e) => set({ resolution: e.target.value as StreamSettings["resolution"] })}>
+              <option value="1080p">1080p (sharpest)</option>
+              <option value="720p">720p (lighter on the box and Wi-Fi)</option>
+            </select>
+          </label>
+          <label>
+            Frame rate
+            <select value={v.fps} onChange={(e) => set({ fps: Number(e.target.value) as StreamSettings["fps"] })}>
+              <option value={15}>15 fps (static boards, menus)</option>
+              <option value={24}>24 fps</option>
+              <option value={30}>30 fps (default)</option>
+              <option value={60}>60 fps (smoothest, most work)</option>
+            </select>
+          </label>
+          <label>
+            Bitrate
+            <select value={v.bitrateKbps ?? 0} onChange={(e) => set({ bitrateKbps: Number(e.target.value) || undefined })}>
+              <option value={0}>Automatic</option>
+              <option value={2000}>2 Mbps (weak Wi-Fi)</option>
+              <option value={4000}>4 Mbps</option>
+              <option value={8000}>8 Mbps</option>
+              <option value={12000}>12 Mbps (wired, fast motion)</option>
+            </select>
+          </label>
+        </>
+      )}
+      <p className="muted">Saving restarts the stream to this TV with the new settings. TVs on the same page with the same settings share one encoder.</p>
+    </details>
+  );
+}
+
+const DPAD: [string, string][][] = [
+  [["", ""], ["Up", "▲"], ["", ""]],
+  [["Left", "◀"], ["Select", "OK"], ["Right", "▶"]],
+  [["", ""], ["Down", "▼"], ["", ""]],
+];
+const ROW_KEYS: [string, string][] = [
+  ["Back", "↩ Back"],
+  ["Home", "⌂ Home"],
+  ["InstantReplay", "↺"],
+  ["Info", "✱"],
+];
+const PLAY_KEYS: [string, string][] = [
+  ["Rev", "⏪"],
+  ["Play", "⏯"],
+  ["Fwd", "⏩"],
+];
+const VOLUME_KEYS: [string, string][] = [
+  ["VolumeDown", "Vol −"],
+  ["VolumeMute", "Mute"],
+  ["VolumeUp", "Vol +"],
+];
+
+/** The Roku remote. Pressing Home or Back leaves whatever the box is casting. */
+function Remote({ d, keys }: { d: Display; keys: string[] }) {
+  const [text, setText] = useState("");
+  const [msg, setMsg] = useState("");
+  const has = new Set(keys);
+  const press = (key: string) => {
+    setMsg("");
+    api.key(d.id, key).catch((e: Error) => setMsg(e.message));
+  };
+  const btn = ([key, label]: [string, string], i: number) =>
+    key && has.has(key) ? (
+      <button key={key} type="button" onClick={() => press(key)}>
+        {label}
+      </button>
+    ) : (
+      <span key={`gap${i}`} />
+    );
+  return (
+    <details className="remote">
+      <summary>Remote</summary>
+      <div className="dpad">{DPAD.flat().map(btn)}</div>
+      <div className="buttons">{ROW_KEYS.map(btn)}</div>
+      <div className="buttons">{PLAY_KEYS.map(btn)}</div>
+      {has.has("VolumeUp") && <div className="buttons">{VOLUME_KEYS.map(btn)}</div>}
+      <form
+        className="inline"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!text) return;
+          api.typeText(d.id, text).then(() => setText(""), (err: Error) => setMsg(err.message));
+        }}
+      >
+        <input placeholder="Type into a search box" value={text} onChange={(e) => setText(e.target.value)} />
+        <button type="submit" disabled={!text}>
+          Send
+        </button>
+      </form>
+      <p className="muted">Home or Back leaves what the box is casting; cast again from Home to put it back.</p>
+      {msg && <p className="error">{msg}</p>}
+    </details>
   );
 }
 

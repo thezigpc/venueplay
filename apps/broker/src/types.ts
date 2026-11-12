@@ -9,6 +9,29 @@
  */
 export type DeliveryMethod = "native-url" | "airplay" | "roku-hls" | "mock";
 
+/** How the box renders and encodes for a TV (AirPlay). TVs with the same page and settings share one encoder. */
+export interface StreamSettings {
+  resolution: "720p" | "1080p";
+  fps: 15 | 24 | 30 | 60;
+  /** Video bitrate in kbps; 0 or absent: doubletake picks one for the resolution and frame rate. */
+  bitrateKbps?: number;
+}
+
+export const RESOLUTIONS = { "720p": [1280, 720], "1080p": [1920, 1080] } as const;
+export const FRAME_RATES = [15, 24, 30, 60] as const;
+
+/** Checks a settings object from the API; returns a problem or undefined. */
+export function checkStreamSettings(s: unknown): string | undefined {
+  if (typeof s !== "object" || s === null) return "streamSettings: { resolution, fps, bitrateKbps? }";
+  const v = s as Record<string, unknown>;
+  if (!(typeof v.resolution === "string" && v.resolution in RESOLUTIONS)) return "resolution: 720p or 1080p";
+  if (!(FRAME_RATES as readonly unknown[]).includes(v.fps)) return "fps: 15, 24, 30 or 60";
+  if (v.bitrateKbps !== undefined && !(Number.isInteger(v.bitrateKbps) && (v.bitrateKbps === 0 || ((v.bitrateKbps as number) >= 500 && (v.bitrateKbps as number) <= 40_000)))) {
+    return "bitrateKbps: 0 (automatic) or 500-40000";
+  }
+  return undefined;
+}
+
 export interface DisplayDevice {
   /** Stable id: "<driver>:<serial/udn>". */
   id: string;
@@ -19,6 +42,8 @@ export interface DisplayDevice {
   model?: string;
   isTv?: boolean;
   meta?: Record<string, unknown>;
+  /** The venue's choice for this TV; absent: the box default (1080p, 30 fps, automatic bitrate). */
+  streamSettings?: StreamSettings;
 }
 
 export interface Capabilities {
@@ -27,6 +52,8 @@ export interface Capabilities {
   power: boolean;
   /** Inputs that setInput accepts, e.g. ["hdmi1","hdmi2","hdmi3","tuner"]. */
   inputs: string[];
+  /** Remote-control keys keypress() accepts (Roku: Home, Up, Select, …). Empty: no remote. */
+  remoteKeys?: string[];
 }
 
 export type DisplayContent =
@@ -51,6 +78,8 @@ export interface StreamState {
   state: string;
   needsCode: boolean;
   detail?: string;
+  /** "1080p · 30 fps" (· bitrate when set). */
+  settings?: string;
 }
 
 export interface Health {
@@ -75,6 +104,12 @@ export interface DisplayDriver {
   pair?(device: DisplayDevice, code?: string): Promise<ShowResult>;
   /** Live stream state for the admin UI. */
   streamState?(device: DisplayDevice): StreamState | undefined;
+  /** Presses a remote-control key (one of capabilities.remoteKeys). */
+  keypress?(device: DisplayDevice, key: string): Promise<void>;
+  /** Types text into the TV's current text field (search boxes, Wi-Fi passwords). */
+  typeText?(device: DisplayDevice, text: string): Promise<void>;
+  /** A small JPEG of what the box is rendering for this TV, if it's casting. */
+  preview?(device: DisplayDevice): Promise<Buffer | undefined>;
 }
 
 /**
@@ -88,6 +123,8 @@ export interface StreamService {
   state?(deviceId: string): StreamState | undefined;
   hlsUrl(content: { url: string }): Promise<string>;
   stopFor(deviceId: string): Promise<void>;
+  /** A small JPEG of the page this TV's channel renders; undefined when it isn't casting. */
+  preview?(deviceId: string): Promise<Buffer | undefined>;
 }
 
 export class NotBuiltYet extends Error {}

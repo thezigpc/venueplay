@@ -1,5 +1,5 @@
 import type { JsonStore } from "@bargames/common";
-import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamState } from "./types.js";
+import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamSettings, StreamState } from "./types.js";
 
 export interface DisplayRecord extends DisplayDevice {
   /** Venue's own label, e.g. "Bar left". */
@@ -91,14 +91,28 @@ export class DisplayRegistry {
     });
   }
 
-  async patch(id: string, patch: Partial<Pick<DisplayRecord, "label" | "group" | "delivery">>): Promise<DisplayRecord> {
+  async patch(id: string, patch: Partial<Pick<DisplayRecord, "label" | "group" | "delivery">> & { streamSettings?: StreamSettings | null }): Promise<DisplayRecord> {
     const cur = this.get(id);
-    if (!cur) throw new Error(`no display ${id}`);
-    const next = { ...cur, ...patch };
+    if (!cur) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    const { streamSettings, ...rest } = patch;
+    const next: DisplayRecord = { ...cur, ...rest };
+    if (streamSettings === null) delete next.streamSettings;
+    else if (streamSettings) next.streamSettings = streamSettings;
     await this.store.update((s) => {
       s.displays = s.displays.map((d) => (d.id === id ? next : d));
     });
+    // New settings take effect now on a TV that's casting: show its content again.
+    if (streamSettings !== undefined && JSON.stringify(cur.streamSettings) !== JSON.stringify(next.streamSettings) && this.driverFor(next).streamState?.(next)) {
+      if (next.content && playable(next.content).kind === "url") await this.show({ displayIds: [id] }, next.content).catch(() => undefined);
+    }
     return next;
+  }
+
+  /** A small JPEG of what this TV is being sent, or undefined when it isn't casting. */
+  async preview(id: string): Promise<Buffer | undefined> {
+    const d = this.get(id);
+    if (!d) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    return this.driverFor(d).preview?.(d);
   }
 
   async remove(id: string): Promise<void> {

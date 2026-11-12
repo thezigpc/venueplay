@@ -105,3 +105,54 @@ test("broker api with mock displays", async () => {
     server.close();
   }
 });
+
+test("roku remote: only its own keys, volume on TVs only, typing; the broker routes", async () => {
+  const calls: string[] = [];
+  const fake = createServer((req, res) => {
+    calls.push(`${req.method} ${req.url}`);
+    if (req.url === "/query/device-info") return void res.end(DEVICE_INFO);
+    res.end("");
+  });
+  await new Promise<void>((r) => fake.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(fake.address() as AddressInfo).port}`;
+  const dir = mkdtempSync(path.join(tmpdir(), "bg-broker-"));
+  const roku = new RokuDriver(new PendingStreamService());
+  const registry = new DisplayRegistry(new JsonStore<{ displays: DisplayRecord[] }>(path.join(dir, "displays.json"), { displays: [] }), new Map([["roku", roku]]));
+  const app = createBrokerApp({ registry, roku, token: "t", log: createLogger("test", "error") });
+  const server = app.listen(0);
+  const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const post = (p: string, body: unknown) => fetch(api + p, { method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" }, body: JSON.stringify(body) });
+  try {
+    const dev = await roku.probe(base);
+    const caps = await roku.capabilities(dev);
+    assert.ok(caps.remoteKeys?.includes("Select") && caps.remoteKeys.includes("Home"));
+    assert.ok(!caps.remoteKeys?.includes("VolumeUp"), "a player has no volume");
+    assert.ok((await roku.capabilities({ ...dev, isTv: true })).remoteKeys?.includes("VolumeUp"));
+
+    await registry.merge([dev]);
+    const id = encodeURIComponent(dev.id);
+    calls.length = 0;
+    assert.equal((await post(`/displays/${id}/key`, { key: "Up" })).status, 200);
+    assert.equal((await post(`/displays/${id}/key`, { key: "PowerOff" })).status, 400, "power has its own control");
+    assert.equal((await post(`/displays/${id}/key`, { key: "../launch/dev" })).status, 400);
+    assert.equal((await post(`/displays/${id}/text`, { text: "ab c" })).status, 200);
+    assert.equal((await post(`/displays/${id}/text`, { text: "" })).status, 400);
+    assert.deepEqual(
+      calls.filter((c) => c.startsWith("POST")),
+      ["POST /keypress/Up", "POST /keypress/Lit_a", "POST /keypress/Lit_b", "POST /keypress/Lit_%20", "POST /keypress/Lit_c"],
+    );
+
+    // Not casting: no preview (204). Settings: validated, saved, cleared with null.
+    const pv = await fetch(`${api}/displays/${id}/preview`, { headers: { authorization: "Bearer t" } });
+    assert.equal(pv.status, 204);
+    const patch = (body: unknown) => fetch(`${api}/displays/${id}`, { method: "PATCH", headers: { authorization: "Bearer t", "content-type": "application/json" }, body: JSON.stringify(body) });
+    assert.equal((await patch({ streamSettings: { resolution: "4k", fps: 30 } })).status, 400);
+    assert.equal((await patch({ streamSettings: { resolution: "720p", fps: 45 } })).status, 400);
+    assert.equal((await patch({ streamSettings: { resolution: "720p", fps: 15, bitrateKbps: 100 } })).status, 400);
+    assert.deepEqual(((await (await patch({ streamSettings: { resolution: "720p", fps: 15, bitrateKbps: 2000 } })).json()) as DisplayRecord).streamSettings, { resolution: "720p", fps: 15, bitrateKbps: 2000 });
+    assert.equal(((await (await patch({ streamSettings: null })).json()) as DisplayRecord).streamSettings, undefined);
+  } finally {
+    server.close();
+    fake.close();
+  }
+});

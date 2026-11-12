@@ -124,3 +124,45 @@ test("airplay: a receiver on another port waits for doubletake's discovery; Roku
   const calls = runner.ctlCalls.map((c) => c.slice(1).join(" "));
   assert.ok(calls.indexOf("devices") >= 0 && calls.indexOf("devices") < calls.indexOf("connect 10.0.0.105"), "checks discovery before connecting");
 });
+
+test("airplay: each TV's resolution and frame rate; same settings share an encoder; previews", async () => {
+  const runner = new FakeRunner();
+  const shots: number[] = [];
+  Object.assign(runner, {
+    async screenshot(port: number, size: { width: number; height: number }, out: number) {
+      shots.push(port);
+      return Buffer.from(`jpeg ${port} ${size.width}x${size.height} -> ${out}`);
+    },
+  });
+  const s = make(runner);
+  const url = "https://menu.x/tv";
+  const slow = { resolution: "720p", fps: 15, bitrateKbps: 2000 } as const;
+  await s.startAirplay({ ...tv(1), streamSettings: slow }, { url });
+  await s.startAirplay({ ...tv(2), streamSettings: slow }, { url });
+  await s.startAirplay(tv(3), { url });
+  const daemons = runner.alive("doubletake");
+  assert.equal(daemons.length, 2, "720p15 TVs share one encoder; the default TV gets its own");
+  const lo = daemons.find((p) => p.args.includes("15"))!;
+  assert.deepEqual([lo.args[lo.args.indexOf("-fps") + 1], lo.args[lo.args.indexOf("-bitrate") + 1]], ["15", "2000"]);
+  const hi = daemons.find((p) => p !== lo)!;
+  assert.equal(hi.args[hi.args.indexOf("-fps") + 1], "30");
+  assert.ok(!hi.args.includes("-bitrate"), "automatic bitrate: no flag");
+  assert.deepEqual(runner.alive("Xvfb").map((p) => p.args[3]).sort(), ["1280x720x24", "1920x1080x24"]);
+  const chromes = runner.alive("chromium");
+  assert.ok(chromes.every((p) => p.args.includes("--remote-debugging-address=127.0.0.1")), "DevTools on loopback only");
+  assert.ok(chromes.some((p) => p.args.includes("--window-size=1280,720")));
+  assert.match(s.state("roku:1")!.settings!, /720p · 15 fps · 2000 kbps/);
+
+  // Previews: one capture per channel, reused for a moment.
+  assert.match(String(await s.preview("roku:1")), /1280x720 -> 480/);
+  await s.preview("roku:2");
+  assert.equal(shots.length, 1, "same channel, cached");
+  assert.match(String(await s.preview("roku:3")), /1920x1080/);
+  assert.equal(await s.preview("roku:9"), undefined, "not casting");
+
+  // A TV that changes settings moves to the matching channel.
+  await s.startAirplay(tv(1), { url });
+  assert.equal(runner.alive("doubletake").length, 2);
+  await s.startAirplay(tv(2), { url });
+  assert.equal(runner.alive("doubletake").length, 1, "the 720p channel closed when its last TV left");
+});

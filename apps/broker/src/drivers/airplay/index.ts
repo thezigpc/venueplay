@@ -107,6 +107,10 @@ export class AirplayDriver implements DisplayDriver {
     return this.streams.state?.(device.id);
   }
 
+  preview(device: DisplayDevice): Promise<Buffer | undefined> {
+    return this.streams.preview?.(device.id) ?? Promise.resolve(undefined);
+  }
+
   async health(device: DisplayDevice): Promise<Health> {
     const url = new URL(device.address);
     const online = await reachable(url.hostname, Number(url.port || AIRPLAY_PORT), 2000);
