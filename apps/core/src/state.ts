@@ -1,8 +1,9 @@
 import { JsonStore, type GatewayAccess } from "@bargames/common";
-import { DEFAULT_THEME, type Announcement, type GameBranding, type GameManifest, type VenueLocation, type VenueTheme, type WifiInfo } from "@bargames/sdk";
+import { DEFAULT_THEME, type Announcement, type Countdown, type GameBranding, type GameManifest, type VenueLocation, type VenueTheme, type WifiInfo } from "@bargames/sdk";
 import path from "node:path";
 import type { CloudflareSettings } from "./cloudflare/service.js";
 import type { StartupRule } from "./startup.js";
+import type { ResultEntry } from "./leaderboard.js";
 
 export interface VenueSettings {
   name: string;
@@ -93,6 +94,10 @@ export function openState(dataDir: string) {
     cast: new JsonStore<CastSettings>(path.join(dataDir, "cast.json"), DEFAULT_CAST),
     /** The staff's current announcement (none: {}). */
     announcement: new JsonStore<Partial<Announcement>>(path.join(dataDir, "announcement.json"), {}),
+    /** The venue's lobby countdown (SDK 0.9.0; none: {}). */
+    countdown: new JsonStore<Partial<Countdown>>(path.join(dataDir, "countdown.json"), {}),
+    /** Game results for the leaderboards (last 30 days). */
+    results: new JsonStore<{ entries: ResultEntry[] }>(path.join(dataDir, "results.json"), { entries: [] }),
     /** Per-app secret settings (game id → NAME → value), injected as container env. Owner-only. */
     appSecrets: new JsonStore<Record<string, Record<string, string>>>(path.join(dataDir, "app-secrets.json"), {}, 0o600),
     /** What each TV shows when the box boots (display id → rule; absent: what it showed last). */

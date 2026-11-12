@@ -96,7 +96,7 @@ async function boot(extraFetch?: (url: string, init?: RequestInit) => Response |
   const json = (method: string, p: string, body?: unknown, headers: Record<string, string> = {}) =>
     fetch(base + p, { method, headers: { "content-type": "application/json", ...headers }, body: body ? JSON.stringify(body) : undefined });
   const cookie = (await json("POST", "/api/auth/setup", { password: "correct horse" })).headers.get("set-cookie")!.split(";")[0];
-  return { json, base, dir, authed: { cookie }, games, runtime, displays, shows, close: () => server.close() };
+  return { app, json, base, dir, authed: { cookie }, games, runtime, displays, shows, close: () => server.close() };
 }
 
 test("menus: listed apart from games, venue location reaches games, cast without a room", async () => {
@@ -549,6 +549,78 @@ test("secret settings: write-only in the admin, injected as env, a removal recre
 
     assert.equal((await b.json("DELETE", "/api/games/menu/secrets/GOOGLE_FALLBACK_CLIENT_SECRET", undefined, b.authed)).status, 200);
     assert.deepEqual(((await (await b.json("GET", "/api/games/menu/secrets", undefined, b.authed)).json()) as { secrets: { name: string }[] }).secrets.map((s) => s.name), ["GOOGLE_FALLBACK_CLIENT_ID"]);
+  } finally {
+    b.close();
+  }
+});
+
+test("0.9.0: attention, TV health, countdown, results and leaderboards, profiles stub", async () => {
+  const { nightStart, board } = await import("./leaderboard.js");
+  const { idleScreenHtml } = await import("./idleScreen.js");
+  // "Tonight" starts at 4 AM venue time.
+  assert.equal(nightStart(new Date("2026-11-12T03:00:00Z"), "America/New_York").toISOString(), "2026-11-11T09:00:00.000Z", "10 PM in New York: since 4 AM that day");
+  assert.equal(nightStart(new Date("2026-11-12T10:00:00Z"), "America/New_York").toISOString(), "2026-11-12T09:00:00.000Z", "5 AM: a new night");
+  assert.deepEqual(
+    board([{ gameId: "g", at: "", results: [{ player: { name: "Ann" }, place: 1, score: 5 }, { player: { name: "bo" }, place: 2 }] }, { gameId: "g", at: "", results: [{ player: { name: "ann" }, place: 1, score: 9 }] }]),
+    [{ name: "Ann", wins: 2, games: 2, best: 9 }, { name: "bo", wins: 0, games: 1 }],
+    "names merge case-insensitively",
+  );
+
+  const b = await boot();
+  try {
+    await b.json("POST", "/api/games/install", { manifest: { ...bingo, sdk: { version: "0.9.0", level: 1 } }, devTarget: "http://bingo" }, b.authed);
+    await b.json("PATCH", "/api/games/bingo", { enabled: true }, b.authed);
+    const g = { authorization: `Bearer ${b.games.get("bingo")!.token}` };
+
+    // Attention: a game's list replaces its last one; the admin sees them all.
+    await b.json("POST", "/internal/attention", { items: [{ level: "warn", message: "Google disconnected", actionPath: "/admin#google" }, { level: "nope", message: "x" }] }, g);
+    let att = ((await (await b.json("GET", "/api/attention", undefined, b.authed)).json()) as { items: { source: string; sourceName: string; message: string; actionPath?: string }[] }).items;
+    assert.deepEqual(att.map((i) => [i.sourceName, i.message, i.actionPath]), [["Bingo", "Google disconnected", "/admin#google"]]);
+    await b.json("POST", "/internal/attention", { items: [] }, g);
+    assert.equal(((await (await b.json("GET", "/api/attention", undefined, b.authed)).json()) as { items: unknown[] }).items.length, 0);
+
+    // TV health: offline for 10+ minutes becomes a box item; back online clears it.
+    b.displays.push({ id: "tv-offline", name: "Patio", content: undefined });
+    const sweep = b.app.locals.sweepTvHealth as (now?: number) => Promise<void>;
+    const t0 = Date.now();
+    await sweep(t0);
+    assert.equal(((await (await b.json("GET", "/api/attention", undefined, b.authed)).json()) as { items: unknown[] }).items.length, 0, "not yet: just went offline");
+    await sweep(t0 + 11 * 60_000);
+    att = ((await (await b.json("GET", "/api/attention", undefined, b.authed)).json()) as { items: { source: string; sourceName: string; message: string; actionPath?: string }[] }).items;
+    assert.deepEqual(att.map((i) => [i.sourceName, i.message]), [["Box", "Patio has been offline for 11 minutes."]]);
+    b.displays.pop();
+    await sweep(t0 + 12 * 60_000);
+    assert.equal(((await (await b.json("GET", "/api/attention", undefined, b.authed)).json()) as { items: unknown[] }).items.length, 0, "gone or back: cleared");
+
+    // Countdown from a game: in the venue context, on the idle screen, cleared by the game.
+    const c = (await (await b.json("POST", "/internal/countdown", { label: "Bingo starts in", minutes: 5 }, g)).json()) as { id: string; endsAt: string; joinUrl?: string; gameId?: string };
+    assert.equal(c.gameId, "bingo");
+    assert.equal(c.joinUrl, "http://bingo.localhost:7080");
+    const ctx = (await (await b.json("GET", "/internal/venue", undefined, g)).json()) as { venue: { countdown?: { label: string } } };
+    assert.equal(ctx.venue.countdown?.label, "Bingo starts in");
+    assert.equal((await b.json("POST", "/internal/countdown", { label: "", minutes: 5 }, g)).status, 400);
+    await b.json("DELETE", "/internal/countdown", undefined, g);
+    assert.equal(await (await b.json("GET", "/api/countdown", undefined, b.authed)).json(), null);
+    // Staff countdown.
+    assert.equal((await b.json("PUT", "/api/countdown", { label: "Trivia at", minutes: 2 }, b.authed)).status, 200);
+    assert.equal(((await (await b.json("GET", "/api/countdown", undefined, b.authed)).json()) as { label: string }).label, "Trivia at");
+
+    // Results → tonight's winners in the venue context; leaderboards for the admin.
+    assert.equal((await b.json("POST", "/internal/results", { results: [] }, g)).status, 400);
+    assert.equal((await b.json("POST", "/internal/results", { roomCode: "AB", results: [{ player: { name: "Ann" }, place: 1 }, { player: { name: "Bo" }, place: 2 }] }, g)).status, 200);
+    await b.json("POST", "/internal/results", { results: [{ player: { name: "ann" }, place: 1 }] }, g);
+    const ctx2 = (await (await b.json("GET", "/internal/venue", undefined, g)).json()) as { venue: { leaderboards?: { gameId: string; tonight: { name: string; wins: number }[] }[] } };
+    assert.deepEqual(ctx2.venue.leaderboards?.[0].tonight.slice(0, 1), [{ name: "Ann", wins: 2 }]);
+    const lb = (await (await b.json("GET", "/api/leaderboards", undefined, b.authed)).json()) as { games: { gameId: string; allTime: { name: string; wins: number; games: number }[] }[] };
+    assert.deepEqual(lb.games[0].allTime[0], { name: "Ann", wins: 2, games: 2 });
+    const html = await idleScreenHtml({ venue: (await (await b.json("GET", "/internal/venue", undefined, g)).json() as { venue: Parameters<typeof idleScreenHtml>[0]["venue"] }).venue, games: ["Bingo"] });
+    assert.match(html, /Tonight's winners: Bingo: <b>Ann<\/b> ×2/);
+    assert.match(html, /Trivia at <b id="cd" data-ends="\d+"><\/b>/, "the staff countdown ticks on idle TVs");
+    await b.json("DELETE", "/api/leaderboards", undefined, b.authed);
+    assert.equal(((await (await b.json("GET", "/api/leaderboards", undefined, b.authed)).json()) as { games: unknown[] }).games.length, 0);
+
+    // Profiles: a stub.
+    assert.equal((await b.json("GET", "/internal/profiles/abc", undefined, g)).status, 501);
   } finally {
     b.close();
   }

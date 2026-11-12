@@ -3,7 +3,7 @@
 // (the box's gateway renders the same games link for games without the SDK).
 // Off a box every helper returns "nothing", so a standalone game shows none of it.
 
-import type { Announcement, VenueContext, VenueGameLink } from "./protocol.js";
+import type { Announcement, Countdown, VenueContext, VenueGameLink } from "./protocol.js";
 
 const onBox = (ctx: VenueContext | null | undefined): ctx is VenueContext => Boolean(ctx && !ctx.standalone);
 
@@ -56,4 +56,18 @@ export function gamesLinkHtml(ctx: VenueContext | null | undefined, opts: GamesL
   const also = opts.alsoPlaying === false ? [] : otherGames(ctx);
   const alsoHtml = also.length ? `<p class="bg-also">Also playing: ${also.map((g) => `<a href="${esc(g.url)}">${esc(g.displayName)}</a>`).join(" · ")}</p>` : "";
   return `<a class="bg-all" href="${esc(url)}">${esc(opts.label ?? "← All games")}</a>${alsoHtml}`;
+}
+
+/** The lobby countdown, unless it has finished (SDK 0.9.0). Undefined off a box. */
+export function activeCountdown(ctx: VenueContext | null | undefined, now = Date.now()): (Countdown & { secondsLeft: number }) | undefined {
+  const c = onBox(ctx) ? ctx.venue.countdown : undefined;
+  if (!c?.endsAt) return undefined;
+  const secondsLeft = Math.ceil((Date.parse(c.endsAt) - now) / 1000);
+  return secondsLeft > 0 ? { ...c, secondsLeft } : undefined;
+}
+
+/** "4:05" for 245 seconds. */
+export function formatCountdown(seconds: number): string {
+  const s = Math.max(0, Math.ceil(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }

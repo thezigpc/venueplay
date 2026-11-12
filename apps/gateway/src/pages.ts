@@ -1,7 +1,7 @@
 // Branded pages the gateway renders itself. Inline CSS only (no external requests).
 
 import type { HubGame } from "@bargames/common";
-import { activeAnnouncement, themeToCss, type VenueContext, type VenueInfo } from "@bargames/sdk";
+import { activeAnnouncement, activeCountdown, formatCountdown, themeToCss, type VenueContext, type VenueInfo } from "@bargames/sdk";
 
 export const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -81,10 +81,20 @@ export function hubPage(venue: VenueInfo | undefined, games: HubGame[]): string 
         .join("")}</div>`
     : `<div class="card"><p>No games are running right now.</p></div>`;
   const news = venue ? activeAnnouncement({ venue, standalone: false } as VenueContext) : undefined;
+  // SDK 0.9.0: lobby countdown (ticks in the page) and tonight's winners.
+  const cd = venue ? activeCountdown({ venue, standalone: false } as VenueContext) : undefined;
+  const countdown = cd
+    ? `<div class="news count" role="timer">${esc(cd.label)} <b id="cd" data-ends="${Date.parse(cd.endsAt)}">${formatCountdown(cd.secondsLeft)}</b>${cd.joinUrl ? ` <a href="${esc(cd.joinUrl)}">Join</a>` : ""}</div>` +
+      `<script>(function(){var e=document.getElementById("cd"),t=+e.dataset.ends;function f(){var s=Math.max(0,Math.ceil((t-Date.now())/1000));e.textContent=Math.floor(s/60)+":"+String(s%60).padStart(2,"0");if(s>0)setTimeout(f,250);else e.parentNode.remove()}f()})()</script>`
+    : "";
+  const winners = (venue?.leaderboards ?? []).map((b) => ({ game: b.displayName, top: b.tonight.filter((p) => p.wins > 0).slice(0, 3) })).filter((b) => b.top.length);
+  const board = winners.length
+    ? `<div class="card winners"><b>Tonight's winners</b>${winners.map((b) => `<p>${esc(b.game)}: ${b.top.map((p) => `${esc(p.name)}${p.wins > 1 ? ` ×${p.wins}` : ""}`).join(", ")}</p>`).join("")}</div>`
+    : "";
   return page(
     venue,
     venue?.name ?? "Games",
-    `<h1>${esc(venue?.name ?? "Games")}</h1>${news ? `<div class="news" role="status">${esc(news.text)}</div>` : ""}${moduleLinks}<p>Pick a game to start a room, or join one that's open.</p>${list}`,
+    `<h1>${esc(venue?.name ?? "Games")}</h1>${news ? `<div class="news" role="status">${esc(news.text)}</div>` : ""}${countdown}${moduleLinks}<p>Pick a game to start a room, or join one that's open.</p>${list}${board}`,
   );
 }
 

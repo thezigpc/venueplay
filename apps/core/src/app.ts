@@ -1,6 +1,8 @@
 import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_TTL_MS, type Logger } from "@bargames/common";
 import { PasswordLimiter } from "./limiter.js";
 import { HostSampler } from "./systemStats.js";
+import { cleanResult, board, Leaderboards, nightStart } from "./leaderboard.js";
+import { rewardsHook } from "./rewards.js";
 import {
   checkTheme,
   HEADERS,
@@ -15,6 +17,7 @@ import {
   type CreatedRoom,
   type GameEventInput,
   type GameStatus,
+  type Countdown,
   adminPath,
   compareVersions,
   PATHS,
@@ -161,6 +164,19 @@ export function createApp(d: AppDeps) {
     const r = await doFetch(`${gameTarget(game)}/__bargames/status`, { headers: { authorization: `Bearer ${game.token}` }, signal: AbortSignal.timeout(3000) });
     return r.ok ? ((await r.json()) as GameStatus) : undefined;
   };
+  // ---------------------------------------------------------------- SDK 0.9.0 state
+  const leaderboards = new Leaderboards(d.state.results, rewardsHook(d.log));
+  const gameNames = () => Object.fromEntries(d.games.list().map((g) => [g.id, buildContext(d.state.venue.get(), g).game.displayName]));
+  /** Everything games and pages hear about the venue right now. */
+  const venueExtras = () => ({
+    games: d.games.list(),
+    announcement: d.state.announcement.get(),
+    countdown: d.state.countdown.get(),
+    leaderboards: leaderboards.tonight(gameNames(), d.state.venue.get().timezone ?? undefined),
+  });
+  /** Needs-attention items per source (a game id, or "_box"). In memory: sources re-send them. */
+  const attention = new Map<string, { level: "info" | "warn" | "error"; message: string; actionPath?: string }[]>();
+
   /** The display module idle TVs show, if the venue picked one and it's on. */
   const idleModuleOf = (): InstalledGame | undefined => {
     const id = d.state.venue.get().idleModule;
@@ -175,7 +191,7 @@ export function createApp(d: AppDeps) {
       return { kind: "idle" as const, title: ctx.game.displayName, url: new URL(mod.manifest.routes.table!, ctx.game.publicUrl!).toString() };
     }
     const names = d.games.list().filter((g) => g.enabled).map((g) => buildContext(venue, g).game.displayName);
-    return { kind: "idle" as const, title: "Idle", url: await idleScreenUrl({ venue: venueInfo(venue, { announcement: d.state.announcement.get() }), games: names }) };
+    return { kind: "idle" as const, title: "Idle", url: await idleScreenUrl({ venue: venueInfo(venue, venueExtras()), games: names }) };
   };
   /**
    * Re-render the idle screen on TVs already showing it (after an announcement change).
@@ -316,7 +332,7 @@ export function createApp(d: AppDeps) {
   app.get(
     "/internal/venue",
     h((req, res) => {
-      res.json(buildContext(d.state.venue.get(), gameAuth(req), { games: d.games.list(), announcement: d.state.announcement.get() }));
+      res.json(buildContext(d.state.venue.get(), gameAuth(req), venueExtras()));
     }),
   );
 
@@ -333,6 +349,8 @@ export function createApp(d: AppDeps) {
           boxVersion: d.config.boxVersion,
           setupRequired: !d.auth.isSetup(),
           announcement: d.state.announcement.get(),
+          countdown: d.state.countdown.get(),
+          leaderboards: venueExtras().leaderboards,
           rooms: roomCache.snapshot(),
         }),
       );
@@ -458,6 +476,169 @@ export function createApp(d: AppDeps) {
       res.json({ version: d.config.boxVersion, runtime: d.runtime.kind, broker });
     }),
   );
+
+  // ------------------------------------------------------------ SDK 0.9.0: attention
+
+  const LEVELS = new Set(["info", "warn", "error"]);
+  /** A game's needs-attention list (replaces its previous one; [] clears it). */
+  app.post(
+    "/internal/attention",
+    h(async (req, res) => {
+      const game = gameAuth(req);
+      const items = Array.isArray(req.body?.items) ? (req.body.items as Record<string, unknown>[]) : [];
+      const clean = items
+        .filter((i) => i && LEVELS.has(String(i.level)) && typeof i.message === "string" && i.message.trim())
+        .slice(0, 20)
+        .map((i) => ({
+          level: i.level as "info" | "warn" | "error",
+          message: String(i.message).trim().slice(0, 200),
+          ...(typeof i.actionPath === "string" && i.actionPath.startsWith("/") && !i.actionPath.startsWith("//") ? { actionPath: i.actionPath.slice(0, 200) } : {}),
+        }));
+      if (clean.length) attention.set(game.id, clean);
+      else attention.delete(game.id);
+      res.json({ ok: true, count: clean.length });
+    }),
+  );
+  /** Everything that needs staff, for the Tonight page: games' items and the box's own. */
+  app.get("/api/attention", (_req, res) => {
+    const names = gameNames();
+    const out = [...attention.entries()].flatMap(([source, items]) =>
+      items.map((i) => ({ ...i, source, sourceName: source === "_box" ? "Box" : (names[source] ?? source) })),
+    );
+    res.json({ items: out });
+  });
+
+  /** TV health: a TV offline for more than 10 minutes becomes a box attention item. */
+  const offlineSince = new Map<string, number>();
+  const sweepTvHealth = async (now = Date.now()) => {
+    const list = (await brokerCall("GET", "/displays?health=1").catch(() => undefined)) as { id: string; name: string; label?: string; health?: { online?: boolean } }[] | undefined;
+    if (!Array.isArray(list)) return;
+    const seen = new Set<string>();
+    const items: { level: "warn"; message: string }[] = [];
+    for (const tv of list) {
+      seen.add(tv.id);
+      if (tv.health?.online) {
+        offlineSince.delete(tv.id);
+        continue;
+      }
+      const since = offlineSince.get(tv.id) ?? now;
+      offlineSince.set(tv.id, since);
+      const mins = Math.floor((now - since) / 60_000);
+      if (mins >= 10) items.push({ level: "warn", message: (tv.label || tv.name) + " has been offline for " + (mins >= 120 ? Math.floor(mins / 60) + " hours" : mins + " minutes") + "." });
+    }
+    for (const id of offlineSince.keys()) if (!seen.has(id)) offlineSince.delete(id);
+    if (items.length) attention.set("_box", items);
+    else attention.delete("_box");
+  };
+  const healthTimer = setInterval(() => void sweepTvHealth().catch(() => undefined), 60_000);
+  healthTimer.unref();
+  app.locals.sweepTvHealth = sweepTvHealth;
+
+  // ------------------------------------------------------------ SDK 0.9.0: countdown
+
+  let countdownTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Sets (or clears) the venue countdown; repaints idle TVs now and when it ends. */
+  const setCountdown = async (c: Partial<Countdown>) => {
+    await d.state.countdown.set(c);
+    if (countdownTimer) clearTimeout(countdownTimer);
+    const ms = c.endsAt ? Date.parse(c.endsAt) - Date.now() : NaN;
+    if (ms > 0 && ms < 2 ** 31 - 1) {
+      countdownTimer = setTimeout(() => void refreshIdleTvs().catch(() => undefined), ms + 1000);
+      countdownTimer.unref?.();
+    }
+    void refreshIdleTvs().catch(() => undefined);
+  };
+  const newCountdown = (body: Record<string, unknown>, game?: InstalledGame): Countdown => {
+    const label = typeof body.label === "string" ? body.label.trim().replace(/\s+/g, " ").slice(0, 60) : "";
+    const minutes = Number(body.minutes);
+    if (!label) throw new HttpError(400, 'label required, e.g. "Trivia starts in"');
+    if (!(minutes >= 0.25 && minutes <= 180)) throw new HttpError(400, "minutes: 0.25-180");
+    let joinUrl: string | undefined;
+    if (game) {
+      const room = typeof body.roomCode === "string" ? (roomCache.snapshot()[game.id] ?? []).find((r) => r.code === body.roomCode) : undefined;
+      joinUrl = room?.joinUrl ?? buildContext(d.state.venue.get(), game).game.publicUrl;
+    }
+    return { id: Date.now().toString(36), label, endsAt: new Date(Date.now() + minutes * 60_000).toISOString(), ...(game ? { gameId: game.id } : {}), ...(joinUrl ? { joinUrl } : {}) };
+  };
+  app.post(
+    "/internal/countdown",
+    h(async (req, res) => {
+      const game = gameAuth(req);
+      const c = newCountdown(req.body ?? {}, game);
+      await setCountdown(c);
+      d.log.info("countdown", "started by a game", { game: game.id, label: c.label, endsAt: c.endsAt });
+      res.json(c);
+    }),
+  );
+  app.delete(
+    "/internal/countdown",
+    h(async (req, res) => {
+      const game = gameAuth(req);
+      if (d.state.countdown.get().gameId === game.id) await setCountdown({});
+      res.json({ ok: true });
+    }),
+  );
+  app.get("/api/countdown", (_req, res) => {
+    const c = d.state.countdown.get();
+    res.json(c.endsAt && Date.parse(c.endsAt) > Date.now() ? c : null);
+  });
+  /** Staff: { label, minutes, gameId? }. */
+  app.put(
+    "/api/countdown",
+    h(async (req, res) => {
+      const gameId = typeof req.body?.gameId === "string" ? req.body.gameId : undefined;
+      const game = gameId ? d.games.get(gameId) : undefined;
+      if (gameId && !game) throw new HttpError(404, "no such game");
+      const c = newCountdown(req.body ?? {}, game);
+      await setCountdown(c);
+      res.json(c);
+    }),
+  );
+  app.delete(
+    "/api/countdown",
+    h(async (_req, res) => {
+      await setCountdown({});
+      res.json({ ok: true });
+    }),
+  );
+
+  // ------------------------------------------------------------ SDK 0.9.0: results and leaderboards
+
+  app.post(
+    "/internal/results",
+    h(async (req, res) => {
+      const game = gameAuth(req);
+      const r = cleanResult(req.body);
+      if (typeof r === "string") throw new HttpError(400, r);
+      await leaderboards.record(game.id, r);
+      res.json({ ok: true });
+    }),
+  );
+  /** Tonight and all time, per game (top 10). */
+  app.get("/api/leaderboards", (_req, res) => {
+    const names = gameNames();
+    const since = nightStart(new Date(), d.state.venue.get().timezone ?? undefined);
+    const ids = [...new Set(leaderboards.entries().map((e) => e.gameId))];
+    res.json({
+      tonightSince: since.toISOString(),
+      games: ids.map((id) => ({
+        gameId: id,
+        displayName: names[id] ?? id,
+        tonight: board(leaderboards.entries(id, since)).slice(0, 10),
+        allTime: board(leaderboards.entries(id)).slice(0, 10),
+      })),
+    });
+  });
+  app.delete(
+    "/api/leaderboards",
+    h(async (req, res) => {
+      await leaderboards.reset(typeof req.query.gameId === "string" ? req.query.gameId : undefined);
+      res.json({ ok: true });
+    }),
+  );
+
+  /** STUB (planned): player profiles. */
+  app.all(/^\/internal\/profiles(\/.*)?$/, (_req, res) => res.status(501).json({ error: "player profiles aren't built yet" }));
 
   // ------------------------------------------------------------ system stats and reboot
 

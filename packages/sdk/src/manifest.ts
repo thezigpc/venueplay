@@ -61,6 +61,11 @@ export interface GameManifest {
   resources: { memory: string; cpus: number };
   /** internet: false keeps the game on an internal-only network. */
   network: { internet: boolean };
+  /**
+   * SDK 0.9.0, media providers: the TV apps this package may ask the box to start
+   * (e.g. ["youtube"]). Declares it a media provider (media_list/media_play/media_stop).
+   */
+  media?: { launch: string[] };
   /** Static, non-secret environment. Keys starting with BG_ are reserved. */
   env: Record<string, string>;
   minBoxVersion?: string;
@@ -165,6 +170,13 @@ export function validateManifest(input: unknown): ManifestResult {
   else for (const k of Object.keys(env)) if (k.startsWith("BG_")) errors.push(`env.${k}: BG_ variables are reserved for the box`);
 
   if (m.minBoxVersion !== undefined && (!isStr(m.minBoxVersion) || !SEMVER.test(m.minBoxVersion))) errors.push("minBoxVersion: semver");
+  let media: { launch: string[] } | undefined;
+  if (m.media !== undefined) {
+    const launch = isObj(m.media) ? m.media.launch : undefined;
+    if (!strArray(launch) || !launch.every((a) => /^[a-z][a-z0-9-]{1,31}$/.test(a))) errors.push("media.launch: list of TV app names, e.g. [\"youtube\"]");
+    else media = { launch };
+    if (level < 3) warnings.push("media: media providers need sdk.level 3 (media_list / media_play / media_stop commands and a status provider)");
+  }
 
   if (errors.length) return { ok: false, errors, warnings };
 
@@ -197,6 +209,7 @@ export function validateManifest(input: unknown): ManifestResult {
     network: { internet: internet as boolean },
     env: env as Record<string, string>,
     minBoxVersion: m.minBoxVersion as string | undefined,
+    ...(media ? { media } : {}),
   };
   return { ok: true, manifest, warnings };
 }

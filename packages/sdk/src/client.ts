@@ -3,7 +3,7 @@
 
 import { PATHS, type VenueContext } from "./protocol.js";
 import { themeCssVars } from "./theme.js";
-import { activeAnnouncement, GAMES_LINK_CSS, gamesLinkHtml, type GamesLinkOptions } from "./links.js";
+import { activeAnnouncement, activeCountdown, formatCountdown, GAMES_LINK_CSS, gamesLinkHtml, type GamesLinkOptions } from "./links.js";
 
 let cache: Promise<VenueContext | null> | undefined;
 
@@ -308,6 +308,75 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
   };
 }
 
-export { activeAnnouncement, ANNOUNCEMENT_HIDE_CSS, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
-export type { Announcement, VenueGameLink, VenueLocation } from "./protocol.js";
+export { activeAnnouncement, activeCountdown, ANNOUNCEMENT_HIDE_CSS, formatCountdown, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
+export type { Announcement, Countdown, LeaderboardSummary, PlayerProfile, VenueGameLink, VenueLocation } from "./protocol.js";
+
+export interface CountdownController {
+  update(ctx: VenueContext | null | undefined): void;
+  remove(): void;
+}
+
+/**
+ * SDK 0.9.0: the venue's lobby countdown ("Trivia starts in 4:05", with a Join link when
+ * there's a room) as a strip at the bottom of the page, ticking every second. Fine on TV
+ * pages too. Off a box it adds nothing.
+ */
+export function countdownBanner(ctx: VenueContext | null | undefined, opts: { doc?: Document } = {}): CountdownController {
+  const doc = opts.doc ?? document;
+  let current = ctx;
+  let el: HTMLElement | undefined;
+  let style: HTMLStyleElement | undefined;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const render = () => {
+    const c = activeCountdown(current);
+    if (!c) {
+      if (el) el.hidden = true;
+      if (timer) clearInterval(timer);
+      timer = undefined;
+      return;
+    }
+    if (!el) {
+      style = doc.createElement("style");
+      style.dataset.bargames = "countdown";
+      style.textContent =
+        "#bargames-countdown{position:fixed;z-index:2147483645;left:50%;bottom:16px;transform:translateX(-50%);padding:10px 18px;border-radius:999px;background:var(--venue-surface,#1c2346);color:var(--venue-text,#f4f6ff);font:700 16px/1.3 var(--venue-font,system-ui,sans-serif);box-shadow:0 4px 16px rgba(0,0,0,.4)}" +
+        "#bargames-countdown[hidden]{display:none}#bargames-countdown b{color:var(--venue-primary,#f2b33d);font-variant-numeric:tabular-nums}#bargames-countdown a{color:inherit;margin-left:10px}";
+      doc.head.appendChild(style);
+      el = doc.createElement("div");
+      el.id = "bargames-countdown";
+      el.setAttribute("role", "timer");
+      doc.body.appendChild(el);
+    }
+    el.hidden = false;
+    el.textContent = `${c.label} `;
+    const t = doc.createElement("b");
+    t.textContent = formatCountdown(c.secondsLeft);
+    el.appendChild(t);
+    if (c.joinUrl) {
+      const a = doc.createElement("a");
+      a.href = c.joinUrl;
+      a.textContent = "Join";
+      el.appendChild(a);
+    }
+    timer ??= setInterval(render, 1000);
+  };
+  render();
+  return {
+    update(c) {
+      current = c;
+      render();
+    },
+    remove() {
+      if (timer) clearInterval(timer);
+      el?.remove();
+      style?.remove();
+      el = style = undefined;
+    },
+  };
+}
+
+/** STUB (planned): the signed-in player's venue profile. Always null for now. */
+export async function venueProfile(): Promise<null> {
+  return null;
+}
 export type { VenueContext } from "./protocol.js";

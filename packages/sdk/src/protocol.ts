@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.8.0";
+export const SDK_VERSION = "0.9.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -68,6 +68,10 @@ export interface VenueInfo {
   timezone?: string;
   /** Units the venue prefers. SDK 0.5.0+. */
   units?: "imperial" | "metric";
+  /** A lobby countdown, if one is running (SDK 0.9.0). */
+  countdown?: Countdown;
+  /** Tonight's winners per game that reports results (SDK 0.9.0). */
+  leaderboards?: LeaderboardSummary[];
 }
 
 export interface VenueLocation {
@@ -134,6 +138,8 @@ export const STANDARD_EVENTS = [
   "claim_pending",
   "winner",
   "game_over",
+  /** SDK 0.9.0: data is a GameResult (bg.reportResults sends it). */
+  "game_result",
 ] as const;
 export type StandardEventType = (typeof STANDARD_EVENTS)[number];
 
@@ -156,7 +162,7 @@ export interface BarGamesEvent<T = Record<string, unknown>> extends GameEventInp
 
 // ---------------------------------------------------------------- commands
 
-export const STANDARD_COMMANDS = ["create_room", "start", "pause", "resume", "next_round", "end", "confirm_claim", "reject_claim"] as const;
+export const STANDARD_COMMANDS = ["create_room", "start", "pause", "resume", "next_round", "end", "confirm_claim", "reject_claim", "media_list", "media_play", "media_stop"] as const;
 export type StandardCommand = (typeof STANDARD_COMMANDS)[number];
 
 export interface CommandRequest {
@@ -283,6 +289,8 @@ export interface RoomSummary {
 
 export interface GameStatus {
   rooms: RoomSummary[];
+  /** Media providers (SDK 0.9.0): the box TVs this app can play on. */
+  media?: { targets: MediaTarget[] };
 }
 
 // ---------------------------------------------------------------- wiring
@@ -318,3 +326,107 @@ export const HEADERS = {
 
 /** Why the gateway let a request in. */
 export type AccessReason = "local" | "venue-ip" | "whitelist" | "pin";
+
+// ---------------------------------------------------------------- SDK 0.9.0
+
+/** Something staff should look at, shown on the box's Tonight page with a link into the game. */
+export interface AttentionItem {
+  level: "info" | "warn" | "error";
+  message: string;
+  /** A path on the game's own address, e.g. "/admin#google". */
+  actionPath?: string;
+}
+
+/** "Trivia starts in 5:00": one at a time per venue, on phones, the games list and idle TVs. */
+export interface Countdown {
+  id: string;
+  label: string;
+  /** ISO time it reaches zero. */
+  endsAt: string;
+  /** The game it's for, and where to join (when a room is waiting). */
+  gameId?: string;
+  joinUrl?: string;
+}
+
+/** One finished game: who placed or scored. */
+export interface GameResult {
+  roomCode?: string;
+  results: { player: { name: string; profileId?: string }; place?: number; score?: number }[];
+}
+
+/** A game's board on the venue's games list and idle screen. */
+export interface LeaderboardSummary {
+  gameId: string;
+  displayName: string;
+  /** Since the venue's day started (4 AM local). Most wins first. */
+  tonight: { name: string; wins: number; best?: number }[];
+}
+
+/** STUB (planned): a player's venue profile, shared across games on the box. */
+export interface PlayerProfile {
+  id: string;
+  nickname: string;
+  avatarUrl?: string;
+  stats?: Record<string, number>;
+}
+
+/** STUB (planned): where a sound can play when the venue chooses (TV, the box's output, a speaker). */
+export interface AudioOutput {
+  id: string;
+  name: string;
+  kind: "tv" | "analog" | "speaker";
+}
+
+// Media providers (apps such as YouTube that put their own content on TVs).
+
+export interface MediaItem {
+  id: string;
+  name: string;
+  /** "list": plays on one TV. "plan": starts several TVs at once (no displayId). */
+  kind: "list" | "plan";
+  thumbnailUrl?: string;
+  count?: number;
+}
+
+export type MediaTargetState = "linked" | "starting" | "playing" | "paused" | "local" | "unlinked" | "error";
+
+/** One box TV the provider can play on (it mapped its own link to this display). */
+export interface MediaTarget {
+  displayId: string;
+  label: string;
+  state: MediaTargetState;
+  nowPlaying?: { title: string; listName?: string };
+  itemId?: string;
+}
+
+export interface MediaPlayArgs {
+  /** Required for lists; ignored for plans. */
+  displayId?: string;
+  itemId: string;
+  /** A staff pick: take the TV back from local control. */
+  takeBack?: boolean;
+}
+
+export interface MediaPlayResult {
+  ok: boolean;
+  message?: string;
+  /** The provider asked the box to start its TV app. */
+  launched?: boolean;
+  /** Still starting: watch status (the box polls every 3 s for up to 60 s). */
+  pending?: boolean;
+}
+
+/** A venue TV as media providers see it (bg.tvs()). */
+export interface BoxTv {
+  id: string;
+  name: string;
+  group?: string;
+  kind: string;
+  online: boolean;
+  /** TV apps the box can start on it for this provider, e.g. ["youtube"]. */
+  canLaunch: string[];
+  /** Only for providers declaring media.launch ["youtube"]: the TV's YouTube screen id, read over DIAL. */
+  youtubeScreenId?: string;
+}
+
+export type LaunchResult = { ok: true } | { ok: false; reason: "not-allowed" | "unsupported" | "offline" | "ecp-blocked" | "error"; message: string };

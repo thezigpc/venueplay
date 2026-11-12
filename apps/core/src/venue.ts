@@ -1,5 +1,5 @@
 import type { GatewayConfig, GatewayRoute, HubGame, HubRoom } from "@bargames/common";
-import { isApp, PROTOCOL_VERSION, withAccent, type Announcement, type VenueContext, type VenueGameLink, type VenueInfo } from "@bargames/sdk";
+import { isApp, PROTOCOL_VERSION, withAccent, type Announcement, type Countdown, type LeaderboardSummary, type VenueContext, type VenueGameLink, type VenueInfo } from "@bargames/sdk";
 import { hostFor, publicUrl } from "./hostnames.js";
 import type { AccessSettings, InstalledGame, VenueSettings } from "./state.js";
 
@@ -8,6 +8,9 @@ export interface VenueExtras {
   /** All installed games; only enabled ones are listed. */
   games?: InstalledGame[];
   announcement?: Partial<Announcement>;
+  /** SDK 0.9.0 */
+  countdown?: Partial<Countdown>;
+  leaderboards?: LeaderboardSummary[];
 }
 
 export function venueInfo(v: VenueSettings, extras: VenueExtras = {}): VenueInfo {
@@ -24,6 +27,9 @@ export function venueInfo(v: VenueSettings, extras: VenueExtras = {}): VenueInfo
   if (v.units) info.units = v.units;
   const a = liveAnnouncement(extras.announcement);
   if (a) info.announcement = a;
+  const c = extras.countdown;
+  if (c?.id && c.label && c.endsAt && Date.parse(c.endsAt) > Date.now()) info.countdown = c as Countdown;
+  if (extras.leaderboards?.length) info.leaderboards = extras.leaderboards;
   return info;
 }
 
@@ -74,11 +80,13 @@ export function buildGatewayConfig(input: {
   boxVersion: string;
   setupRequired: boolean;
   announcement?: Partial<Announcement>;
+  countdown?: Partial<Countdown>;
+  leaderboards?: LeaderboardSummary[];
   /** Open rooms per game id, for the games list (from the room cache). */
   rooms?: Record<string, HubRoom[]>;
 }): GatewayConfig {
   const { venue, access, games } = input;
-  const extras: VenueExtras = { games, announcement: input.announcement };
+  const extras: VenueExtras = { games, announcement: input.announcement, countdown: input.countdown, leaderboards: input.leaderboards };
   const routes: GatewayRoute[] = [
     { host: hostFor(venue, venue.adminLabel), kind: "admin", target: input.coreUrl, enabled: true, injectTheme: false },
     { host: hostFor(venue, venue.playLabel), kind: "hub", enabled: true, injectTheme: false },

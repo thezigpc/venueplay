@@ -22,6 +22,16 @@ import {
   type GameEventInput,
   type GameStatus,
   type VenueContext,
+  type AttentionItem,
+  type AudioOutput,
+  type BoxTv,
+  type Countdown,
+  type GameResult,
+  type LaunchResult,
+  type MediaItem,
+  type MediaPlayArgs,
+  type MediaPlayResult,
+  type PlayerProfile,
 } from "./protocol.js";
 import { themeToCss } from "./theme.js";
 
@@ -107,6 +117,32 @@ export interface BarGames {
    * box-wide); pass the client's IP (bg.clientIp(req)). Always false off a box.
    */
   checkVenuePassword(password: string, clientIp?: string): Promise<boolean>;
+
+  // ---------------------------------------------------------------- SDK 0.9.0
+  /** Staff should look at these (shown on the box's Tonight page). Pass [] to clear. No-op off a box. */
+  setAttention(items: AttentionItem[]): Promise<void>;
+  /** "Trivia starts in 5:00" on phones, the games list and idle TVs. One per venue; a new one replaces it. */
+  startCountdown(c: { label: string; minutes: number; roomCode?: string }): Promise<Countdown | undefined>;
+  /** Ends this game's countdown early. */
+  clearCountdown(): Promise<void>;
+  /** A finished game's results: feeds the venue's leaderboards (and, later, rewards). Also emits "game_result". */
+  reportResults(r: GameResult): Promise<void>;
+  /** STUB (planned): the venue profile of the player behind this request. Always undefined for now. */
+  profile(req: IncomingMessage): Promise<PlayerProfile | undefined>;
+  /** STUB (planned): where sounds can play on this box. Always [] for now; standalone, play locally. */
+  audioOutputs(): Promise<AudioOutput[]>;
+  /** STUB (planned): play a short sound on a venue output. Not built: standalone/on a box, play it locally. */
+  playSound(sound: string, opts?: { outputId?: string }): Promise<{ ok: boolean; reason?: string }>;
+  /** Media providers: every venue TV (not gated by "casting from games"). [] off a box or without manifest media. */
+  tvs(): Promise<BoxTv[]>;
+  /** Media providers: start a TV app (one of manifest media.launch) on one of your target displays. Returns once accepted. */
+  launchApp(displayId: string, app: string): Promise<LaunchResult>;
+  /** media_list: your lists and plans. */
+  onMediaList(fn: () => MediaItem[] | Promise<MediaItem[]>): void;
+  /** media_play: answer within ~3 s; return pending: true while a TV app starts. */
+  onMediaPlay(fn: (args: MediaPlayArgs) => MediaPlayResult | Promise<MediaPlayResult>): void;
+  /** media_stop: pause and clear the queue on one TV. */
+  onMediaStop(fn: (args: { displayId: string }) => { ok: boolean; message?: string } | Promise<{ ok: boolean; message?: string }>): void;
   /** Flush queued events (call on shutdown). */
   flush(): Promise<void>;
 }
@@ -327,10 +363,84 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
         return false;
       }
     },
+    async setAttention(items) {
+      if (!connected) return;
+      const clean = (Array.isArray(items) ? items : []).slice(0, 20).map((i) => ({ level: i.level, message: String(i.message).slice(0, 200), ...(i.actionPath ? { actionPath: i.actionPath } : {}) }));
+      await core("POST", "/internal/attention", { items: clean }).catch(() => undefined);
+    },
+    async startCountdown(c) {
+      if (!connected) return undefined;
+      const r = await core("POST", "/internal/countdown", c).catch(() => undefined);
+      return r?.ok ? ((await r.json()) as Countdown) : undefined;
+    },
+    async clearCountdown() {
+      if (connected) await core("DELETE", "/internal/countdown").catch(() => undefined);
+    },
+    async reportResults(r) {
+      if (!connected) return;
+      emit({ type: "game_result", roomCode: r.roomCode, data: r as unknown as Record<string, unknown> });
+      await core("POST", "/internal/results", r).catch(() => undefined);
+    },
+    profile: async () => undefined,
+    audioOutputs: async () => [],
+    playSound: async () => ({ ok: false, reason: "not-built" }),
+    async tvs() {
+      if (!connected) return [];
+      const r = await core("GET", "/internal/tvs").catch(() => undefined);
+      return r?.ok ? ((await r.json()) as { tvs: BoxTv[] }).tvs : [];
+    },
+    async launchApp(displayId, app) {
+      if (!connected) return { ok: false, reason: "unsupported", message: "not running on a Bar Games box" };
+      try {
+        const r = await core("POST", "/internal/launch-app", { displayId, app });
+        return (await r.json()) as LaunchResult;
+      } catch (err) {
+        return { ok: false, reason: "error", message: String(err) };
+      }
+    },
+    onMediaList: (fn) => void commands.set("media_list", async () => ({ ok: true, data: { items: await fn() } })),
+    onMediaPlay: (fn) =>
+      void commands.set("media_play", async ({ args }) => {
+        const a = (args ?? {}) as Partial<MediaPlayArgs>;
+        if (typeof a.itemId !== "string" || !a.itemId) return { ok: false, message: "itemId required" };
+        const r = await fn({ itemId: a.itemId, displayId: typeof a.displayId === "string" ? a.displayId : undefined, takeBack: a.takeBack === true });
+        return { ok: r.ok, message: r.message, data: r };
+      }),
+    onMediaStop: (fn) =>
+      void commands.set("media_stop", async ({ args }) => {
+        const displayId = (args as { displayId?: unknown } | undefined)?.displayId;
+        if (typeof displayId !== "string" || !displayId) return { ok: false, message: "displayId required" };
+        return fn({ displayId });
+      }),
     flush: async () => {
       await draining;
     },
   };
 }
 
-export type { CastDisplay, CastResult, CastTargets, ClaimArgs, CommandRequest, CommandResult, CreateRoomArgs, CreatedRoom, GameEventInput, GameStatus, PendingClaim, RoomSummary, VenueContext } from "./protocol.js";
+export type {
+  AttentionItem,
+  AudioOutput,
+  BoxTv,
+  CastDisplay,
+  CastResult,
+  CastTargets,
+  ClaimArgs,
+  CommandRequest,
+  CommandResult,
+  Countdown,
+  CreateRoomArgs,
+  CreatedRoom,
+  GameEventInput,
+  GameResult,
+  GameStatus,
+  LaunchResult,
+  MediaItem,
+  MediaPlayArgs,
+  MediaPlayResult,
+  MediaTarget,
+  PendingClaim,
+  PlayerProfile,
+  RoomSummary,
+  VenueContext,
+} from "./protocol.js";
