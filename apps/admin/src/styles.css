@@ -131,10 +131,29 @@ details summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 .bar .fill.error { background: var(--danger); }
 ul.plain { list-style: none; padding: 0; margin: 6px 0; }
 ul.plain li { padding: 3px 0; }
-table.stats { width: 100%; border-collapse: collapse; }
-table.stats th, table.stats td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #252c55; }
+table.data-table { width: 100%; border-collapse: collapse; }
+table.data-table th, table.data-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #252c55; }
 .attention .row.error b { color: var(--danger); }
 .attention .row.warn b { color: #f2b33d; }
 ol.plain { padding-left: 20px; margin: 6px 0 12px; }
 .media { margin: 8px 0; padding: 8px 10px; background: var(--surface-2); border-radius: 8px; }
 .media p { margin: 4px 0; }
+
+/* Roku remote */
+.remote-panel { margin-top: 10px; padding: 14px; background: #10142b; border: 1px solid #2a3263; border-radius: 22px; display: grid; gap: 12px; justify-items: center; max-width: 320px; outline: none; }
+.remote-panel:focus-visible { box-shadow: 0 0 0 2px var(--primary); }
+.remote-head { width: 100%; display: flex; justify-content: space-between; align-items: center; }
+.rk-row { display: flex; gap: 12px; justify-content: center; }
+.rk { width: 64px; height: 52px; border-radius: 14px; font-size: 1.25rem; background: #232a54; border: 1px solid #343d70; color: var(--text); touch-action: none; user-select: none; -webkit-user-select: none; transition: transform 60ms, background 120ms; }
+.rk.small { width: 56px; height: 44px; font-size: 1.1rem; }
+.rk:active, .rk.lit { background: var(--primary); color: #161616; transform: scale(0.94); }
+.dpad-ring { position: relative; width: 210px; height: 210px; border-radius: 50%; background: #1a2047; border: 1px solid #343d70; }
+.dpad-ring .rk { position: absolute; width: 64px; height: 64px; border-radius: 50%; background: transparent; border: 0; font-size: 1.4rem; }
+.dpad-ring .rk.lit, .dpad-ring .rk:active { background: var(--primary); }
+.dpad-ring .up { top: 6px; left: 73px; }
+.dpad-ring .down { bottom: 6px; left: 73px; }
+.dpad-ring .left { left: 6px; top: 73px; }
+.dpad-ring .right { right: 6px; top: 73px; }
+.dpad-ring .ok { top: 63px; left: 63px; width: 84px; height: 84px; background: #2c3570; border: 1px solid #45508f; font-weight: 700; font-size: 1.1rem; }
+.remote-panel .inline { width: 100%; }
+.small-print { font-size: 0.8rem; text-align: center; }

@@ -163,7 +163,7 @@ export function SystemPage() {
       <section className="card wide">
         <h2>Containers</h2>
         {s.containers ? (
-          <table className="stats">
+          <table className="data-table">
             <thead>
               <tr>
                 <th>Name</th>

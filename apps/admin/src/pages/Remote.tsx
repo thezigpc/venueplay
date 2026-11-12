@@ -1,0 +1,152 @@
+// The Roku remote on the TVs page: a real-remote layout, big touch targets, a flash on each
+// press, hold-to-repeat for arrows and volume, and keyboard arrows/Enter/Backspace on a desktop.
+
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { api, type Display } from "../api";
+
+const REPEATS = new Set(["Up", "Down", "Left", "Right", "VolumeUp", "VolumeDown", "Rev", "Fwd"]);
+const KEYBOARD: Record<string, string> = {
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  Enter: "Select",
+  Backspace: "Back",
+  Escape: "Back",
+  Home: "Home",
+  " ": "Play",
+};
+
+export function Remote({ d, keys }: { d: Display; keys: string[] }) {
+  const has = new Set(keys);
+  const [open, setOpen] = useState(false);
+  const [lit, setLit] = useState("");
+  const [msg, setMsg] = useState("");
+  const [text, setText] = useState("");
+  const hold = useRef<{ t?: ReturnType<typeof setTimeout>; i?: ReturnType<typeof setInterval> }>({});
+  const online = d.health?.online !== false;
+
+  const send = (key: string) => {
+    if (!has.has(key)) return;
+    setLit(key);
+    setTimeout(() => setLit((k) => (k === key ? "" : k)), 160);
+    api.key(d.id, key).then(
+      () => setMsg(""),
+      (e: Error) => setMsg(e.message),
+    );
+  };
+  const stopHold = () => {
+    clearTimeout(hold.current.t);
+    clearInterval(hold.current.i);
+    hold.current = {};
+  };
+  useEffect(() => stopHold, []);
+  const press = (key: string) => (e: PointerEvent) => {
+    e.preventDefault();
+    send(key);
+    if (!REPEATS.has(key)) return;
+    stopHold();
+    // Hold to repeat: after 400 ms, every 150 ms (volume a little slower).
+    hold.current.t = setTimeout(() => {
+      hold.current.i = setInterval(() => send(key), key.startsWith("Volume") ? 220 : 150);
+    }, 400);
+  };
+  const btn = (key: string, label: string, cls = "") =>
+    has.has(key) ? (
+      <button
+        key={key}
+        type="button"
+        className={`rk ${cls} ${lit === key ? "lit" : ""}`}
+        aria-label={key}
+        disabled={!online}
+        onPointerDown={press(key)}
+        onPointerUp={stopHold}
+        onPointerLeave={stopHold}
+        onPointerCancel={stopHold}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {label}
+      </button>
+    ) : null;
+  const onKey = (e: KeyboardEvent) => {
+    if ((e.target as HTMLElement).tagName === "INPUT") return;
+    const key = KEYBOARD[e.key];
+    if (key && has.has(key)) {
+      e.preventDefault();
+      send(key);
+    }
+  };
+
+  if (!open)
+    return (
+      <p>
+        <button type="button" onClick={() => setOpen(true)}>
+          🎮 Remote
+        </button>
+      </p>
+    );
+  return (
+    <div className="remote-panel" tabIndex={0} onKeyDown={onKey} aria-label={`Remote for ${d.label || d.name}`}>
+      <div className="remote-head">
+        <b>{d.label || d.name}</b>
+        <button type="button" className="ghost" onClick={() => setOpen(false)}>
+          Close
+        </button>
+      </div>
+      {!online && <p className="warn">This TV isn't answering right now.</p>}
+      <div className="rk-row">
+        {btn("Back", "↩", "small")}
+        {btn("Home", "⌂", "small")}
+        {btn("Info", "✱", "small")}
+      </div>
+      <div className="dpad-ring">
+        {btn("Up", "▲", "up")}
+        {btn("Left", "◀", "left")}
+        {btn("Select", "OK", "ok")}
+        {btn("Right", "▶", "right")}
+        {btn("Down", "▼", "down")}
+      </div>
+      <div className="rk-row">
+        {btn("InstantReplay", "↺", "small")}
+        {btn("Search", "🔍", "small")}
+        {btn("Backspace", "⌫", "small")}
+      </div>
+      <div className="rk-row">
+        {btn("Rev", "⏪")}
+        {btn("Play", "⏯")}
+        {btn("Fwd", "⏩")}
+      </div>
+      {has.has("VolumeUp") && (
+        <div className="rk-row">
+          {btn("VolumeDown", "🔉")}
+          {btn("VolumeMute", "🔇")}
+          {btn("VolumeUp", "🔊")}
+        </div>
+      )}
+      {has.has("ChannelUp") && (
+        <div className="rk-row">
+          {btn("ChannelDown", "CH −")}
+          {btn("ChannelUp", "CH +")}
+        </div>
+      )}
+      <form
+        className="inline"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!text) return;
+          api.typeText(d.id, text).then(
+            () => setText(""),
+            (err: Error) => setMsg(err.message),
+          );
+        }}
+      >
+        <input placeholder="Type into a search box" value={text} onChange={(e) => setText(e.target.value)} />
+        <button type="submit" disabled={!text || !online}>
+          Send
+        </button>
+      </form>
+      <p className="muted small-print">Hold arrows or volume to repeat. On a keyboard: arrows, Enter, Backspace. Home or Back leaves what the box is casting.</p>
+      {msg && <p className="error">{msg}</p>}
+    </div>
+  );
+}

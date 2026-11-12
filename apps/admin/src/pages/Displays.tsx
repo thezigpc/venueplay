@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { isApp } from "@bargames/sdk";
 import { MediaControls, useMediaItems } from "./MediaControls";
+import { Remote } from "./Remote";
 import { api, type CastSettings, type Display, type Game, type MediaProvider, type StartupRule, type StreamSettings } from "../api";
 
 const PREVIEWS_KEY = "bargames.tvPreviews";
@@ -448,70 +449,6 @@ function StreamSettingsFields({ value, onChange }: { value: StreamSettings | nul
   );
 }
 
-const DPAD: [string, string][][] = [
-  [["", ""], ["Up", "▲"], ["", ""]],
-  [["Left", "◀"], ["Select", "OK"], ["Right", "▶"]],
-  [["", ""], ["Down", "▼"], ["", ""]],
-];
-const ROW_KEYS: [string, string][] = [
-  ["Back", "↩ Back"],
-  ["Home", "⌂ Home"],
-  ["InstantReplay", "↺"],
-  ["Info", "✱"],
-];
-const PLAY_KEYS: [string, string][] = [
-  ["Rev", "⏪"],
-  ["Play", "⏯"],
-  ["Fwd", "⏩"],
-];
-const VOLUME_KEYS: [string, string][] = [
-  ["VolumeDown", "Vol −"],
-  ["VolumeMute", "Mute"],
-  ["VolumeUp", "Vol +"],
-];
-
-/** The Roku remote. Pressing Home or Back leaves whatever the box is casting. */
-function Remote({ d, keys }: { d: Display; keys: string[] }) {
-  const [text, setText] = useState("");
-  const [msg, setMsg] = useState("");
-  const has = new Set(keys);
-  const press = (key: string) => {
-    setMsg("");
-    api.key(d.id, key).catch((e: Error) => setMsg(e.message));
-  };
-  const btn = ([key, label]: [string, string], i: number) =>
-    key && has.has(key) ? (
-      <button key={key} type="button" onClick={() => press(key)}>
-        {label}
-      </button>
-    ) : (
-      <span key={`gap${i}`} />
-    );
-  return (
-    <details className="remote">
-      <summary>Remote</summary>
-      <div className="dpad">{DPAD.flat().map(btn)}</div>
-      <div className="buttons">{ROW_KEYS.map(btn)}</div>
-      <div className="buttons">{PLAY_KEYS.map(btn)}</div>
-      {has.has("VolumeUp") && <div className="buttons">{VOLUME_KEYS.map(btn)}</div>}
-      <form
-        className="inline"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!text) return;
-          api.typeText(d.id, text).then(() => setText(""), (err: Error) => setMsg(err.message));
-        }}
-      >
-        <input placeholder="Type into a search box" value={text} onChange={(e) => setText(e.target.value)} />
-        <button type="submit" disabled={!text}>
-          Send
-        </button>
-      </form>
-      <p className="muted">Home or Back leaves what the box is casting; cast again from Home to put it back.</p>
-      {msg && <p className="error">{msg}</p>}
-    </details>
-  );
-}
 
 /** AirPlay pairing: Pair → the TV shows a code → enter it here. Needed once per TV. */
 function Pairing({ d, needsCode, reload }: { d: Display; needsCode: boolean; reload: () => unknown }) {
