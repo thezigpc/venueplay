@@ -14,27 +14,36 @@ const NAV: { id: Section; label: string; icon: JSX.Element }[] = [
 ];
 
 export function App() {
-  const [auth, setAuth] = useState<{ setup: boolean; loggedIn: boolean; canSetup: boolean } | null>(null);
+  const [auth, setAuth] = useState<{ setup: boolean; loggedIn: boolean; canSetup: boolean; title?: string } | null>(null);
   const route = useRoute();
 
   const refreshAuth = useCallback(() => api.authStatus().then(setAuth).catch(() => setAuth({ setup: true, loggedIn: false, canSetup: false })), []);
   useEffect(() => void refreshAuth(), [refreshAuth]);
+  // The venue can rename this admin (Settings → Venue); saving there refreshes it here.
+  const title = auth?.title || "Bar Games";
+  useEffect(() => {
+    document.title = title;
+  }, [title]);
+  useEffect(() => {
+    window.addEventListener("bg-venue-saved", refreshAuth);
+    return () => window.removeEventListener("bg-venue-saved", refreshAuth);
+  }, [refreshAuth]);
 
   if (!auth) return <div className="center">Loading…</div>;
   if (!auth.loggedIn && !auth.setup && !auth.canSetup)
     return (
       <div className="center card narrow">
-        <h1>Bar Games</h1>
+        <h1>{title}</h1>
         <p>This box hasn't been set up yet. Open it from a device on the venue network (for example http://&lt;box IP&gt;/) to choose the admin password.</p>
       </div>
     );
-  if (!auth.loggedIn) return <Login setup={!auth.setup} onDone={refreshAuth} />;
+  if (!auth.loggedIn) return <Login setup={!auth.setup} onDone={refreshAuth} title={title} />;
 
   return (
     <div className="shell">
       <nav className="rail" aria-label="Sections">
         <button type="button" className="brand" onClick={() => go("tonight")} title="Tonight">
-          Bar Games
+          {title}
         </button>
         {NAV.map((n) => (
           <button key={n.id} type="button" className={`rail-item${n.id === route.section ? " active" : ""}`} aria-current={n.id === route.section ? "page" : undefined} onClick={() => go(n.id)}>
@@ -59,7 +68,7 @@ export function App() {
   );
 }
 
-function Login({ setup, onDone }: { setup: boolean; onDone: () => void }) {
+function Login({ setup, onDone, title }: { setup: boolean; onDone: () => void; title: string }) {
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const [err, setErr] = useState("");
@@ -77,7 +86,7 @@ function Login({ setup, onDone }: { setup: boolean; onDone: () => void }) {
   };
   return (
     <form className="center card narrow" onSubmit={submit}>
-      <h1>Bar Games</h1>
+      <h1>{title}</h1>
       <p>{setup ? "Welcome! Choose the admin password for this box (8+ characters). Staff use it to run games from the iPad." : "Admin login"}</p>
       <input type="password" placeholder="Password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus autoComplete={setup ? "new-password" : "current-password"} />
       {setup && <input type="password" placeholder="Confirm password" value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" />}

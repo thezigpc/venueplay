@@ -293,3 +293,4 @@ button.tv-tile.selected { border-color: var(--primary); }
 .inline select { flex: 1; min-width: 140px; }
 .card form { display: grid; gap: 8px; }
 .hub-logout { justify-self: start; margin-top: 8px; }
+.rail .brand { line-height: 1.2; overflow-wrap: anywhere; white-space: normal; }

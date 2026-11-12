@@ -47,6 +47,10 @@ export function VenuePage() {
           <input value={v.name} onChange={(e) => set("name", e.target.value)} />
         </label>
         <label>
+          Name shown in this admin (top-left, sign-in screen, browser tab)
+          <input value={v.adminTitle ?? ""} maxLength={24} placeholder="Bar Games" onChange={(e) => set("adminTitle", e.target.value)} />
+        </label>
+        <label>
           Short name (for {"{venue}"} in hostnames)
           <input value={v.slug} onChange={(e) => set("slug", e.target.value.toLowerCase())} />
         </label>
@@ -239,7 +243,7 @@ export function VenuePage() {
       </section>
 
       <div className="wide">
-        <button className="primary big" disabled={busy} onClick={() => run(() => api.saveVenue(v))}>
+        <button className="primary big" disabled={busy} onClick={() => run(() => api.saveVenue(v).then(() => void window.dispatchEvent(new Event("bg-venue-saved"))))}>
           Save venue
         </button>
       </div>

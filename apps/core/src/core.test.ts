@@ -173,6 +173,12 @@ test("api: setup, install, brand, events, gateway config", async () => {
     assert.equal(gw.adminUrl, "http://play.localhost:7080/admin");
     assert.equal(gw.routes[3].target, "http://127.0.0.1:7300");
 
+    // 0.13.1: the venue's own name for the admin, shown on the sign-in screen too.
+    assert.equal(((await (await json("GET", "/api/auth/status")).json()) as { title?: string }).title, undefined);
+    assert.equal((await json("PUT", "/api/venue", { adminTitle: "  Pacha   Kava  " }, authed)).status, 200);
+    assert.equal(((await (await json("GET", "/api/auth/status")).json()) as { title?: string }).title, "Pacha Kava");
+    assert.equal((await json("PUT", "/api/venue", { adminTitle: "" }, authed)).status, 200);
+    assert.equal(((await (await json("GET", "/api/auth/status")).json()) as { title?: string }).title, undefined);
     const badVenue = await json("PUT", "/api/venue", { hostnamePattern: "{domain}" }, authed);
     assert.equal(badVenue.status, 400);
     const deep = (await (await json("PUT", "/api/venue", { domain: "example.com", hostnamePattern: "{game}.internal.{domain}" }, authed)).json()) as { warnings: string[] };

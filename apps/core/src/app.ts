@@ -384,7 +384,8 @@ export function createApp(d: AppDeps) {
   };
 
   app.get("/api/auth/status", (req, res) => {
-    res.json({ setup: d.auth.isSetup(), loggedIn: d.auth.check(readCookie(req.headers.cookie, ADMIN_COOKIE)), canSetup: fromLan(req) });
+    // title: the venue's own name for this admin (shown on the sign-in screen too, so it's public).
+    res.json({ setup: d.auth.isSetup(), loggedIn: d.auth.check(readCookie(req.headers.cookie, ADMIN_COOKIE)), canSetup: fromLan(req), title: d.state.venue.get().adminTitle || undefined });
   });
 
   /** The client's address: the gateway's word when it proves itself, else the socket. */
@@ -1057,7 +1058,8 @@ export function createApp(d: AppDeps) {
       const b = req.body as Partial<VenueSettings>;
       const next: VenueSettings = {
         ...cur,
-        ...pick(b, ["name", "theme", "wifi", "domain", "hostnamePattern", "playLabel", "adminLabel", "adminOwnHost", "slug", "publicScheme", "publicPort", "location", "timezone", "units", "idleModule"]),
+        ...pick(b, ["name", "theme", "wifi", "domain", "hostnamePattern", "playLabel", "adminLabel", "adminOwnHost", "slug", "publicScheme", "publicPort", "location", "timezone", "units", "idleModule", "adminTitle"]),
+        ...(typeof b.adminTitle === "string" ? { adminTitle: b.adminTitle.trim().replace(/\s+/g, " ").slice(0, 24) || null } : {}),
       };
       const venueProblem = checkVenueExtras(next, (id) => d.games.get(id));
       if (venueProblem) throw new HttpError(400, venueProblem);

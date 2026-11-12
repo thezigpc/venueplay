@@ -39,6 +39,8 @@ export interface Venue {
   timezone?: string | null;
   units?: "imperial" | "metric" | null;
   idleModule?: string | null;
+  /** The name at the top of this admin. Empty: "Bar Games". */
+  adminTitle?: string | null;
 }
 export interface VenueView {
   venue: Venue;
@@ -235,7 +237,7 @@ export interface Announcement {
 }
 
 export const api = {
-  authStatus: () => call<{ setup: boolean; loggedIn: boolean; canSetup: boolean }>("GET", "/auth/status"),
+  authStatus: () => call<{ setup: boolean; loggedIn: boolean; canSetup: boolean; title?: string }>("GET", "/auth/status"),
   setup: (password: string) => call("POST", "/auth/setup", { password }),
   login: (password: string) => call("POST", "/auth/login", { password }),
   logout: () => call("POST", "/auth/logout"),

@@ -42,6 +42,8 @@ export interface VenueSettings {
   units?: "imperial" | "metric" | null;
   /** A display module (menu) idle TVs show instead of the box's idle screen. null: the box's. */
   idleModule?: string | null;
+  /** The name at the top of the admin, its sign-in screen and browser tab. Empty: "Bar Games". */
+  adminTitle?: string | null;
 }
 
 export type AccessSettings = GatewayAccess;
