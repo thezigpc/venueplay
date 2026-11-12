@@ -82,3 +82,6 @@ export function boxAdminUrl(ctx: VenueContext | null | undefined): string | unde
 
 /** SDK 0.11.2: the CSS variable on <html> holding a bottom announcement's height ("0px" otherwise). */
 export const ANNOUNCEMENT_BOTTOM_VAR = "--bargames-announcement-bottom";
+
+/** SDK 0.11.3: the CSS variable on <html> holding a top announcement's height ("0px" otherwise). */
+export const ANNOUNCEMENT_TOP_VAR = "--bargames-announcement-top";

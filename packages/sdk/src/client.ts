@@ -4,7 +4,7 @@
 import { PATHS, type VenueContext } from "./protocol.js";
 import { themeCssVars } from "./theme.js";
 import { basePath, bgUrl, joinUrl as joinAt } from "./base.js";
-import { activeAnnouncement, activeCountdown, ANNOUNCEMENT_BOTTOM_VAR, formatCountdown, GAMES_LINK_CSS, gamesLinkHtml, type GamesLinkOptions } from "./links.js";
+import { activeAnnouncement, activeCountdown, ANNOUNCEMENT_BOTTOM_VAR, ANNOUNCEMENT_TOP_VAR, formatCountdown, GAMES_LINK_CSS, gamesLinkHtml, type GamesLinkOptions } from "./links.js";
 
 let cache: Promise<VenueContext | null> | undefined;
 
@@ -294,10 +294,12 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
   let current: VenueContext | null | undefined = ctx;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let ro: { disconnect(): void } | undefined;
-  /** SDK 0.11.2: a bottom strip's height on <html> (0px otherwise), for games' bottom-fixed bars. */
+  /** SDK 0.11.2/0.11.3: the strip's height on <html> as --bargames-announcement-bottom or -top (0px otherwise). */
   const publish = () => {
-    const h = el && !el.hidden && el.dataset.position === "bottom" ? el.offsetHeight || 0 : 0;
-    doc.documentElement?.style?.setProperty?.(ANNOUNCEMENT_BOTTOM_VAR, `${Math.round(h)}px`);
+    const h = el && !el.hidden ? el.offsetHeight || 0 : 0;
+    const bottom = el?.dataset.position === "bottom";
+    doc.documentElement?.style?.setProperty?.(ANNOUNCEMENT_BOTTOM_VAR, `${bottom ? Math.round(h) : 0}px`);
+    doc.documentElement?.style?.setProperty?.(ANNOUNCEMENT_TOP_VAR, `${bottom ? 0 : Math.round(h)}px`);
   };
   const render = () => {
     if (timer) clearTimeout(timer);
@@ -370,7 +372,7 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
 }
 
 export { BASE_META, basePath, bgUrl, normalizeBasePath, socketIoPath } from "./base.js";
-export { activeAnnouncement, activeCountdown, ANNOUNCEMENT_BOTTOM_VAR, ANNOUNCEMENT_HIDE_CSS, boxAdminUrl, formatCountdown, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
+export { activeAnnouncement, activeCountdown, ANNOUNCEMENT_BOTTOM_VAR, ANNOUNCEMENT_HIDE_CSS, ANNOUNCEMENT_TOP_VAR, boxAdminUrl, formatCountdown, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
 export type { Announcement, Countdown, LeaderboardSummary, PlayerProfile, VenueGameLink, VenueLocation } from "./protocol.js";
 
 export interface CountdownController {

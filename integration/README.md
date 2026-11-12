@@ -31,6 +31,8 @@ the SDK or the platform, write it under "SDK requests" in your report (step 9).
   `announcementBanner()` (and kit 0.7.0's `VenueAnnouncement`) follow both. **Use it on your TV
   view too** (after `tableMode()`/`markSharedScreen()`): it hides itself where it doesn't belong.
   Drawing your own? Respect `show` against your page being shared or not.
+- **0.11.3:** `--bargames-announcement-top` too (a top strip's height), for layouts that fill
+  the viewport. Kit 0.7.2 does the same.
 - **0.11.2:** a bottom announcement publishes its height as `--bargames-announcement-bottom` on
   `<html>` (`0px` otherwise; also kit 0.7.1's `VenueAnnouncement`). Lift bottom-fixed bars with
   `bottom: var(--bargames-announcement-bottom, 0px)` instead of measuring it yourself.

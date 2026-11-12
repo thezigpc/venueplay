@@ -591,7 +591,8 @@ test("0.11.0: announcement where/position, boxAdminUrl, and watchVenue follows a
   assert.equal(vars.get("--bargames-announcement-bottom"), "44px");
   ctl.update(boxCtx({ announcement: { id: "b2", text: "Plain" } }));
   assert.deepEqual([bar.dataset.show, bar.dataset.position], ["everywhere", "top"], "defaults");
-  assert.equal(vars.get("--bargames-announcement-bottom"), "0px", "a top strip: 0px");
+  assert.equal(vars.get("--bargames-announcement-bottom"), "0px", "a top strip: 0px at the bottom");
+  assert.equal(vars.get("--bargames-announcement-top"), "44px", "0.11.3: and its height at the top");
   ctl.remove();
   assert.equal(boxAdminUrl(boxCtx({ adminUrl: "https://play.example.com/admin" })), "https://play.example.com/admin");
   assert.equal(boxAdminUrl(null), undefined);
