@@ -336,8 +336,9 @@ function fakeDoc() {
     Object.defineProperty(e, "textContent", { get: () => e.attrs._text ?? "", set: (v: string) => ((e.attrs._text = v), (e.children = [])) });
     return e;
   };
-  const doc = { createElement: el, head: { appendChild: (e: El) => added.push(e) }, body: { appendChild: (e: El) => added.push(e) } } as unknown as Document;
-  return { doc, added };
+  const vars = new Map<string, string>();
+  const doc = { createElement: el, head: { appendChild: (e: El) => added.push(e) }, body: { appendChild: (e: El) => added.push(e) }, documentElement: { style: { setProperty: (k: string, v: string) => void vars.set(k, v) } } } as unknown as Document;
+  return { doc, added, vars };
 }
 
 test("client sdk: gamesLink adds nothing standalone, renders and updates on a box", async () => {
@@ -580,12 +581,17 @@ test("0.10.0: the mock box serves a game under a prefix (strip, redirect, Locati
 
 test("0.11.0: announcement where/position, boxAdminUrl, and watchVenue follows a held venue.json", async () => {
   const { announcementBanner, watchVenue, boxAdminUrl } = await import("./client.js");
-  const { doc, added } = fakeDoc();
+  const { doc, added, vars } = fakeDoc();
   const ctl = announcementBanner(boxCtx({ announcement: { id: "b1", text: "TVs only", show: "tvs", position: "bottom" } }), { doc });
   const bar = added[1];
   assert.deepEqual([bar.dataset.show, bar.dataset.position], ["tvs", "bottom"]);
+  // 0.11.2: a bottom strip publishes its height for games' bottom-fixed bars.
+  (bar as unknown as { offsetHeight: number }).offsetHeight = 44;
+  ctl.update(boxCtx({ announcement: { id: "b1", text: "TVs only", show: "tvs", position: "bottom" } }));
+  assert.equal(vars.get("--bargames-announcement-bottom"), "44px");
   ctl.update(boxCtx({ announcement: { id: "b2", text: "Plain" } }));
   assert.deepEqual([bar.dataset.show, bar.dataset.position], ["everywhere", "top"], "defaults");
+  assert.equal(vars.get("--bargames-announcement-bottom"), "0px", "a top strip: 0px");
   ctl.remove();
   assert.equal(boxAdminUrl(boxCtx({ adminUrl: "https://play.example.com/admin" })), "https://play.example.com/admin");
   assert.equal(boxAdminUrl(null), undefined);

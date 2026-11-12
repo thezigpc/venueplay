@@ -4,7 +4,7 @@
 import { PATHS, type VenueContext } from "./protocol.js";
 import { themeCssVars } from "./theme.js";
 import { basePath, bgUrl, joinUrl as joinAt } from "./base.js";
-import { activeAnnouncement, activeCountdown, formatCountdown, GAMES_LINK_CSS, gamesLinkHtml, type GamesLinkOptions } from "./links.js";
+import { activeAnnouncement, activeCountdown, ANNOUNCEMENT_BOTTOM_VAR, formatCountdown, GAMES_LINK_CSS, gamesLinkHtml, type GamesLinkOptions } from "./links.js";
 
 let cache: Promise<VenueContext | null> | undefined;
 
@@ -293,10 +293,19 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
   let style: HTMLStyleElement | undefined;
   let current: VenueContext | null | undefined = ctx;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let ro: { disconnect(): void } | undefined;
+  /** SDK 0.11.2: a bottom strip's height on <html> (0px otherwise), for games' bottom-fixed bars. */
+  const publish = () => {
+    const h = el && !el.hidden && el.dataset.position === "bottom" ? el.offsetHeight || 0 : 0;
+    doc.documentElement?.style?.setProperty?.(ANNOUNCEMENT_BOTTOM_VAR, `${Math.round(h)}px`);
+  };
   const render = () => {
     if (timer) clearTimeout(timer);
     const a = activeAnnouncement(current);
-    if (!a || dismissed() === a.id) return void (el && (el.hidden = true));
+    if (!a || dismissed() === a.id) {
+      if (el) el.hidden = true;
+      return publish();
+    }
     if (!el) {
       style = doc.createElement("style");
       style.dataset.bargames = "announcement";
@@ -329,8 +338,16 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
         /* storage blocked: dismissed until reload */
       }
       if (el) el.hidden = true;
+      publish();
     };
     el.appendChild(close);
+    publish();
+    const RO = (globalThis as { ResizeObserver?: new (cb: () => void) => { observe(e: Element): void; disconnect(): void } }).ResizeObserver;
+    if (!ro && RO) {
+      const obs = new RO(publish);
+      obs.observe(el);
+      ro = obs;
+    }
     if (a.until) timer = setTimeout(render, Math.min(Math.max(Date.parse(a.until) - Date.now(), 0) + 50, 2 ** 31 - 1));
   };
   render();
@@ -341,6 +358,10 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
     },
     remove() {
       if (timer) clearTimeout(timer);
+      ro?.disconnect();
+      ro = undefined;
+      if (el) el.hidden = true;
+      publish();
       el?.remove();
       style?.remove();
       el = style = undefined;
@@ -349,7 +370,7 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
 }
 
 export { BASE_META, basePath, bgUrl, normalizeBasePath, socketIoPath } from "./base.js";
-export { activeAnnouncement, activeCountdown, ANNOUNCEMENT_HIDE_CSS, boxAdminUrl, formatCountdown, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
+export { activeAnnouncement, activeCountdown, ANNOUNCEMENT_BOTTOM_VAR, ANNOUNCEMENT_HIDE_CSS, boxAdminUrl, formatCountdown, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
 export type { Announcement, Countdown, LeaderboardSummary, PlayerProfile, VenueGameLink, VenueLocation } from "./protocol.js";
 
 export interface CountdownController {

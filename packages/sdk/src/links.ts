@@ -79,3 +79,6 @@ export function formatCountdown(seconds: number): string {
 export function boxAdminUrl(ctx: VenueContext | null | undefined): string | undefined {
   return onBox(ctx) ? ctx.venue.adminUrl : undefined;
 }
+
+/** SDK 0.11.2: the CSS variable on <html> holding a bottom announcement's height ("0px" otherwise). */
+export const ANNOUNCEMENT_BOTTOM_VAR = "--bargames-announcement-bottom";
