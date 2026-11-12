@@ -86,6 +86,18 @@ export interface VenueboxDevice {
   lastSeen?: string;
   online: boolean;
 }
+export interface MediaItem {
+  id: string;
+  name: string;
+  kind: "list" | "plan";
+  thumbnailUrl?: string;
+  count?: number;
+}
+export interface MediaProvider {
+  gameId: string;
+  displayName: string;
+  targets: { displayId: string; label: string; state: string; nowPlaying?: { title: string; listName?: string }; itemId?: string }[];
+}
 export interface LeaderRow {
   name: string;
   wins: number;
@@ -133,7 +145,7 @@ export interface StreamSettings {
   fps: 15 | 24 | 30 | 60;
   bitrateKbps?: number;
 }
-export type StartupRule = { mode: "last" | "idle" | "off" } | { mode: "game"; gameId: string };
+export type StartupRule = { mode: "last" | "idle" | "off" } | { mode: "game"; gameId: string } | { mode: "media"; gameId: string; itemId: string };
 export interface ShowResult {
   ok: boolean;
   message?: string;
@@ -217,6 +229,11 @@ export const api = {
   leaderboards: () =>
     call<{ tonightSince: string; games: { gameId: string; displayName: string; tonight: LeaderRow[]; allTime: LeaderRow[] }[] }>("GET", "/leaderboards"),
   resetLeaderboards: () => call("DELETE", "/leaderboards"),
+  media: () => call<{ providers: MediaProvider[] }>("GET", "/media"),
+  mediaItems: (gameId: string) => call<{ items: MediaItem[] }>("GET", `/media/${encodeURIComponent(gameId)}/items`),
+  mediaPlay: (gameId: string, itemId: string, displayId?: string) =>
+    call<{ ok: boolean; message?: string; pending?: boolean }>("POST", `/media/${encodeURIComponent(gameId)}/play`, { itemId, displayId }),
+  mediaStop: (gameId: string, displayId: string) => call<{ ok: boolean; message?: string }>("POST", `/media/${encodeURIComponent(gameId)}/stop`, { displayId }),
   systemStats: () => call<SystemStats>("GET", "/system/stats"),
   reboot: () => call<{ ok: boolean; message?: string }>("POST", "/system/reboot", { confirm: "reboot" }),
   updates: () => call<Updates>("GET", "/games/updates"),

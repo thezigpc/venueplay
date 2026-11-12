@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { isApp } from "@bargames/sdk";
-import { api, type CastSettings, type Display, type Game, type StartupRule, type StreamSettings } from "../api";
+import { MediaControls, useMediaItems } from "./MediaControls";
+import { api, type CastSettings, type Display, type Game, type MediaProvider, type StartupRule, type StreamSettings } from "../api";
 
 const PREVIEWS_KEY = "bargames.tvPreviews";
 const readPreviews = () => {
@@ -15,6 +16,7 @@ import { useAction, useLoad } from "../useLoad";
 export function DisplaysPage() {
   const displays = useLoad(api.displays, 10_000);
   const startup = useLoad(api.tvStartup);
+  const media = useLoad(api.media, 5000);
   const games = useLoad(api.games);
   const reloadAll = async () => {
     await Promise.all([displays.reload(), startup.reload()]);
@@ -84,7 +86,7 @@ export function DisplaysPage() {
       </section>
       <VenueboxCard reload={displays.reload} />
       {(displays.data ?? []).map((d) => (
-        <DisplayCard key={d.id} d={d} busy={busy} run={run} reload={displays.reload} previews={previews} startup={startup.data?.[d.id]} games={games.data ?? []} />
+        <DisplayCard key={d.id} d={d} busy={busy} run={run} reload={displays.reload} previews={previews} startup={startup.data?.[d.id]} games={games.data ?? []} media={media.data?.providers ?? []} reloadMedia={media.reload} />
       ))}
       <CastFromGames />
     </div>
@@ -107,6 +109,8 @@ function DisplayCard({
   previews,
   startup,
   games,
+  media,
+  reloadMedia,
 }: {
   d: Display;
   busy: boolean;
@@ -115,6 +119,8 @@ function DisplayCard({
   previews: boolean;
   startup?: StartupRule;
   games: Game[];
+  media: MediaProvider[];
+  reloadMedia: () => unknown;
 }) {
   const [settings, setSettings] = useState<StreamSettings | null>(d.streamSettings ?? null);
   const [label, setLabel] = useState(d.label ?? "");
@@ -159,8 +165,9 @@ function DisplayCard({
           ))}
         </select>
       </label>
+      <MediaControls displayId={d.id} providers={media} reload={reloadMedia} />
       <ShowOnTv d={d} games={games} reload={reload} />
-      <StartupChoice d={d} rule={startup} games={games} run={run} busy={busy} />
+      <StartupChoice d={d} rule={startup} games={games} run={run} busy={busy} media={media.filter((p) => p.targets.some((t) => t.displayId === d.id))} />
       {canPair && <StreamSettingsFields value={settings} onChange={setSettings} />}
       <div className="buttons">
         <button
@@ -327,11 +334,17 @@ function VenueboxCard({ reload }: { reload: () => unknown }) {
 }
 
 /** "When the box starts": what this TV shows after the box boots (saved right away). */
-function StartupChoice({ d, rule, games, run, busy }: { d: Display; rule?: StartupRule; games: Game[]; run: (fn: () => Promise<unknown>) => void; busy: boolean }) {
-  const value = !rule || rule.mode === "last" ? "last" : rule.mode === "game" ? `game:${rule.gameId}` : rule.mode;
+function StartupChoice({ d, rule, games, run, busy, media }: { d: Display; rule?: StartupRule; games: Game[]; run: (fn: () => Promise<unknown>) => void; busy: boolean; media: MediaProvider[] }) {
+  const value = !rule || rule.mode === "last" ? "last" : rule.mode === "game" ? `game:${rule.gameId}` : rule.mode === "media" ? `media:${rule.gameId}:${rule.itemId}` : rule.mode;
+  const provider = media[0];
+  const { items } = useMediaItems(provider?.gameId);
   const castable = games.filter((g) => g.manifest.routes.table);
   const choose = (v: string) => {
-    const next: StartupRule = v.startsWith("game:") ? { mode: "game", gameId: v.slice(5) } : { mode: v as "last" | "idle" | "off" };
+    const next: StartupRule = v.startsWith("game:")
+      ? { mode: "game", gameId: v.slice(5) }
+      : v.startsWith("media:")
+        ? { mode: "media", gameId: v.split(":")[1], itemId: v.split(":").slice(2).join(":") }
+        : { mode: v as "last" | "idle" | "off" };
     run(() => api.setTvStartup(d.id, next));
   };
   return (
@@ -356,6 +369,14 @@ function StartupChoice({ d, rule, games, run, busy }: { d: Display; rule?: Start
               {g.enabled ? "" : " (turned off)"}
             </option>
           ))}
+        {provider &&
+          (items ?? [])
+            .filter((i) => i.kind === "list")
+            .map((i) => (
+              <option key={i.id} value={`media:${provider.gameId}:${i.id}`}>
+                {provider.displayName}: {i.name}
+              </option>
+            ))}
         <option value="off">Nothing (leave the TV alone)</option>
       </select>
     </label>

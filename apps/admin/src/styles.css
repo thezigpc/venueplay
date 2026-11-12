@@ -136,3 +136,5 @@ table.stats th, table.stats td { text-align: left; padding: 6px 8px; border-bott
 .attention .row.error b { color: var(--danger); }
 .attention .row.warn b { color: #f2b33d; }
 ol.plain { padding-left: 20px; margin: 6px 0 12px; }
+.media { margin: 8px 0; padding: 8px 10px; background: var(--surface-2); border-radius: 8px; }
+.media p { margin: 4px 0; }
