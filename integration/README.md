@@ -34,7 +34,13 @@ the SDK or the platform, write it under "SDK requests" in your report (step 9).
    - The box limits wrong guesses itself (per game + client, and box-wide). Off a box it's
      always false.
    - Mock box: the box password is `box-password` (MockBoxOptions.venuePassword).
-3. **Signed in to the box = signed in to your admin.** Logging in to the box admin on its
+3. **Kit 0.5.1: the box's password takes over on a box.** Pass `onBox: bg.connected` to
+   `createAdminAuth` as well. `/api/admin/status` then says `venueLogin: true` (show the
+   sign-in form for the box password, not first-run setup) and `setupAllowed` (false unless
+   the box vouches for staff); `/api/admin/setup` refuses guests, so nobody on the venue
+   Wi-Fi can claim your admin by setting its password first. Off a box nothing changes.
+   Own login code: do the same yourself on a box (no first-run setup unless `bg.isStaff`).
+4. **Signed in to the box = signed in to your admin.** Logging in to the box admin on its
    venue address (admin.<domain>) now sets the staff cookie for the whole venue domain, so
    `staffSignIn()` (0.7.0) works when staff open your admin directly, not only from the
    box's Settings button. Nothing to change if you did 0.7.0's staff sign-in.
