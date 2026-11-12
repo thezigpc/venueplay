@@ -27,3 +27,6 @@ Repo: https://github.com/thezigpc/venueplay (private, branch `main`). Commits us
 - The stack is in `~/bargames/deploy` (`docker compose`). Admin UI: http://192.168.77.13/ from the LAN. The user sets the password on the first visit; first-run setup is accepted only from the LAN.
 - The render GID is 991. The bench Rokus are an Express 3930RW (192.168.77.132) and a Streaming Stick 3800X (192.168.77.133). Both report AirPlay.
 - Don't send power, input or launch commands to the user's devices without asking. Read-only discovery is fine.
+- **Game updates from the command line (`bgctl`):** `ssh -i ~/.ssh/<ssh-key> <user>@192.168.77.13 '~/bargames/deploy/bgctl update <game> --wait 20'`.
+  Also `bgctl status`, `bgctl check [game]`, `bgctl update --all`, `--json`. It runs inside the core container with core's ops token (`data/core/ops.token`; never copy it anywhere).
+  An update restarts the game and closes its open rooms, so run it when the user (or a game session acting for them) asks. `--wait` covers an image that's still building.

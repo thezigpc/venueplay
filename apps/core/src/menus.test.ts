@@ -16,6 +16,7 @@ import { EventBus } from "./events.js";
 import { GameRegistry } from "./games.js";
 import { NoopRuntime } from "./runtime/types.js";
 import { openState, type InstalledGame } from "./state.js";
+import { opsClient, runOps } from "./ops.js";
 import { imageState, parseImage, UpdateChecker } from "./updates.js";
 
 const reply = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -85,7 +86,7 @@ async function boot(extraFetch?: (url: string, init?: RequestInit) => Response |
     auth: new AdminAuth(state.auth, "secret"),
     cloudflare: new CloudflareService({ store: state.cloudflare, connector: new NoopRuntime(), desiredHosts: () => [], tunnelName: () => "t", origin: "http://gw", log: createLogger("test", "error") }),
     log: createLogger("test", "error"),
-    config: { gatewayToken: "gw", brokerUrl: "http://broker", brokerToken: "b", internalUrl: "http://core:7100", adminDist: path.join(dir, "none"), boxVersion: "0.5.0" },
+    config: { gatewayToken: "gw", brokerUrl: "http://broker", brokerToken: "b", internalUrl: "http://core:7100", adminDist: path.join(dir, "none"), boxVersion: "0.5.0", opsToken: "ops-secret" },
     fetch: fakeFetch,
   });
   const server = app.listen(0);
@@ -93,7 +94,7 @@ async function boot(extraFetch?: (url: string, init?: RequestInit) => Response |
   const json = (method: string, p: string, body?: unknown, headers: Record<string, string> = {}) =>
     fetch(base + p, { method, headers: { "content-type": "application/json", ...headers }, body: body ? JSON.stringify(body) : undefined });
   const cookie = (await json("POST", "/api/auth/setup", { password: "correct horse" })).headers.get("set-cookie")!.split(";")[0];
-  return { json, authed: { cookie }, games, runtime, displays, shows, close: () => server.close() };
+  return { json, base, authed: { cookie }, games, runtime, displays, shows, close: () => server.close() };
 }
 
 test("menus: listed apart from games, venue location reaches games, cast without a room", async () => {
@@ -240,6 +241,62 @@ test("updates: offered only when newer and published; Update restarts it, a bad 
     b.runtime.failImage = undefined;
     assert.equal((await b.json("POST", "/api/games/install", { url: "https://github.com/acme/bingo" }, b.authed)).status, 200);
     assert.equal(b.runtime.started.at(-1), "ghcr.io/acme/bingo:1.2.0");
+  } finally {
+    b.close();
+  }
+});
+
+test("bgctl: ops endpoints need the ops token; update waits for a building image, then updates", async () => {
+  let served = { ...bingo } as Record<string, unknown>;
+  const raw = "https://raw.githubusercontent.com/acme/bingo/HEAD/bargames.json";
+  let published = new Set(["1.0.0"]);
+  const b = await boot((url, init) => {
+    if (url === raw) return reply(served);
+    // The registry: anonymous token, then the manifest by tag.
+    if (url.startsWith("https://ghcr.io/token")) return reply({ token: "anon" });
+    if (url.startsWith("https://ghcr.io/v2/acme/bingo/manifests/")) {
+      if (!new Headers(init?.headers).get("authorization")) return reply({}, 401, { "www-authenticate": 'Bearer realm="https://ghcr.io/token",service="ghcr.io"' });
+      return new Response(null, { status: published.has(url.split("/manifests/")[1]) ? 200 : 404 });
+    }
+    return undefined;
+  });
+  try {
+    await b.json("POST", "/api/games/install", { url: "https://github.com/acme/bingo" }, b.authed);
+    await b.json("PATCH", "/api/games/bingo", { enabled: true }, b.authed);
+    assert.equal((await b.json("GET", "/internal/ops/games")).status, 401);
+    assert.equal((await b.json("GET", "/internal/ops/games", undefined, { authorization: "Bearer wrong-token" })).status, 401);
+    assert.equal((await b.json("GET", "/internal/ops/games", undefined, { authorization: `Bearer ${b.games.get("bingo")!.token}` })).status, 401, "a game's token isn't enough");
+
+    const client = opsClient(b.base, "ops-secret");
+    const lines: string[] = [];
+    assert.equal(await runOps(["status"], client, (l) => lines.push(l)), 0);
+    assert.match(lines.join(" | "), /bingo\s+1\.0\.0/);
+
+    assert.equal(await runOps(["update", "nope"], client, () => undefined), 1, "unknown game");
+    lines.length = 0;
+    assert.equal(await runOps(["update", "bingo"], client, (l) => lines.push(l)), 0);
+    assert.match(lines.at(-1)!, /bingo: up to date/);
+
+    // 1.1.0 announced, image still building: --wait keeps checking, then updates.
+    served = { ...bingo, version: "1.1.0", image: "ghcr.io/acme/bingo:1.1.0" };
+    lines.length = 0;
+    let naps = 0;
+    const code = await runOps(["update", "bingo", "--wait", "5"], client, (l) => lines.push(l), async () => {
+      naps++;
+      published = new Set(["1.0.0", "1.1.0"]);
+    });
+    assert.equal(code, 0, lines.join(" | "));
+    assert.equal(naps, 1);
+    assert.match(lines.join(" | "), /waiting for bingo/);
+    assert.match(lines.at(-1)!, /ok\s+bingo: updated 1\.0\.0 → 1\.1\.0/);
+    assert.equal(b.games.get("bingo")!.manifest.version, "1.1.0");
+    assert.equal(b.runtime.started.at(-1), "ghcr.io/acme/bingo:1.1.0");
+
+    // Without --wait a building image is reported, not waited on.
+    served = { ...bingo, version: "1.2.0", image: "ghcr.io/acme/bingo:1.2.0" };
+    lines.length = 0;
+    assert.equal(await runOps(["update", "--all"], client, (l) => lines.push(l)), 0);
+    assert.match(lines.join(" | "), /nothing to update/);
   } finally {
     b.close();
   }

@@ -1,0 +1,5 @@
+#!/bin/sh
+# bgctl: the Bar Games box command line (updates, status). Runs inside the core container.
+#   ./bgctl status | check [game] | update <game...> | update --all [--wait 15] [--json]
+# Needs Docker access (the docker group, or sudo).
+exec docker exec -i bargames-core node apps/core/dist/ops.js "$@"

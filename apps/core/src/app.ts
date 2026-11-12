@@ -17,6 +17,7 @@ import {
   isDisplayModule,
 } from "@bargames/sdk";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
+import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { ADMIN_COOKIE, AdminAuth, readCookie } from "./auth.js";
@@ -48,6 +49,8 @@ export interface AppDeps {
     internalUrl: string;
     adminDist: string;
     boxVersion: string;
+    /** bgctl's token (ops endpoints). Absent: they're off. */
+    opsToken?: string;
   };
   fetch?: typeof fetch;
 }
@@ -640,22 +643,76 @@ export function createApp(d: AppDeps) {
   );
 
   /** Installs the newer version from where the game came from, and restarts it if it's on. */
+  /** Installs the newer version from the game's source and restarts it if it's on (admin and bgctl). */
+  const performUpdate = async (id: string, by: string) => {
+    const prev = d.games.get(id);
+    if (!prev) throw new HttpError(404, `no game "${id}" on this box`);
+    if (prev.source.kind !== "url") throw new HttpError(400, "this game wasn't installed from a URL; install the new version by hand");
+    const fetched = await fetchManifest(prev.source.ref, doFetch).catch((e: Error) => {
+      throw new HttpError(502, e.message);
+    });
+    if (fetched.manifest.id !== prev.id) throw new HttpError(409, `the source now describes "${fetched.manifest.id}", not ${prev.id}`);
+    if (compareVersions(fetched.manifest.version, prev.manifest.version) <= 0) throw new HttpError(409, `already on ${prev.manifest.version}`);
+    const installed = await d.games.install({ manifest: fetched.manifest, source: prev.source, verified: prev.verified });
+    await restartUpgraded(prev, installed.game);
+    void updates.check(installed.game).catch(() => undefined);
+    d.log.info("games", "updated", { game: prev.id, from: prev.manifest.version, to: fetched.manifest.version, by });
+    return { game: installed.game, from: prev.manifest.version, warnings: fetched.warnings };
+  };
+
   app.post(
     "/api/games/:id/update",
     h(async (req, res) => {
-      const prev = d.games.get(req.params.id);
-      if (!prev) throw new HttpError(404, "no such game");
-      if (prev.source.kind !== "url") throw new HttpError(400, "this game wasn't installed from a URL; install the new version by hand");
-      const fetched = await fetchManifest(prev.source.ref, doFetch).catch((e: Error) => {
-        throw new HttpError(502, e.message);
-      });
-      if (fetched.manifest.id !== prev.id) throw new HttpError(409, `the source now describes "${fetched.manifest.id}", not ${prev.id}`);
-      if (compareVersions(fetched.manifest.version, prev.manifest.version) <= 0) throw new HttpError(409, `already on ${prev.manifest.version}`);
-      const installed = await d.games.install({ manifest: fetched.manifest, source: prev.source, verified: prev.verified });
-      await restartUpgraded(prev, installed.game);
-      void updates.check(installed.game).catch(() => undefined);
-      d.log.info("games", "updated", { game: prev.id, from: prev.manifest.version, to: fetched.manifest.version });
-      res.json({ game: await gameView(installed.game), from: prev.manifest.version, warnings: fetched.warnings });
+      const r = await performUpdate(req.params.id, "admin");
+      res.json({ game: await gameView(r.game), from: r.from, warnings: r.warnings });
+    }),
+  );
+
+  // ------------------------------------------------------------ ops (bgctl on the box host)
+  // Only with the ops token, which lives in core's data folder: whoever can read it can
+  // already run Docker on the box. Games can reach core but never see this token.
+  const opsToken = d.config.opsToken;
+  const opsAuth: RequestHandler = (req, _res, next) => {
+    const given = Buffer.from(String(req.headers.authorization ?? "").replace(/^Bearer /, ""));
+    const want = Buffer.from(opsToken ?? "");
+    if (!opsToken || given.length !== want.length || !timingSafeEqual(given, want)) return next(new HttpError(401, "ops token required"));
+    next();
+  };
+  const opsRow = async (g: InstalledGame) => ({
+    id: g.id,
+    name: buildContext(d.state.venue.get(), g).game.displayName,
+    version: g.manifest.version,
+    kind: g.manifest.kind ?? "game",
+    enabled: g.enabled,
+    state: await d.runtime.state(g.id).catch(() => "unknown"),
+    source: g.source.kind === "url" ? g.source.ref : g.source.kind,
+    update: updates.get(g.id),
+  });
+  app.get(
+    "/internal/ops/games",
+    opsAuth,
+    h(async (_req, res) => res.json({ box: d.config.boxVersion, lastCheck: updates.lastRun, games: await Promise.all(d.games.list().map(opsRow)) })),
+  );
+  /** { gameId? }: re-check now (one game, or all). */
+  app.post(
+    "/internal/ops/check",
+    opsAuth,
+    h(async (req, res) => {
+      const id = (req.body ?? {}).gameId as string | undefined;
+      if (id) {
+        const g = d.games.get(String(id));
+        if (!g) throw new HttpError(404, `no game "${id}" on this box`);
+        await updates.check(g);
+      } else await updates.checkAll();
+      res.json({ box: d.config.boxVersion, lastCheck: updates.lastRun, games: await Promise.all(d.games.list().map(opsRow)) });
+    }),
+  );
+  app.post(
+    "/internal/ops/update/:id",
+    opsAuth,
+    h(async (req, res) => {
+      const r = await performUpdate(req.params.id, "bgctl");
+      res.json({ id: r.game.id, from: r.from, to: r.game.manifest.version, warnings: r.warnings, game: await opsRow(r.game) });
     }),
   );
 

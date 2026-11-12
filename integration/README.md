@@ -683,6 +683,11 @@ accounts or secrets beyond the repo's own `GITHUB_TOKEN`.
    **Update** installs it and restarts the game on the new image; open rooms close, so
    do it between sessions. If the new version won't start, the box puts the previous one
    back and says why. (Re-pasting the GitHub URL does the same.)
+4. **Or have the box session pull it now.** If the user wants it, message the GameBroker
+   session (ListAgents; its name starts with `gamebroker`) once you've pushed: "<game id>
+   <version> is pushed, please update the box". It runs `bgctl update <game id> --wait 20`
+   on the box, which waits for the image build to finish, updates, and reports back.
+   Only when the user asks for it: an update restarts the game and closes open rooms.
 
 Never re-publish an existing tag. The box would keep running its cached copy.
 

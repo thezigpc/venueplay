@@ -18,6 +18,8 @@ export const config = {
   brokerToken: persistentSecret(dataDir, "broker.token", process.env.BROKER_TOKEN),
   gatewayToken: persistentSecret(dataDir, "gateway.token", process.env.GATEWAY_TOKEN),
   sessionSecret: persistentSecret(dataDir, "session.secret", process.env.SESSION_SECRET),
+  /** For bgctl (the box host's command line): read from the data folder, never sent anywhere. */
+  opsToken: persistentSecret(dataDir, "ops.token"),
   /** "docker" on a box, "noop" for local development. */
   runtime: (process.env.GAME_RUNTIME ?? "noop") as "docker" | "noop",
   dockerUrl: process.env.DOCKER_URL ?? "http://docker-proxy:2375",
