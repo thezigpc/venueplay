@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // The sandbox every game runs in. Pure function so it can be unit-tested and reviewed.
 
 import { ENV } from "@bargames/sdk";
@@ -24,11 +25,13 @@ export interface ContainerSpec {
   body: Record<string, unknown>;
 }
 
-export function containerSpec(game: InstalledGame, opts: { coreUrl: string; publicUrl: string }): ContainerSpec {
+export function containerSpec(game: InstalledGame, opts: { coreUrl: string; publicUrl: string; secrets?: Record<string, string> }): ContainerSpec {
   const m = game.manifest;
   const n = names(game.id);
   const env: Record<string, string> = {
     ...m.env,
+    // Per-app secret settings from the box admin (never in the manifest). BG_* below win.
+    ...opts.secrets,
     PORT: String(m.port),
     [ENV.gameId]: game.id,
     [ENV.coreUrl]: opts.coreUrl,
@@ -45,7 +48,8 @@ export function containerSpec(game: InstalledGame, opts: { coreUrl: string; publ
       Image: m.image,
       Env: Object.entries(env).map(([k, v]) => `${k}=${v}`),
       ExposedPorts: { [`${m.port}/tcp`]: {} },
-      Labels: { "bargames.game": game.id, "bargames.version": m.version, "bargames.managed": "true" },
+      // envhash: the whole env, so a changed *or removed* setting recreates the container.
+      Labels: { "bargames.game": game.id, "bargames.version": m.version, "bargames.managed": "true", "bargames.envhash": envHash(env) },
       Healthcheck: {
         Test: ["CMD-SHELL", `node -e "fetch('http://127.0.0.1:${m.port}${m.health}').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" || wget -qO- http://127.0.0.1:${m.port}${m.health} >/dev/null`],
         Interval: 30e9,
@@ -98,4 +102,13 @@ export function tunnelSpec(opts: { image: string; token: string; network: string
       },
     } as Record<string, unknown>,
   };
+}
+
+/** A short fingerprint of a container's environment (values never leave core). */
+export function envHash(env: Record<string, string>): string {
+  const sorted = Object.keys(env)
+    .sort()
+    .map((k) => `${k}=${env[k]}`)
+    .join(String.fromCharCode(10));
+  return createHash("sha256").update(sorted).digest("hex").slice(0, 16);
 }

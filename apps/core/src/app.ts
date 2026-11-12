@@ -981,6 +981,54 @@ export function createApp(d: AppDeps) {
     return { roomCode: code, created: !roomCode, hostUrl, url, results };
   };
 
+  // ------------------------------------------------------------ per-app secret settings
+
+  /**
+   * Secret settings for a game or app (API keys, OAuth clients): set in the box admin,
+   * stored owner-only in core's data folder, injected as container env at start. Values are
+   * write-only here: the admin only ever sees names. Never logged.
+   */
+  const SECRET_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
+  app.get(
+    "/api/games/:id/secrets",
+    h(async (req, res) => {
+      if (!d.games.get(req.params.id)) throw new HttpError(404, "no such game");
+      const mine = d.state.appSecrets.get()[req.params.id] ?? {};
+      res.json({ secrets: Object.keys(mine).sort().map((name) => ({ name, length: mine[name].length })) });
+    }),
+  );
+  /** { value } sets it; { value: null } (or DELETE) removes it. Restarts the app if it's on. */
+  const setSecret = async (id: string, name: string, value: string | null) => {
+    const game = d.games.get(id);
+    if (!game) throw new HttpError(404, "no such game");
+    if (!SECRET_NAME.test(name) || name.startsWith("BG_") || name === "PORT") throw new HttpError(400, "name: CAPITALS_AND_UNDERSCORES, not BG_* or PORT");
+    if (value !== null && (typeof value !== "string" || !value.length || value.length > 4096)) throw new HttpError(400, "value: 1-4096 characters");
+    await d.state.appSecrets.update((s) => {
+      const mine = { ...(s[id] ?? {}) };
+      if (value === null) delete mine[name];
+      else mine[name] = value;
+      if (Object.keys(mine).length) s[id] = mine;
+      else delete s[id];
+    });
+    d.log.info("games", value === null ? "secret setting removed" : "secret setting saved", { game: id, name });
+    if (game.enabled) await d.runtime.ensureRunning(game);
+  };
+  app.put(
+    "/api/games/:id/secrets/:name",
+    h(async (req, res) => {
+      const v = (req.body ?? {}).value as unknown;
+      await setSecret(req.params.id, req.params.name, v === null ? null : (v as string));
+      res.json({ ok: true });
+    }),
+  );
+  app.delete(
+    "/api/games/:id/secrets/:name",
+    h(async (req, res) => {
+      await setSecret(req.params.id, req.params.name, null);
+      res.json({ ok: true });
+    }),
+  );
+
   // ------------------------------------------------------------ staff sign-in to games
 
   /**

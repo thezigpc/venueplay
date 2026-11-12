@@ -25,6 +25,7 @@ const runtime: GameRuntime =
         coreUrl: config.internalUrl,
         attach: config.attachContainers,
         publicUrlFor: (g) => publicUrl(state.venue.get(), gameHost(state.venue.get(), g)),
+        secretsFor: (id) => state.appSecrets.get()[id] ?? {},
         log,
         tunnel: { image: config.tunnel.image, network: config.tunnel.network },
       })

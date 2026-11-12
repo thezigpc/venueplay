@@ -518,3 +518,38 @@ test("manifests from GitHub: read through the API (uncached), raw as the fallbac
   assert.equal((await fetchManifest("https://github.com/acme/menu", fake)).manifest.version, "0.3.2", "rate-limited: raw still works");
   assert.deepEqual(seen, ["api.github.com", "api.github.com", "raw.githubusercontent.com"]);
 });
+
+test("secret settings: write-only in the admin, injected as env, a removal recreates the container", async () => {
+  const { containerSpec, envHash } = await import("./runtime/spec.js");
+  const b = await boot();
+  try {
+    await b.json("POST", "/api/games/install", { manifest: menu, devTarget: "http://menu" }, b.authed);
+    await b.json("PATCH", "/api/games/menu", { enabled: true }, b.authed);
+    const before = b.runtime.started.length;
+    assert.equal((await b.json("PUT", "/api/games/menu/secrets/GOOGLE_FALLBACK_CLIENT_ID", { value: "abc.apps.googleusercontent.com" }, b.authed)).status, 200);
+    assert.equal((await b.json("PUT", "/api/games/menu/secrets/GOOGLE_FALLBACK_CLIENT_SECRET", { value: "s3cr3t-value" }, b.authed)).status, 200);
+    assert.equal(b.runtime.started.length, before + 2, "a running app restarts with each change");
+    const listed = await (await b.json("GET", "/api/games/menu/secrets", undefined, b.authed)).text();
+    assert.ok(!listed.includes("s3cr3t") && !listed.includes("abc.apps"), "values never come back");
+    assert.deepEqual(JSON.parse(listed).secrets.map((s: { name: string }) => s.name), ["GOOGLE_FALLBACK_CLIENT_ID", "GOOGLE_FALLBACK_CLIENT_SECRET"]);
+    assert.equal((await b.json("PUT", "/api/games/menu/secrets/BG_GAME_TOKEN", { value: "x" }, b.authed)).status, 400, "the box's own names are off limits");
+    assert.equal((await b.json("PUT", "/api/games/menu/secrets/lower", { value: "x" }, b.authed)).status, 400);
+    assert.equal((await b.json("GET", "/api/games/menu/secrets")).status, 401, "admin only");
+
+    // In the container env; BG_* can't be overridden.
+    const game = b.games.get("menu")!;
+    const env = (s: ReturnType<typeof containerSpec>) => s.body.Env as string[];
+    const withSecrets = containerSpec(game, { coreUrl: "http://core", publicUrl: "https://menu.x", secrets: { GOOGLE_FALLBACK_CLIENT_SECRET: "s3cr3t-value", BG_GAME_ID: "evil" } });
+    assert.ok(env(withSecrets).includes("GOOGLE_FALLBACK_CLIENT_SECRET=s3cr3t-value"));
+    assert.ok(env(withSecrets).includes("BG_GAME_ID=menu"));
+    const without = containerSpec(game, { coreUrl: "http://core", publicUrl: "https://menu.x" });
+    const label = (s: ReturnType<typeof containerSpec>) => (s.body.Labels as Record<string, string>)["bargames.envhash"];
+    assert.notEqual(label(withSecrets), label(without), "a removed setting changes the fingerprint");
+    assert.equal(envHash({ A: "1", B: "2" }), envHash({ B: "2", A: "1" }));
+
+    assert.equal((await b.json("DELETE", "/api/games/menu/secrets/GOOGLE_FALLBACK_CLIENT_SECRET", undefined, b.authed)).status, 200);
+    assert.deepEqual(((await (await b.json("GET", "/api/games/menu/secrets", undefined, b.authed)).json()) as { secrets: { name: string }[] }).secrets.map((s) => s.name), ["GOOGLE_FALLBACK_CLIENT_ID"]);
+  } finally {
+    b.close();
+  }
+});

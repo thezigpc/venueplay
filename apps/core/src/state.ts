@@ -93,6 +93,8 @@ export function openState(dataDir: string) {
     cast: new JsonStore<CastSettings>(path.join(dataDir, "cast.json"), DEFAULT_CAST),
     /** The staff's current announcement (none: {}). */
     announcement: new JsonStore<Partial<Announcement>>(path.join(dataDir, "announcement.json"), {}),
+    /** Per-app secret settings (game id → NAME → value), injected as container env. Owner-only. */
+    appSecrets: new JsonStore<Record<string, Record<string, string>>>(path.join(dataDir, "app-secrets.json"), {}, 0o600),
     /** What each TV shows when the box boots (display id → rule; absent: what it showed last). */
     tvStartup: new JsonStore<Record<string, StartupRule>>(path.join(dataDir, "tv-startup.json"), {}),
     auth: new JsonStore<{ passwordHash?: string }>(path.join(dataDir, "auth.json"), {}),

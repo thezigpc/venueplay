@@ -16,6 +16,8 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
       coreUrl: string;
       attach: string[];
       publicUrlFor: (g: InstalledGame) => string;
+      /** Per-app secret settings from the box admin, injected as env. */
+      secretsFor?: (gameId: string) => Record<string, string>;
       log: Logger;
       tunnel?: { image: string; network: string };
     },
@@ -34,7 +36,7 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
   }
 
   async ensureRunning(game: InstalledGame): Promise<void> {
-    const spec = containerSpec(game, { coreUrl: this.opts.coreUrl, publicUrl: this.opts.publicUrlFor(game) });
+    const spec = containerSpec(game, { coreUrl: this.opts.coreUrl, publicUrl: this.opts.publicUrlFor(game), secrets: this.opts.secretsFor?.(game.id) });
 
     // 1. Image.
     const imageId = await this.ensureImage(game.manifest.image);
@@ -77,9 +79,14 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
   private async ensureContainer(name: string, body: Record<string, unknown>, imageId?: string): Promise<boolean> {
     const inspect = await this.call("GET", `/containers/${name}/json`, undefined, [404]);
     if (inspect.status !== 404) {
-      const info = (await inspect.json()) as { Image?: string; Config?: { Image?: string; Env?: string[] } };
+      const info = (await inspect.json()) as { Image?: string; Config?: { Image?: string; Env?: string[]; Labels?: Record<string, string> } };
+      const wantHash = (body.Labels as Record<string, string> | undefined)?.["bargames.envhash"];
+      // Containers from before the fingerprint have no label: judge them the old way (no
+      // mass restart on upgrade); they get the label the next time they're recreated.
+      const haveHash = info.Config?.Labels?.["bargames.envhash"];
+      const sameHash = !wantHash || !haveHash || haveHash === wantHash;
       const sameBuild = !imageId || !info.Image || info.Image === imageId;
-      if (info.Config?.Image === body.Image && sameBuild && sameEnv(info.Config?.Env, body.Env as string[])) {
+      if (info.Config?.Image === body.Image && sameBuild && sameHash && sameEnv(info.Config?.Env, body.Env as string[])) {
         await this.call("POST", `/containers/${name}/start`, undefined, [304]);
         return false;
       }

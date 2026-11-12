@@ -236,6 +236,9 @@ export const api = {
   clearAnnouncement: () => call<null>("DELETE", "/announcement"),
   idleTvs: (target: { displayIds?: string[]; group?: string } = {}) => call<Record<string, ShowResult>>("POST", "/tvs/idle", target),
   gameStatus: (id: string) => call<{ rooms: RoomSummary[] }>("GET", `/games/${encodeURIComponent(id)}/status`),
+  secrets: (gameId: string) => call<{ secrets: { name: string; length: number }[] }>("GET", `/games/${encodeURIComponent(gameId)}/secrets`),
+  setSecret: (gameId: string, name: string, value: string | null) =>
+    call("PUT", `/games/${encodeURIComponent(gameId)}/secrets/${encodeURIComponent(name)}`, { value }),
   staffLink: (gameId: string, path?: string) =>
     call<{ url: string; staffAware: boolean }>("GET", `/staff-link?gameId=${encodeURIComponent(gameId)}${path ? `&path=${encodeURIComponent(path)}` : ""}`),
   cast: (body: { gameId: string; roomCode?: string; displayIds?: string[]; group?: string; firstJoinerHosts?: boolean }) =>

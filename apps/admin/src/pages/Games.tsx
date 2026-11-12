@@ -146,6 +146,57 @@ function OpenSettings({ game }: { game: Game }) {
   );
 }
 
+/**
+ * Secret settings (API keys, OAuth clients) for this game/app: stored on the box only,
+ * handed to it as environment variables. Values are write-only: never shown again.
+ */
+function SecretSettings({ game }: { game: Game }) {
+  const list = useLoad(() => api.secrets(game.id));
+  const [name, setName] = useState("");
+  const [value, setValue] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const save = async (n: string, v: string | null) => {
+    setBusy(true);
+    setMsg("");
+    try {
+      await api.setSecret(game.id, n, v);
+      setMsg(v === null ? `Removed ${n}.` : `Saved ${n}${game.enabled ? "; restarted with it" : ""}.`);
+      setName("");
+      setValue("");
+      await list.reload();
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const secrets = list.data?.secrets ?? [];
+  return (
+    <details className="stream-settings">
+      <summary>Secret settings{secrets.length ? ` (${secrets.length})` : ""}</summary>
+      <p className="muted">For keys the game or app asks for (e.g. a Google client). Stored on this box only; values are never shown again.</p>
+      {secrets.map((s) => (
+        <div key={s.name} className="inline">
+          <code>{s.name}</code>
+          <span className="muted">set ({s.length} characters)</span>
+          <button className="danger" disabled={busy} onClick={() => window.confirm(`Remove ${s.name}?`) && void save(s.name, null)}>
+            Remove
+          </button>
+        </div>
+      ))}
+      <div className="inline">
+        <input placeholder="NAME" value={name} onChange={(e) => setName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))} style={{ maxWidth: 260 }} autoCapitalize="characters" />
+        <input type="password" placeholder="value" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" />
+        <button disabled={busy || !name || !value} onClick={() => void save(name, value)}>
+          Save
+        </button>
+      </div>
+      {msg && <p className="muted">{msg}</p>}
+    </details>
+  );
+}
+
 function GameCard({ game, busy, run, update }: { game: Game; busy: boolean; run: (fn: () => Promise<unknown>) => void; update?: UpdateInfo }) {
   const slots = new Set(game.manifest.brandable);
   const [name, setName] = useState(game.branding.displayName ?? "");
@@ -175,6 +226,7 @@ function GameCard({ game, busy, run, update }: { game: Game; busy: boolean; run:
       </p>
       <UpdateBanner game={game} update={update} busy={busy} run={run} />
       {adminPath(game.manifest) && <OpenSettings game={game} />}
+      <SecretSettings game={game} />
       {slots.has("displayName") && (
         <label>
           Display name
