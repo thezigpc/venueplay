@@ -86,6 +86,12 @@ export interface VenueboxDevice {
   lastSeen?: string;
   online: boolean;
 }
+export interface LeaderRow {
+  name: string;
+  wins: number;
+  games: number;
+  best?: number;
+}
 export interface SystemStats {
   at: string;
   host: {
@@ -204,6 +210,13 @@ export const api = {
   identify: (displayId: string) => call("POST", `/broker/displays/${encodeURIComponent(displayId)}/identify`),
   /** Stub: Tailscale from the venue's side (planned). */
   tailscale: () => call<{ built: boolean }>("GET", "/tailscale"),
+  attention: () => call<{ items: { source: string; sourceName: string; level: "info" | "warn" | "error"; message: string; actionPath?: string }[] }>("GET", "/attention"),
+  countdown: () => call<{ id: string; label: string; endsAt: string; gameId?: string; joinUrl?: string } | null>("GET", "/countdown"),
+  startCountdown: (label: string, minutes: number, gameId?: string) => call("PUT", "/countdown", { label, minutes, gameId }),
+  clearCountdown: () => call("DELETE", "/countdown"),
+  leaderboards: () =>
+    call<{ tonightSince: string; games: { gameId: string; displayName: string; tonight: LeaderRow[]; allTime: LeaderRow[] }[] }>("GET", "/leaderboards"),
+  resetLeaderboards: () => call("DELETE", "/leaderboards"),
   systemStats: () => call<SystemStats>("GET", "/system/stats"),
   reboot: () => call<{ ok: boolean; message?: string }>("POST", "/system/reboot", { confirm: "reboot" }),
   updates: () => call<Updates>("GET", "/games/updates"),

@@ -133,3 +133,6 @@ ul.plain { list-style: none; padding: 0; margin: 6px 0; }
 ul.plain li { padding: 3px 0; }
 table.stats { width: 100%; border-collapse: collapse; }
 table.stats th, table.stats td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #252c55; }
+.attention .row.error b { color: var(--danger); }
+.attention .row.warn b { color: #f2b33d; }
+ol.plain { padding-left: 20px; margin: 6px 0 12px; }
