@@ -1,6 +1,7 @@
 import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_TTL_MS, type Logger } from "@bargames/common";
 import { PasswordLimiter } from "./limiter.js";
 import { HostSampler } from "./systemStats.js";
+import { cleanScene, cleanSchedule, closingTimeScene, dueNow, type Scene, type Schedule } from "./scenes.js";
 import { cleanResult, board, Leaderboards, nightStart } from "./leaderboard.js";
 import { rewardsHook } from "./rewards.js";
 import {
@@ -746,6 +747,147 @@ export function createApp(d: AppDeps) {
   /** STUB (planned): player profiles. */
   app.all(/^\/internal\/profiles(\/.*)?$/, (_req, res) => res.status(501).json({ error: "player profiles aren't built yet" }));
 
+  // ------------------------------------------------------------ SDK 0.9.0: scenes and schedules
+
+  const displayIds = async () => (((await brokerCall("GET", "/displays").catch(() => [])) as { id: string }[]) ?? []).map((x) => x.id);
+
+  /** Applies a scene: end rooms, announcement, countdown, then each TV. Returns what happened per step. */
+  const applyScene = async (scene: Scene) => {
+    const steps: { step: string; ok: boolean; message?: string }[] = [];
+    if (scene.endRooms) {
+      for (const g of d.games.list().filter((x) => x.enabled && x.manifest.sdk.level >= 3 && x.manifest.commands.includes("end"))) {
+        const st = await gameStatusOf(g).catch(() => undefined);
+        for (const room of st?.rooms ?? []) {
+          const r = await gameCommand(g, { command: "end", roomCode: room.code, args: { reason: scene.announcement?.text ?? "The venue closed this room." } }).catch((err: Error) => ({ result: { ok: false, message: err.message } }));
+          steps.push({ step: `end ${g.id} ${room.code}`, ok: r.result.ok, message: r.result.message });
+        }
+      }
+    }
+    if (scene.announcement) {
+      await postAnnouncement(scene.announcement.text, scene.announcement.minutes);
+      steps.push({ step: "announcement", ok: true });
+    }
+    if (scene.countdown) {
+      await setCountdown(newCountdown(scene.countdown));
+      steps.push({ step: "countdown", ok: true });
+    }
+    const idle = scene.actions.some((a) => a.do === "idle") ? await idleContent() : undefined;
+    for (const a of scene.actions) {
+      try {
+        if (a.do === "game") {
+          const r = await castGame(a.gameId, { displayIds: [a.displayId] }, { firstJoinerHosts: true });
+          const res = r.results[a.displayId];
+          steps.push({ step: `${a.displayId}: ${a.gameId}`, ok: res?.ok !== false, message: res?.message });
+        } else if (a.do === "media") {
+          const r = await gameCommand(mediaApp(a.gameId), { command: "media_play", args: { displayId: a.displayId, itemId: a.itemId, takeBack: true } });
+          if (r.result.ok) roomCache.boost(a.gameId);
+          steps.push({ step: `${a.displayId}: ${a.gameId} list`, ok: r.result.ok, message: r.result.message });
+        } else {
+          const res = ((await brokerCall("POST", "/show", { displayIds: [a.displayId], content: a.do === "idle" ? idle : { kind: "off" } })) as Record<string, { ok: boolean; message?: string }>)[a.displayId];
+          steps.push({ step: `${a.displayId}: ${a.do}`, ok: res?.ok !== false, message: res?.message });
+        }
+      } catch (err) {
+        steps.push({ step: `${a.displayId}: ${a.do}`, ok: false, message: (err as Error).message });
+      }
+    }
+    d.log.info("scenes", "applied", { scene: scene.id, steps: steps.length, failed: steps.filter((s) => !s.ok).length });
+    return steps;
+  };
+
+  app.get(
+    "/api/scenes",
+    h(async (_req, res) => res.json({ scenes: d.state.scenes.get().scenes, presets: [closingTimeScene(await displayIds())] })),
+  );
+  app.put(
+    "/api/scenes/:id",
+    h(async (req, res) => {
+      const ids = new Set(await displayIds());
+      const scene = cleanScene({ ...(req.body ?? {}), id: req.params.id }, { game: (id) => Boolean(d.games.get(id)), display: (id) => ids.has(id) });
+      if (typeof scene === "string") throw new HttpError(400, scene);
+      await d.state.scenes.update((s) => {
+        s.scenes = [...s.scenes.filter((x) => x.id !== scene.id), scene];
+      });
+      res.json(scene);
+    }),
+  );
+  app.delete(
+    "/api/scenes/:id",
+    h(async (req, res) => {
+      await d.state.scenes.update((s) => {
+        s.scenes = s.scenes.filter((x) => x.id !== req.params.id);
+      });
+      res.json({ ok: true });
+    }),
+  );
+  app.post(
+    "/api/scenes/:id/apply",
+    h(async (req, res) => {
+      const scene = d.state.scenes.get().scenes.find((x) => x.id === req.params.id);
+      if (!scene) throw new HttpError(404, "no such scene");
+      res.json({ steps: await applyScene(scene) });
+    }),
+  );
+
+  app.get("/api/schedules", (_req, res) => res.json({ schedules: d.state.schedules.get().schedules }));
+  app.put(
+    "/api/schedules/:id",
+    h(async (req, res) => {
+      const sch = cleanSchedule({ ...(req.body ?? {}), id: req.params.id }, { game: (id) => Boolean(d.games.get(id)), scene: (id) => d.state.scenes.get().scenes.some((s) => s.id === id) });
+      if (typeof sch === "string") throw new HttpError(400, sch);
+      await d.state.schedules.update((s) => {
+        s.schedules = [...s.schedules.filter((x) => x.id !== sch.id), sch];
+      });
+      res.json(sch);
+    }),
+  );
+  app.delete(
+    "/api/schedules/:id",
+    h(async (req, res) => {
+      await d.state.schedules.update((s) => {
+        s.schedules = s.schedules.filter((x) => x.id !== req.params.id);
+      });
+      res.json({ ok: true });
+    }),
+  );
+
+  /** Runs due schedules (venue time). Exposed for tests as app.locals.runSchedules(now). */
+  const runSchedules = async (now = new Date()) => {
+    const { schedules, fired } = d.state.schedules.get();
+    const tz = d.state.venue.get().timezone ?? undefined;
+    const due = dueNow(schedules, now, tz, fired);
+    if (!due.start.length && !due.countdown.length) return;
+    const date = new Intl.DateTimeFormat("en-CA", { timeZone: tz ?? "UTC" }).format(now);
+    const mark: Record<string, string> = {};
+    for (const s of due.countdown) {
+      mark[`${s.id}|countdown`] = date;
+      const game = s.gameId ? d.games.get(s.gameId) : undefined;
+      if (!game?.enabled) continue;
+      const label = `${s.title ?? buildContext(d.state.venue.get(), game).game.displayName} starts in`;
+      await setCountdown(newCountdown({ label, minutes: s.countdownMinutes }, game)).catch(() => undefined);
+    }
+    for (const s of due.start) {
+      mark[`${s.id}|start`] = date;
+      try {
+        if (s.kind === "scene") {
+          const scene = d.state.scenes.get().scenes.find((x) => x.id === s.sceneId);
+          if (scene) await applyScene(scene);
+        } else if (s.gameId) {
+          const target = s.displayIds?.length ? { displayIds: s.displayIds } : { group: s.group };
+          await castGame(s.gameId, target, { title: s.title, firstJoinerHosts: true });
+        }
+        d.log.info("schedules", "started", { schedule: s.id, kind: s.kind });
+      } catch (err) {
+        d.log.warn("schedules", "failed", { schedule: s.id, err: (err as Error).message });
+      }
+    }
+    await d.state.schedules.update((st) => {
+      st.fired = { ...st.fired, ...mark };
+    });
+  };
+  const scheduleTimer = setInterval(() => void runSchedules().catch(() => undefined), 20_000);
+  scheduleTimer.unref();
+  app.locals.runSchedules = runSchedules;
+
   // ------------------------------------------------------------ system stats and reboot
 
   const sampler = new HostSampler({ diskPath: d.config.dataDir });
@@ -857,6 +999,14 @@ export function createApp(d: AppDeps) {
   scheduleExpiry(liveAnnouncement(d.state.announcement.get())?.until);
 
   app.get("/api/announcement", (_req, res) => res.json(liveAnnouncement(d.state.announcement.get()) ?? null));
+  const postAnnouncement = async (text: string, minutes?: number) => {
+    const a = { id: Date.now().toString(36), text, ...(minutes ? { until: new Date(Date.now() + minutes * 60_000).toISOString() } : {}) };
+    await d.state.announcement.set(a);
+    scheduleExpiry(a.until);
+    d.log.info("announcement", "posted", { minutes: minutes ?? null });
+    await refreshIdleTvs().catch(() => undefined);
+    return a;
+  };
   /** { text, minutes? }: shown on every game page (SDK 0.4.0), the games list and idle TVs. */
   app.put(
     "/api/announcement",
@@ -867,12 +1017,7 @@ export function createApp(d: AppDeps) {
       if (t.length > 200) throw new HttpError(400, "keep it under 200 characters");
       const mins = minutes === undefined || minutes === null || minutes === "" ? undefined : Number(minutes);
       if (mins !== undefined && !(Number.isFinite(mins) && mins > 0 && mins <= 24 * 60)) throw new HttpError(400, "minutes must be between 1 and 1440");
-      const a = { id: Date.now().toString(36), text: t, ...(mins ? { until: new Date(Date.now() + mins * 60_000).toISOString() } : {}) };
-      await d.state.announcement.set(a);
-      scheduleExpiry(a.until);
-      d.log.info("announcement", "posted", { minutes: mins ?? null });
-      await refreshIdleTvs().catch(() => undefined);
-      res.json(a);
+      res.json(await postAnnouncement(t, mins));
     }),
   );
   app.delete(

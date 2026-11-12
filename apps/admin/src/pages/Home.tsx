@@ -4,6 +4,7 @@ import { api, type Display, type Game, type RoomSummary } from "../api";
 import { useAction, useLoad } from "../useLoad";
 import { AttentionCard, CountdownCard, LeaderboardCard } from "./TonightExtras";
 import { PlansCard } from "./MediaControls";
+import { SchedulesCard, ScenesCard } from "./Scenes";
 
 /** "Tonight": the screen staff use most. Games on/off, put a room on TVs, live events. */
 export function HomePage() {
@@ -55,9 +56,11 @@ export function HomePage() {
       <CastCard games={castable} displays={displays.data ?? []} displaysError={displays.error} groups={groups} />
 
       <AnnouncementCard />
+      <ScenesCard games={games.data ?? []} displays={displays.data ?? []} />
       <PlansCard />
       <CountdownCard games={games.data ?? []} />
       <LeaderboardCard />
+      <SchedulesCard games={games.data ?? []} displays={displays.data ?? []} />
 
 
       <section className="card wide">

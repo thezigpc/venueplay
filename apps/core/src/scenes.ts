@@ -1,0 +1,149 @@
+// Scenes and scheduled sessions (SDK 0.9.0 box features).
+//
+// A scene is a saved set of TV actions plus optional extras ("Game night", "Closing time"),
+// applied with one tap or on a schedule. A scheduled session starts a game room on TVs at a
+// time ("Bingo every day at 8 PM"), with an optional countdown before it.
+
+export type SceneAction =
+  | { displayId: string; do: "game"; gameId: string }
+  | { displayId: string; do: "media"; gameId: string; itemId: string }
+  | { displayId: string; do: "idle" }
+  | { displayId: string; do: "off" };
+
+export interface Scene {
+  id: string;
+  name: string;
+  actions: SceneAction[];
+  /** End every open room first (closing time). */
+  endRooms?: boolean;
+  /** Post (or replace) the staff announcement. */
+  announcement?: { text: string; minutes?: number };
+  /** Start a countdown. */
+  countdown?: { label: string; minutes: number };
+}
+
+export interface Schedule {
+  id: string;
+  /** "game": a new room on the TVs. "scene": apply a scene. */
+  kind: "game" | "scene";
+  gameId?: string;
+  sceneId?: string;
+  /** 0 = Sunday … 6 = Saturday. */
+  days: number[];
+  /** "HH:MM", 24-hour, venue time. */
+  time: string;
+  displayIds?: string[];
+  group?: string;
+  title?: string;
+  /** Start a countdown this many minutes before (game sessions). */
+  countdownMinutes?: number;
+  enabled: boolean;
+}
+
+const ID = /^[a-z0-9-]{1,40}$/;
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export function cleanScene(v: unknown, exists: { game: (id: string) => boolean; display: (id: string) => boolean }): Scene | string {
+  if (typeof v !== "object" || v === null) return "scene: { id, name, actions, endRooms?, announcement?, countdown? }";
+  const s = v as Record<string, unknown>;
+  const id = typeof s.id === "string" && ID.test(s.id) ? s.id : undefined;
+  const name = typeof s.name === "string" ? s.name.trim().slice(0, 40) : "";
+  if (!id) return "id: lowercase letters, digits, dashes";
+  if (!name) return "name required";
+  if (!Array.isArray(s.actions) || s.actions.length > 64) return "actions: up to 64";
+  const actions: SceneAction[] = [];
+  for (const a of s.actions as Record<string, unknown>[]) {
+    const displayId = typeof a?.displayId === "string" ? a.displayId : "";
+    if (!displayId || !exists.display(displayId)) return `unknown TV ${displayId}`;
+    if (a.do === "idle" || a.do === "off") actions.push({ displayId, do: a.do });
+    else if (a.do === "game" && typeof a.gameId === "string" && exists.game(a.gameId)) actions.push({ displayId, do: "game", gameId: a.gameId });
+    else if (a.do === "media" && typeof a.gameId === "string" && exists.game(a.gameId) && typeof a.itemId === "string" && a.itemId) actions.push({ displayId, do: "media", gameId: a.gameId, itemId: a.itemId });
+    else return `action for ${displayId}: do game | media | idle | off, with gameId (and itemId for media)`;
+  }
+  const out: Scene = { id, name, actions };
+  if (s.endRooms === true) out.endRooms = true;
+  const ann = s.announcement as Record<string, unknown> | undefined;
+  if (ann && typeof ann.text === "string" && ann.text.trim()) {
+    const minutes = ann.minutes === undefined ? undefined : Number(ann.minutes);
+    if (minutes !== undefined && !(minutes >= 1 && minutes <= 1440)) return "announcement.minutes: 1-1440";
+    out.announcement = { text: ann.text.trim().replace(/\s+/g, " ").slice(0, 200), ...(minutes ? { minutes } : {}) };
+  }
+  const cd = s.countdown as Record<string, unknown> | undefined;
+  if (cd && typeof cd.label === "string" && cd.label.trim()) {
+    const minutes = Number(cd.minutes);
+    if (!(minutes >= 0.25 && minutes <= 180)) return "countdown.minutes: 0.25-180";
+    out.countdown = { label: cd.label.trim().slice(0, 60), minutes };
+  }
+  return out;
+}
+
+/** The built-in "Closing time" preset: end rooms, say goodnight, TVs to the idle screen. */
+export function closingTimeScene(displayIds: string[]): Scene {
+  return {
+    id: "closing-time",
+    name: "Closing time",
+    endRooms: true,
+    announcement: { text: "We're closing. Thanks for playing, see you next time!", minutes: 60 },
+    actions: displayIds.map((displayId) => ({ displayId, do: "idle" as const })),
+  };
+}
+
+export function cleanSchedule(v: unknown, exists: { game: (id: string) => boolean; scene: (id: string) => boolean }): Schedule | string {
+  if (typeof v !== "object" || v === null) return "schedule: { id, kind, days, time, … }";
+  const s = v as Record<string, unknown>;
+  const id = typeof s.id === "string" && ID.test(s.id) ? s.id : undefined;
+  if (!id) return "id: lowercase letters, digits, dashes";
+  if (s.kind !== "game" && s.kind !== "scene") return "kind: game or scene";
+  const days = Array.isArray(s.days) ? [...new Set((s.days as unknown[]).map(Number))].filter((d) => Number.isInteger(d) && d >= 0 && d <= 6).sort() : [];
+  if (!days.length) return "days: at least one of 0-6 (Sunday = 0)";
+  if (typeof s.time !== "string" || !HHMM.test(s.time)) return "time: HH:MM (24-hour)";
+  const out: Schedule = { id, kind: s.kind, days, time: s.time, enabled: s.enabled !== false };
+  if (s.kind === "game") {
+    if (typeof s.gameId !== "string" || !exists.game(s.gameId)) return "gameId: an installed game";
+    out.gameId = s.gameId;
+    if (Array.isArray(s.displayIds) && s.displayIds.length) out.displayIds = (s.displayIds as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 64);
+    else if (typeof s.group === "string" && s.group.trim()) out.group = s.group.trim();
+    else return "pick the TVs (displayIds) or a group";
+    if (typeof s.title === "string" && s.title.trim()) out.title = s.title.trim().slice(0, 60);
+    if (s.countdownMinutes !== undefined) {
+      const m = Number(s.countdownMinutes);
+      if (!(m >= 1 && m <= 120)) return "countdownMinutes: 1-120";
+      out.countdownMinutes = m;
+    }
+  } else {
+    if (typeof s.sceneId !== "string" || !exists.scene(s.sceneId)) return "sceneId: a saved scene";
+    out.sceneId = s.sceneId;
+  }
+  return out;
+}
+
+/** The venue's local weekday and "HH:MM" right now. */
+export function localNow(now: Date, timeZone = "UTC"): { day: number; time: string; date: string } {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      .formatToParts(now)
+      .map((p) => [p.type, p.value]),
+  );
+  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts.weekday);
+  return { day, time: `${parts.hour}:${parts.minute}`, date: `${parts.year}-${parts.month}-${parts.day}` };
+}
+
+/** "20:00" minus 5 minutes → "19:55" (same day; earlier than 00:00 isn't supported). */
+export function minusMinutes(time: string, minutes: number): string | undefined {
+  const [h, m] = time.split(":").map(Number);
+  const t = h * 60 + m - Math.round(minutes);
+  return t < 0 ? undefined : `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
+/** What's due at this minute: schedules starting now, and countdowns to start now. */
+export function dueNow(schedules: Schedule[], now: Date, timeZone: string | undefined, fired: Record<string, string>): { start: Schedule[]; countdown: Schedule[] } {
+  const { day, time, date } = localNow(now, timeZone);
+  const start: Schedule[] = [];
+  const countdown: Schedule[] = [];
+  for (const s of schedules) {
+    if (!s.enabled || !s.days.includes(day)) continue;
+    if (s.time === time && fired[`${s.id}|start`] !== date) start.push(s);
+    if (s.kind === "game" && s.countdownMinutes && minusMinutes(s.time, s.countdownMinutes) === time && fired[`${s.id}|countdown`] !== date) countdown.push(s);
+  }
+  return { start, countdown };
+}

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { CloudflareSettings } from "./cloudflare/service.js";
 import type { StartupRule } from "./startup.js";
 import type { ResultEntry } from "./leaderboard.js";
+import type { Scene, Schedule } from "./scenes.js";
 
 export interface VenueSettings {
   name: string;
@@ -96,6 +97,10 @@ export function openState(dataDir: string) {
     announcement: new JsonStore<Partial<Announcement>>(path.join(dataDir, "announcement.json"), {}),
     /** The venue's lobby countdown (SDK 0.9.0; none: {}). */
     countdown: new JsonStore<Partial<Countdown>>(path.join(dataDir, "countdown.json"), {}),
+    /** Saved scenes (SDK 0.9.0). */
+    scenes: new JsonStore<{ scenes: Scene[] }>(path.join(dataDir, "scenes.json"), { scenes: [] }),
+    /** Scheduled sessions, and when each last fired (id|kind → local date). */
+    schedules: new JsonStore<{ schedules: Schedule[]; fired: Record<string, string> }>(path.join(dataDir, "schedules.json"), { schedules: [], fired: {} }),
     /** Game results for the leaderboards (last 30 days). */
     results: new JsonStore<{ entries: ResultEntry[] }>(path.join(dataDir, "results.json"), { entries: [] }),
     /** Per-app secret settings (game id → NAME → value), injected as container env. Owner-only. */

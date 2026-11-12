@@ -698,3 +698,61 @@ test("0.9.0 media providers: TVs for providers, launch rules, play/stop from the
     b.close();
   }
 });
+
+test("0.9.0 scenes and schedules: closing time, scheduled bingo with a countdown", async () => {
+  const { dueNow, localNow, minusMinutes } = await import("./scenes.js");
+  assert.deepEqual(localNow(new Date("2026-11-13T01:00:00Z"), "America/New_York"), { day: 4, time: "20:00", date: "2026-11-12" }, "Thursday 8 PM in New York");
+  assert.equal(minusMinutes("20:00", 5), "19:55");
+  assert.equal(minusMinutes("00:03", 5), undefined);
+  const sch = { id: "bingo-8", kind: "game" as const, gameId: "bingo", days: [4], time: "20:00", displayIds: ["tv1"], countdownMinutes: 5, enabled: true };
+  assert.deepEqual(dueNow([sch], new Date("2026-11-13T00:55:00Z"), "America/New_York", {}).countdown.map((s) => s.id), ["bingo-8"]);
+  assert.deepEqual(dueNow([sch], new Date("2026-11-13T01:00:30Z"), "America/New_York", {}).start.map((s) => s.id), ["bingo-8"]);
+  assert.equal(dueNow([sch], new Date("2026-11-13T01:00:30Z"), "America/New_York", { "bingo-8|start": "2026-11-12" }).start.length, 0, "once a day");
+
+  const ended: string[] = [];
+  const b = await boot((url, init) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (url === "http://bingo/__bargames/status") return reply({ rooms: [{ code: "R1", kind: "venue", players: 3 }, { code: "R2", kind: "private", players: 2 }] });
+    if (url === "http://bingo/__bargames/command") {
+      if (body.command === "end") ended.push(body.roomCode);
+      if (body.command === "create_room") return reply({ ok: true, data: { roomCode: "NEW" } });
+      return reply({ ok: true });
+    }
+    return undefined;
+  });
+  try {
+    const m = { ...bingo, sdk: { version: "0.9.0", level: 3 }, commands: ["create_room", "end"], events: ["room_closed"] };
+    await b.json("POST", "/api/games/install", { manifest: m, devTarget: "http://bingo" }, b.authed);
+    await b.json("PATCH", "/api/games/bingo", { enabled: true }, b.authed);
+    await b.json("PUT", "/api/venue", { timezone: "America/New_York" }, b.authed);
+
+    // Closing time from the preset.
+    const list = (await (await b.json("GET", "/api/scenes", undefined, b.authed)).json()) as { scenes: unknown[]; presets: { id: string; actions: { displayId: string; do: string }[]; endRooms?: boolean }[] };
+    const preset = list.presets[0];
+    assert.equal(preset.id, "closing-time");
+    assert.deepEqual(preset.actions.map((a) => [a.displayId, a.do]), [["tv1", "idle"], ["tv2", "idle"]]);
+    assert.equal((await b.json("PUT", "/api/scenes/closing-time", preset, b.authed)).status, 200);
+    assert.equal((await b.json("PUT", "/api/scenes/bad", { name: "x", actions: [{ displayId: "nope", do: "idle" }] }, b.authed)).status, 400);
+    const applied = (await (await b.json("POST", "/api/scenes/closing-time/apply", undefined, b.authed)).json()) as { steps: { step: string; ok: boolean }[] };
+    assert.deepEqual(ended, ["R1", "R2"], "every room ends, private ones too");
+    assert.ok(applied.steps.some((s) => s.step === "announcement"));
+    assert.equal(b.displays[0].content?.kind, "idle");
+    assert.match(((await (await b.json("GET", "/api/announcement", undefined, b.authed)).json()) as { text: string }).text, /closing/i);
+
+    // Scheduled bingo: countdown at 19:55, room on the TV at 20:00, once.
+    assert.equal((await b.json("PUT", "/api/schedules/bingo-8", { kind: "game", gameId: "bingo", days: [4], time: "25:00", displayIds: ["tv1"] }, b.authed)).status, 400);
+    assert.equal((await b.json("PUT", "/api/schedules/bingo-8", { kind: "game", gameId: "bingo", days: [4], time: "20:00", displayIds: ["tv1"], countdownMinutes: 5, title: "Thursday Bingo" }, b.authed)).status, 200);
+    const run = b.app.locals.runSchedules as (now: Date) => Promise<void>;
+    await run(new Date("2026-11-13T00:55:10Z"));
+    assert.equal(((await (await b.json("GET", "/api/countdown", undefined, b.authed)).json()) as { label: string } | null)?.label, "Thursday Bingo starts in");
+    const showsBefore = b.shows.length;
+    await run(new Date("2026-11-13T01:00:10Z"));
+    assert.equal(b.displays[0].content?.url, "http://bingo.localhost:7080/room/NEW?role=table");
+    await run(new Date("2026-11-13T01:00:40Z"));
+    assert.equal(b.shows.length, showsBefore + 1, "fires once");
+    await run(new Date("2026-11-14T01:00:10Z"));
+    assert.equal(b.shows.length, showsBefore + 1, "not on Friday");
+  } finally {
+    b.close();
+  }
+});

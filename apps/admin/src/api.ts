@@ -98,6 +98,28 @@ export interface MediaProvider {
   displayName: string;
   targets: { displayId: string; label: string; state: string; nowPlaying?: { title: string; listName?: string }; itemId?: string }[];
 }
+export type SceneAction = { displayId: string; do: "game"; gameId: string } | { displayId: string; do: "media"; gameId: string; itemId: string } | { displayId: string; do: "idle" | "off" };
+export interface Scene {
+  id: string;
+  name: string;
+  actions: SceneAction[];
+  endRooms?: boolean;
+  announcement?: { text: string; minutes?: number };
+  countdown?: { label: string; minutes: number };
+}
+export interface Schedule {
+  id: string;
+  kind: "game" | "scene";
+  gameId?: string;
+  sceneId?: string;
+  days: number[];
+  time: string;
+  displayIds?: string[];
+  group?: string;
+  title?: string;
+  countdownMinutes?: number;
+  enabled: boolean;
+}
 export interface LeaderRow {
   name: string;
   wins: number;
@@ -234,6 +256,13 @@ export const api = {
   mediaPlay: (gameId: string, itemId: string, displayId?: string) =>
     call<{ ok: boolean; message?: string; pending?: boolean }>("POST", `/media/${encodeURIComponent(gameId)}/play`, { itemId, displayId }),
   mediaStop: (gameId: string, displayId: string) => call<{ ok: boolean; message?: string }>("POST", `/media/${encodeURIComponent(gameId)}/stop`, { displayId }),
+  scenes: () => call<{ scenes: Scene[]; presets: Scene[] }>("GET", "/scenes"),
+  saveScene: (s: Scene) => call<Scene>("PUT", `/scenes/${encodeURIComponent(s.id)}`, s),
+  deleteScene: (id: string) => call("DELETE", `/scenes/${encodeURIComponent(id)}`),
+  applyScene: (id: string) => call<{ steps: { step: string; ok: boolean; message?: string }[] }>("POST", `/scenes/${encodeURIComponent(id)}/apply`),
+  schedules: () => call<{ schedules: Schedule[] }>("GET", "/schedules"),
+  saveSchedule: (s: Schedule) => call<Schedule>("PUT", `/schedules/${encodeURIComponent(s.id)}`, s),
+  deleteSchedule: (id: string) => call("DELETE", `/schedules/${encodeURIComponent(id)}`),
   systemStats: () => call<SystemStats>("GET", "/system/stats"),
   reboot: () => call<{ ok: boolean; message?: string }>("POST", "/system/reboot", { confirm: "reboot" }),
   updates: () => call<Updates>("GET", "/games/updates"),
