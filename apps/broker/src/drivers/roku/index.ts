@@ -99,7 +99,9 @@ export class RokuDriver implements DisplayDriver {
     const dialName = DIAL_NAMES[app];
     if (!dialName) return undefined;
     try {
-      const res = await this.doFetch(`${device.address.replace(/\/$/, "")}/dial/${dialName}`, { signal: AbortSignal.timeout(3000) });
+      // Roku's DIAL server answers 403 without an Origin; a "package:" origin (as a phone app
+      // sends) is accepted. Ours names this box, not someone else's app.
+      const res = await this.doFetch(`${device.address.replace(/\/$/, "")}/dial/${dialName}`, { headers: { origin: DIAL_ORIGIN }, signal: AbortSignal.timeout(3000) });
       if (!res.ok) return undefined;
       const m = /<screenId>([^<]+)<\/screenId>/i.exec(await res.text());
       return m?.[1]?.trim() || undefined;
@@ -174,3 +176,6 @@ export class RokuDriver implements DisplayDriver {
     }
   }
 }
+
+/** The Origin our DIAL requests carry (Roku refuses DIAL without one). */
+export const DIAL_ORIGIN = "package:com.bargames.box";

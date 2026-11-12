@@ -307,6 +307,8 @@ test("0.9.0: Roku launches YouTube (837), explains a 403, and reads YouTube's DI
   const fake = createServer((req, res) => {
     calls.push(`${req.method} ${req.url}`);
     if (req.url === "/query/device-info") return void res.end(DEVICE_INFO);
+    // Like a real Roku: DIAL without an Origin is refused.
+    if (req.url === "/dial/YouTube" && !req.headers.origin) return void res.writeHead(403).end();
     if (req.url === "/dial/YouTube") return void res.end('<?xml version="1.0"?><service xmlns="urn:dial-multiscreen-org:schemas:dial"><name>YouTube</name><state>running</state><additionalData><screenId>abc123screen</screenId></additionalData></service>');
     if (req.url?.startsWith("/launch/")) return void (block ? res.writeHead(403).end() : res.end(""));
     res.end("");
