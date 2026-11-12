@@ -120,14 +120,21 @@ test("server sdk: connected flow (venue, emit, command auth)", async () => {
 
   // create_room: the helper wraps the result and turns a throw into a refusal.
   let full = false;
-  bg.onCreateRoom(({ kind, title }) => {
+  const seenArgs: unknown[] = [];
+  bg.onCreateRoom((args) => {
+    seenArgs.push(args);
     if (full) throw new Error("too many rooms");
-    return { roomCode: `R-${kind}-${title ?? ""}`, hostUrl: "/host?key=k" };
+    return { roomCode: `R-${args.kind}-${args.title ?? ""}`, hostUrl: "/host?key=k" };
   });
   const create = (args: unknown) =>
     fetch(`${gameUrl}/__bargames/command`, { method: "POST", headers: { authorization: "Bearer t0k" }, body: JSON.stringify({ command: "create_room", args }) }).then((r) => r.json());
   assert.deepEqual(await create({ kind: "venue", purpose: "display", title: "Fri" }), { ok: true, data: { roomCode: "R-venue-Fri", hostUrl: "/host?key=k" } });
   assert.deepEqual(await create(undefined), { ok: true, data: { roomCode: "R-venue-", hostUrl: "/host?key=k" } });
+  // SDK 0.7.1: the box's "first joiner hosts" flag reaches the game (0.7.0 dropped it).
+  await create({ kind: "venue", purpose: "display", firstJoinerHosts: true });
+  assert.equal((seenArgs.at(-1) as { firstJoinerHosts?: boolean }).firstJoinerHosts, true);
+  await create({ kind: "venue", firstJoinerHosts: "yes" });
+  assert.equal((seenArgs.at(-1) as { firstJoinerHosts?: boolean }).firstJoinerHosts, undefined, "only a real true counts");
   full = true;
   assert.deepEqual(await create({ kind: "venue" }), { ok: false, message: "too many rooms" });
 

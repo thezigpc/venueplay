@@ -295,7 +295,12 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
       void commands.set("create_room", async ({ args }) => {
         const a = (args ?? {}) as Partial<CreateRoomArgs>;
         try {
-          const room = await handler({ kind: a.kind ?? "venue", purpose: a.purpose, title: typeof a.title === "string" ? a.title : undefined });
+          const room = await handler({
+            kind: a.kind ?? "venue",
+            purpose: a.purpose,
+            title: typeof a.title === "string" ? a.title : undefined,
+            ...(a.firstJoinerHosts === true ? { firstJoinerHosts: true } : {}),
+          });
           if (!room || typeof room.roomCode !== "string" || !room.roomCode) return { ok: false, message: "create_room handler returned no roomCode" };
           return { ok: true, data: room };
         } catch (err) {
