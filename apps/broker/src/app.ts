@@ -165,6 +165,32 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
     }),
   );
 
+  // Media providers (core checks the provider's rights before calling these).
+  /** { app, provider, title? }: start a TV app on this display. */
+  app.post(
+    "/displays/:id/launch",
+    h(async (req, res) => {
+      const { app: tvApp, provider, title } = req.body ?? {};
+      if (typeof tvApp !== "string" || typeof provider !== "string") return void res.status(400).json({ error: "app and provider required" });
+      res.json(await d.registry.launchApp(req.params.id, tvApp, provider, typeof title === "string" ? title.slice(0, 80) : undefined));
+    }),
+  );
+  /** { app, provider, title? }: the TV shows an app now (the provider got there without a launch). */
+  app.post(
+    "/displays/:id/external",
+    h(async (req, res) => {
+      const { app: tvApp, provider, title } = req.body ?? {};
+      if (typeof tvApp !== "string" || typeof provider !== "string") return void res.status(400).json({ error: "app and provider required" });
+      await d.registry.markExternal(req.params.id, provider, tvApp, typeof title === "string" ? title.slice(0, 80) : undefined);
+      res.json({ ok: true });
+    }),
+  );
+  /** DIAL screen id (YouTube's Lounge screen id). Never logged. */
+  app.get(
+    "/displays/:id/dial/:app",
+    h(async (req, res) => res.json({ screenId: await d.registry.dialScreenId(req.params.id, req.params.app) })),
+  );
+
   /** { key }: a remote-control key (capabilities.remoteKeys). */
   app.post(
     "/displays/:id/key",

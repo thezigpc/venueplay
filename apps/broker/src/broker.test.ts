@@ -300,3 +300,40 @@ test("venuebox: pair by code, connect, get shows per screen, hotplug, preview, r
     api.close();
   }
 });
+
+test("0.9.0: Roku launches YouTube (837), explains a 403, and reads YouTube's DIAL screen id", async () => {
+  const calls: string[] = [];
+  let block = false;
+  const fake = createServer((req, res) => {
+    calls.push(`${req.method} ${req.url}`);
+    if (req.url === "/query/device-info") return void res.end(DEVICE_INFO);
+    if (req.url === "/dial/YouTube") return void res.end('<?xml version="1.0"?><service xmlns="urn:dial-multiscreen-org:schemas:dial"><name>YouTube</name><state>running</state><additionalData><screenId>abc123screen</screenId></additionalData></service>');
+    if (req.url?.startsWith("/launch/")) return void (block ? res.writeHead(403).end() : res.end(""));
+    res.end("");
+  });
+  await new Promise<void>((r) => fake.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(fake.address() as AddressInfo).port}`;
+  const dir = mkdtempSync(path.join(tmpdir(), "bg-launch-"));
+  const roku = new RokuDriver(new PendingStreamService());
+  const registry = new DisplayRegistry(new JsonStore<{ displays: DisplayRecord[] }>(path.join(dir, "displays.json"), { displays: [] }), new Map([["roku", roku]]));
+  try {
+    const dev = await roku.probe(base);
+    await registry.merge([dev]);
+    assert.deepEqual(roku.launchableApps(), ["youtube"]);
+    assert.deepEqual(await registry.launchApp(dev.id, "youtube", "youtube-app", "Friday mix"), { ok: true });
+    assert.ok(calls.includes("POST /launch/837"));
+    assert.deepEqual(registry.get(dev.id)?.content, { kind: "external", provider: "youtube-app", app: "youtube", title: "Friday mix" });
+    assert.equal((await registry.launchApp(dev.id, "netflix", "x")).ok, false);
+    block = true;
+    const blocked = await registry.launchApp(dev.id, "youtube", "youtube-app");
+    assert.equal(blocked.ok, false);
+    assert.equal(!blocked.ok && blocked.reason, "ecp-blocked");
+    assert.equal(await registry.dialScreenId(dev.id, "youtube"), "abc123screen");
+    const dialCalls = calls.filter((c) => c === "GET /dial/YouTube").length;
+    await registry.dialScreenId(dev.id, "youtube");
+    assert.equal(calls.filter((c) => c === "GET /dial/YouTube").length, dialCalls, "cached");
+    assert.ok(!calls.some((c) => c.startsWith("POST /dial")), "DIAL is read-only: never launches");
+  } finally {
+    fake.close();
+  }
+});

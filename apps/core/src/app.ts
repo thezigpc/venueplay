@@ -477,6 +477,112 @@ export function createApp(d: AppDeps) {
     }),
   );
 
+  // ------------------------------------------------------------ SDK 0.9.0: media providers
+
+  const mediaApps = () => d.games.list().filter((g) => g.enabled && g.manifest.media && g.manifest.sdk.level >= 3 && g.manifest.commands.includes("media_play"));
+  const mediaApp = (id: string) => {
+    const g = mediaApps().find((x) => x.id === id);
+    if (!g) throw new HttpError(404, "no media app " + id);
+    return g;
+  };
+  const mediaProviderAuth = (req: Request) => {
+    const game = gameAuth(req);
+    if (!game.manifest.media) throw new HttpError(403, "declare media in bargames.json to use this");
+    return game;
+  };
+
+  /** Every venue TV, for media providers (not gated by "casting from games"). */
+  app.get(
+    "/internal/tvs",
+    h(async (req, res) => {
+      const game = mediaProviderAuth(req);
+      const allowed = game.manifest.media!.launch;
+      const list = ((await brokerCall("GET", "/displays?health=1").catch(() => [])) as { id: string; name: string; label?: string; group?: string; driver: string; health?: { online?: boolean }; launchable?: string[] }[]) ?? [];
+      const tvs = await Promise.all(
+        list.map(async (x) => {
+          const canLaunch = (x.launchable ?? []).filter((a) => allowed.includes(a));
+          const tv: Record<string, unknown> = { id: x.id, name: x.label || x.name, ...(x.group ? { group: x.group } : {}), kind: x.driver, online: Boolean(x.health?.online), canLaunch };
+          if (allowed.includes("youtube") && x.health?.online && x.driver === "roku") {
+            const r = (await brokerCall("GET", "/displays/" + encodeURIComponent(x.id) + "/dial/youtube").catch(() => undefined)) as { screenId?: string } | undefined;
+            if (r?.screenId) tv.youtubeScreenId = r.screenId;
+          }
+          return tv;
+        }),
+      );
+      res.json({ tvs });
+    }),
+  );
+
+  /** { displayId, app }: only an app the provider declared, on a TV it reports as its target. */
+  app.post(
+    "/internal/launch-app",
+    h(async (req, res) => {
+      const game = mediaProviderAuth(req);
+      const { displayId, app: tvApp } = (req.body ?? {}) as { displayId?: unknown; app?: unknown };
+      if (typeof displayId !== "string" || typeof tvApp !== "string") throw new HttpError(400, "displayId and app required");
+      if (!game.manifest.media!.launch.includes(tvApp)) return void res.json({ ok: false, reason: "not-allowed", message: tvApp + " isn't in media.launch in bargames.json" });
+      await roomCache.refresh(game.id).catch(() => undefined);
+      if (!roomCache.mediaTargets(game.id).some((t) => t.displayId === displayId)) return void res.json({ ok: false, reason: "not-allowed", message: "report this TV in status.media.targets first" });
+      const r = await brokerCall("POST", "/displays/" + encodeURIComponent(displayId) + "/launch", { app: tvApp, provider: game.id }).catch((err: Error) => ({ ok: false, reason: "error", message: err.message }));
+      d.log.info("media", "launch app", { game: game.id, display: displayId, app: tvApp, ok: (r as { ok?: boolean }).ok });
+      res.json(r);
+    }),
+  );
+
+  /** Media apps and the TVs they play on (TVs page / Tonight page). */
+  app.get("/api/media", (_req, res) => {
+    res.json({
+      providers: mediaApps().map((g) => ({
+        gameId: g.id,
+        displayName: buildContext(d.state.venue.get(), g).game.displayName,
+        targets: roomCache.mediaTargets(g.id),
+      })),
+    });
+  });
+  app.get(
+    "/api/media/:gameId/items",
+    h(async (req, res) => {
+      const r = await gameCommand(mediaApp(req.params.gameId), { command: "media_list" });
+      if (!r.result.ok) throw new HttpError(502, r.result.message ?? "the app didn't answer");
+      res.json({ items: ((r.result.data as { items?: unknown[] } | undefined)?.items ?? []).slice(0, 500) });
+    }),
+  );
+  /** { displayId?, itemId }: a staff pick (takes the TV back from local control). */
+  app.post(
+    "/api/media/:gameId/play",
+    h(async (req, res) => {
+      const game = mediaApp(req.params.gameId);
+      const { displayId, itemId } = (req.body ?? {}) as { displayId?: unknown; itemId?: unknown };
+      if (typeof itemId !== "string" || !itemId) throw new HttpError(400, "itemId required");
+      const args = { itemId, takeBack: true, ...(typeof displayId === "string" && displayId ? { displayId } : {}) };
+      const r = await gameCommand(game, { command: "media_play", args });
+      const data = (r.result.data ?? {}) as { pending?: boolean; launched?: boolean };
+      if (r.result.ok && typeof displayId === "string" && displayId) {
+        await brokerCall("POST", "/displays/" + encodeURIComponent(displayId) + "/external", { app: game.manifest.media!.launch[0] ?? game.id, provider: game.id }).catch(() => undefined);
+      }
+      if (r.result.ok) roomCache.boost(game.id);
+      else void roomCache.refresh(game.id).catch(() => undefined);
+      d.log.info("media", "play", { game: game.id, display: displayId, item: itemId, ok: r.result.ok, pending: data.pending });
+      res.json({ ok: r.result.ok, message: r.result.message, pending: data.pending === true, launched: data.launched === true });
+    }),
+  );
+  /** { displayId }: pause + clear on that TV, then the box's idle screen (never over local control). */
+  app.post(
+    "/api/media/:gameId/stop",
+    h(async (req, res) => {
+      const game = mediaApp(req.params.gameId);
+      const displayId = (req.body ?? {}).displayId as unknown;
+      if (typeof displayId !== "string" || !displayId) throw new HttpError(400, "displayId required");
+      const r = await gameCommand(game, { command: "media_stop", args: { displayId } });
+      const target = roomCache.mediaTargets(game.id).find((t) => t.displayId === displayId);
+      if (r.result.ok && target?.state !== "local") {
+        await brokerCall("POST", "/show", { displayIds: [displayId], content: await idleContent() }).catch(() => undefined);
+      }
+      void roomCache.refresh(game.id).catch(() => undefined);
+      res.json({ ok: r.result.ok, message: r.result.message });
+    }),
+  );
+
   // ------------------------------------------------------------ SDK 0.9.0: attention
 
   const LEVELS = new Set(["info", "warn", "error"]);
@@ -1241,6 +1347,12 @@ export function createApp(d: AppDeps) {
     if (rule.mode === "game") results = (await castGame(rule.gameId, target)).results;
     else if (rule.mode === "idle") results = (await brokerCall("POST", "/show", { ...target, content: await idleContent() })) as typeof results;
     else if (rule.mode === "off") results = (await brokerCall("POST", "/show", { ...target, content: { kind: "off" } })) as typeof results;
+    else if (rule.mode === "media") {
+      const r = await gameCommand(mediaApp(rule.gameId), { command: "media_play", args: { displayId, itemId: rule.itemId, takeBack: true } });
+      if (!r.result.ok) throw new Error(r.result.message ?? "the media app refused");
+      roomCache.boost(rule.gameId);
+      return;
+    }
     else return;
     const r = results[displayId];
     if (r && !r.ok) throw new Error(r.message ?? "the TV didn't start");
@@ -1264,7 +1376,9 @@ export function createApp(d: AppDeps) {
       const id = req.params.displayId;
       await d.state.tvStartup.update((s) => {
         if (rule.mode === "last") delete s[id];
-        else s[id] = rule.mode === "game" ? { mode: "game", gameId: rule.gameId } : { mode: rule.mode };
+        else if (rule.mode === "game") s[id] = { mode: "game", gameId: rule.gameId };
+        else if (rule.mode === "media") s[id] = { mode: "media", gameId: rule.gameId, itemId: rule.itemId };
+        else s[id] = { mode: rule.mode };
       });
       res.json(d.state.tvStartup.get());
     }),

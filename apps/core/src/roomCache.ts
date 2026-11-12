@@ -3,7 +3,7 @@
 // a live status call per page view. Refreshed on a timer and right after room events.
 
 import type { HubRoom, Logger } from "@bargames/common";
-import type { GameStatus, RoomSummary } from "@bargames/sdk";
+import type { GameStatus, MediaTarget, RoomSummary } from "@bargames/sdk";
 import type { InstalledGame } from "./state.js";
 
 const MAX_ROOMS_PER_GAME = 12;
@@ -42,6 +42,9 @@ function joinUrl(joinPath: unknown, base: string | undefined): string | undefine
 
 export class RoomCache {
   private rooms = new Map<string, HubRoom[]>();
+  /** Media providers' targets (SDK 0.9.0), per game id. */
+  private media = new Map<string, MediaTarget[]>();
+  private boosts = new Map<string, ReturnType<typeof setInterval>>();
   private pending = new Map<string, ReturnType<typeof setTimeout>>();
   private timer?: ReturnType<typeof setInterval>;
 
@@ -50,6 +53,27 @@ export class RoomCache {
   /** Rooms per game id; a game whose status couldn't be read is left out. */
   snapshot(): Record<string, HubRoom[]> {
     return Object.fromEntries(this.rooms);
+  }
+
+  /** Media targets per provider (the box TVs it plays on). */
+  mediaTargets(gameId?: string): MediaTarget[] {
+    return gameId ? (this.media.get(gameId) ?? []) : [...this.media.values()].flat();
+  }
+
+  /** A media_play is pending: poll this provider every 3 s for up to 60 s. */
+  boost(gameId: string, everyMs = 3000, forMs = 60_000): void {
+    clearInterval(this.boosts.get(gameId));
+    const started = Date.now();
+    const t = setInterval(() => {
+      if (Date.now() - started > forMs) {
+        clearInterval(t);
+        this.boosts.delete(gameId);
+        return;
+      }
+      void this.refresh(gameId).catch(() => undefined);
+    }, everyMs);
+    t.unref?.();
+    this.boosts.set(gameId, t);
   }
 
   async refresh(gameId?: string): Promise<void> {
@@ -62,9 +86,13 @@ export class RoomCache {
           const st = await this.d.status(g);
           if (st && Array.isArray(st.rooms)) this.rooms.set(g.id, hubRooms(st.rooms, this.d.publicUrl(g)));
           else this.rooms.delete(g.id);
+          const targets = st?.media?.targets;
+          if (Array.isArray(targets)) this.media.set(g.id, targets.filter((t) => t && typeof t.displayId === "string").slice(0, 64));
+          else this.media.delete(g.id);
         } catch {
           // Unknown is better than stale Join links.
           this.rooms.delete(g.id);
+          this.media.delete(g.id);
         }
       }),
     );
@@ -90,6 +118,8 @@ export class RoomCache {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     for (const t of this.pending.values()) clearTimeout(t);
+    for (const t of this.boosts.values()) clearInterval(t);
+    this.boosts.clear();
     this.pending.clear();
   }
 }

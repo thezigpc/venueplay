@@ -299,6 +299,7 @@ export class VenueboxHub implements DisplayDriver {
       this.post(s, { type: "off", screen: screen.id });
       return { ok: true, delivery: "native-url" };
     }
+    if (content.kind === "external") return { ok: false, message: "an app on the TV: nothing to send" };
     if (!content.url) return { ok: false, message: "nothing to show" };
     this.post(s, { type: "show", screen: screen.id, url: content.url, kind: "native-url", title: content.title });
     return { ok: true, delivery: "native-url" };

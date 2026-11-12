@@ -625,3 +625,76 @@ test("0.9.0: attention, TV health, countdown, results and leaderboards, profiles
     b.close();
   }
 });
+
+test("0.9.0 media providers: TVs for providers, launch rules, play/stop from the box", async () => {
+  const commands: { command: string; args?: Record<string, unknown> }[] = [];
+  const brokerCalls: string[] = [];
+  let targets = [{ displayId: "tv1", label: "Bar", state: "linked" }];
+  const b = await boot((url, init) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (url === "http://yt/__bargames/status") return reply({ rooms: [], media: { targets } });
+    if (url === "http://yt/__bargames/command") {
+      commands.push(body);
+      if (body.command === "media_list") return reply({ ok: true, data: { items: [{ id: "L1", name: "Friday mix", kind: "list" }, { id: "P1", name: "Saturday", kind: "plan" }] } });
+      if (body.command === "media_play") return reply({ ok: true, data: { ok: true, pending: true, launched: true } });
+      if (body.command === "media_stop") return reply({ ok: true });
+    }
+    if (url.startsWith("http://broker/displays/tv1/")) {
+      brokerCalls.push(url.replace("http://broker", ""));
+      if (url.endsWith("/dial/youtube")) return reply({ screenId: "SCREEN-1" });
+      return reply({ ok: true });
+    }
+    return undefined;
+  });
+  try {
+    Object.assign(b.displays[0], { driver: "roku", launchable: ["youtube"] });
+    Object.assign(b.displays[1], { driver: "airplay", launchable: [] });
+    const yt = { id: "youtube", name: "YouTube", kind: "app", version: "0.1.0", image: "ghcr.io/x/youtube:0.1.0", port: 3006, sdk: { version: "0.9.0", level: 3 }, routes: { player: "/" }, commands: ["media_list", "media_play", "media_stop"], events: [], media: { launch: ["youtube"] }, network: { internet: true } };
+    assert.equal((await b.json("POST", "/api/games/install", { manifest: yt, devTarget: "http://yt" }, b.authed)).status, 200);
+    await b.json("PATCH", "/api/games/youtube", { enabled: true }, b.authed);
+    await b.json("POST", "/api/games/install", { manifest: bingo, devTarget: "http://bingo" }, b.authed);
+    const g = { authorization: `Bearer ${b.games.get("youtube")!.token}` };
+    const notMedia = { authorization: `Bearer ${b.games.get("bingo")!.token}` };
+
+    // TVs: only for media providers; the screen id only for a Roku when the app launches youtube.
+    assert.equal((await b.json("GET", "/internal/tvs", undefined, notMedia)).status, 403);
+    const tvs = ((await (await b.json("GET", "/internal/tvs", undefined, g)).json()) as { tvs: { id: string; canLaunch: string[]; youtubeScreenId?: string; kind: string }[] }).tvs;
+    assert.deepEqual(tvs.map((t) => [t.id, t.kind, t.canLaunch, t.youtubeScreenId]), [["tv1", "roku", ["youtube"], "SCREEN-1"], ["tv2", "airplay", [], undefined]]);
+
+    // Launch: declared apps only, on TVs the app reports as its targets.
+    const launch = (displayId: string, app: string) => b.json("POST", "/internal/launch-app", { displayId, app }, g).then((r) => r.json() as Promise<{ ok: boolean; reason?: string }>);
+    assert.deepEqual(await launch("tv1", "netflix"), { ok: false, reason: "not-allowed", message: "netflix isn't in media.launch in bargames.json" });
+    assert.equal((await launch("tv2", "youtube")).reason, "not-allowed", "tv2 isn't a target");
+    assert.equal((await launch("tv1", "youtube")).ok, true);
+    assert.ok(brokerCalls.includes("/displays/tv1/launch"));
+
+    // The box: providers and targets, items, play (records external, polls fast), stop (idle screen).
+    const media = (await (await b.json("GET", "/api/media", undefined, b.authed)).json()) as { providers: { gameId: string; targets: { displayId: string }[] }[] };
+    assert.deepEqual(media.providers.map((p) => [p.gameId, p.targets.map((t) => t.displayId)]), [["youtube", ["tv1"]]]);
+    const items = (await (await b.json("GET", "/api/media/youtube/items", undefined, b.authed)).json()) as { items: { id: string; kind: string }[] };
+    assert.deepEqual(items.items.map((i) => i.kind), ["list", "plan"]);
+    const played = (await (await b.json("POST", "/api/media/youtube/play", { displayId: "tv1", itemId: "L1" }, b.authed)).json()) as { ok: boolean; pending: boolean };
+    assert.deepEqual([played.ok, played.pending], [true, true]);
+    assert.deepEqual(commands.at(-1), { command: "media_play", args: { itemId: "L1", takeBack: true, displayId: "tv1" } });
+    assert.ok(brokerCalls.includes("/displays/tv1/external"), "the TV is recorded as showing YouTube");
+    await b.json("POST", "/api/media/youtube/play", { itemId: "P1" }, b.authed);
+    assert.deepEqual(commands.at(-1)?.args, { itemId: "P1", takeBack: true }, "plans have no displayId");
+
+    const shows = b.shows.length;
+    assert.equal(((await (await b.json("POST", "/api/media/youtube/stop", { displayId: "tv1" }, b.authed)).json()) as { ok: boolean }).ok, true);
+    assert.equal(b.shows.length, shows + 1, "after a stop the box shows its idle screen");
+    assert.equal(b.shows.at(-1)?.content.kind, "idle");
+    // Never over local control.
+    targets = [{ displayId: "tv1", label: "Bar", state: "local" }];
+    await b.json("GET", "/api/media", undefined, b.authed);
+    await (b.app.locals.roomCache as { refresh(id?: string): Promise<void> }).refresh("youtube");
+    await b.json("POST", "/api/media/youtube/stop", { displayId: "tv1" }, b.authed);
+    assert.equal(b.shows.length, shows + 1, "local: left alone");
+
+    // A media startup choice.
+    assert.equal((await b.json("PUT", "/api/tv-startup/tv1", { mode: "media", gameId: "youtube", itemId: "L1" }, b.authed)).status, 200);
+    assert.equal((await b.json("PUT", "/api/tv-startup/tv1", { mode: "media", gameId: "youtube" }, b.authed)).status, 400);
+  } finally {
+    b.close();
+  }
+});

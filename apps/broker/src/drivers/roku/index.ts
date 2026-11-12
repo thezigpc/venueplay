@@ -8,6 +8,10 @@ export const ROKU_DEV_APP = "dev";
 /** The remote's keys (ECP names). Power and inputs have their own controls. */
 export const ROKU_REMOTE_KEYS = ["Home", "Back", "Up", "Down", "Left", "Right", "Select", "Play", "Rev", "Fwd", "InstantReplay", "Info", "Search", "Backspace", "Enter"] as const;
 /** Volume and channel keys work on Roku TVs (a player sends volume over HDMI-CEC at best). */
+/** TV apps media providers may start, by our name → Roku channel id. */
+export const ROKU_APPS: Record<string, string> = { youtube: "837" };
+/** Our app name → its DIAL application name. */
+export const DIAL_NAMES: Record<string, string> = { youtube: "YouTube" };
 export const ROKU_TV_KEYS = ["VolumeUp", "VolumeDown", "VolumeMute", "ChannelUp", "ChannelDown"] as const;
 
 export class RokuDriver implements DisplayDriver {
@@ -72,6 +76,38 @@ export class RokuDriver implements DisplayDriver {
     await (on ? ecp.powerOn() : ecp.powerOff());
   }
 
+  launchableApps(): string[] {
+    return Object.keys(ROKU_APPS);
+  }
+
+  async launchApp(device: DisplayDevice, app: string): Promise<{ ok: true } | { ok: false; reason: "unsupported" | "offline" | "ecp-blocked" | "error"; message: string }> {
+    const channel = ROKU_APPS[app];
+    if (!channel) return { ok: false, reason: "unsupported", message: `${device.name} can't start ${app}` };
+    try {
+      await this.ecp(device).launch(channel);
+      return { ok: true };
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (/Permissive|403/.test(msg)) return { ok: false, reason: "ecp-blocked", message: `${device.name} refused: on the Roku, set Settings → System → Advanced system settings → Control by mobile apps → Network access to Permissive` };
+      if (/abort|timeout|ECONNREFUSED|EHOSTUNREACH|fetch failed/i.test(msg)) return { ok: false, reason: "offline", message: `${device.name} isn't answering` };
+      return { ok: false, reason: "error", message: msg };
+    }
+  }
+
+  /** YouTube's Lounge screen id over DIAL (GET http://roku:8060/dial/YouTube). Never launches anything. */
+  async dialScreenId(device: DisplayDevice, app: string): Promise<string | undefined> {
+    const dialName = DIAL_NAMES[app];
+    if (!dialName) return undefined;
+    try {
+      const res = await this.doFetch(`${device.address.replace(/\/$/, "")}/dial/${dialName}`, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) return undefined;
+      const m = /<screenId>([^<]+)<\/screenId>/i.exec(await res.text());
+      return m?.[1]?.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async keypress(device: DisplayDevice, key: string): Promise<void> {
     if (!(await this.capabilities(device)).remoteKeys?.includes(key)) throw Object.assign(new Error(`${device.name} has no "${key}" key`), { status: 400 });
     await this.ecp(device).keypress(key);
@@ -98,6 +134,7 @@ export class RokuDriver implements DisplayDriver {
       return { ok: true };
     }
     if (content.kind === "idle") return { ok: false, message: "idle screen is rendered by the broker (Phase 3)" };
+    if (content.kind === "external") return { ok: false, message: "an app on the TV: nothing to cast" };
     switch (delivery) {
       case "airplay":
         return this.streams.startAirplay(device, content);

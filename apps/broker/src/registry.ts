@@ -13,6 +13,8 @@ export interface DisplayRecord extends DisplayDevice {
 
 export interface DisplayView extends DisplayRecord {
   capabilities?: Capabilities;
+  /** TV apps the box can start on it (media providers). */
+  launchable?: string[];
   health?: Health;
   stream?: StreamState;
 }
@@ -55,7 +57,7 @@ export class DisplayRegistry {
         const drv = this.drivers.get(d.driver);
         if (!drv) return d;
         const [capabilities, health] = await Promise.all([drv.capabilities(d).catch(() => undefined), withHealth ? drv.health(d) : undefined]);
-        return { ...d, capabilities, health, stream: drv.streamState?.(d) };
+        return { ...d, capabilities, health, stream: drv.streamState?.(d), launchable: drv.launchableApps?.(d) ?? [] };
       }),
     );
   }
@@ -106,6 +108,40 @@ export class DisplayRegistry {
       if (next.content && playable(next.content).kind === "url") await this.show({ displayIds: [id] }, next.content).catch(() => undefined);
     }
     return next;
+  }
+
+  /**
+   * Media providers: start a TV app. Stops whatever the box was casting to it first (an
+   * AirPlay mirror would cover the app), then records what's showing so idle repaints skip it.
+   */
+  async launchApp(id: string, app: string, provider: string, title?: string): Promise<{ ok: true } | { ok: false; reason: "unsupported" | "offline" | "ecp-blocked" | "error"; message: string }> {
+    const d = this.get(id);
+    if (!d) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    const drv = this.driverFor(d);
+    if (!drv.launchApp || !(drv.launchableApps?.(d) ?? []).includes(app)) return { ok: false, reason: "unsupported", message: `The box can't start ${app} on ${d.label || d.name}; open it on the TV yourself.` };
+    if (drv.streamState?.(d)) await drv.stop(d).catch(() => undefined);
+    const r = await drv.launchApp(d, app);
+    if (r.ok) await this.setContent(id, { kind: "external", provider, app, ...(title ? { title } : {}) });
+    return r;
+  }
+
+  /** Media providers: record that a TV now shows an app (no launch needed). */
+  async markExternal(id: string, provider: string, app: string, title?: string): Promise<void> {
+    if (!this.get(id)) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    await this.setContent(id, { kind: "external", provider, app, ...(title ? { title } : {}) });
+  }
+
+  /** DIAL screen id of an app on this TV (memory-only cache, 10 minutes). */
+  private readonly dialCache = new Map<string, { at: number; id?: string }>();
+  async dialScreenId(id: string, app: string): Promise<string | undefined> {
+    const d = this.get(id);
+    if (!d) return undefined;
+    const key = `${id}|${app}`;
+    const hit = this.dialCache.get(key);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.id;
+    const screenId = await this.driverFor(d).dialScreenId?.(d, app).catch(() => undefined);
+    this.dialCache.set(key, { at: Date.now(), id: screenId });
+    return screenId;
   }
 
   /** A small JPEG of what this TV is being sent, or undefined when it isn't casting. */

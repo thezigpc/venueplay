@@ -65,7 +65,9 @@ export type DisplayContent =
   | { kind: "url"; url: string; title?: string }
   /** The venue's idle screen. `url` is the page core rendered for it (data: or http). */
   | { kind: "idle"; url?: string; title?: string }
-  | { kind: "off" };
+  | { kind: "off" }
+  /** An app on the TV itself is showing (e.g. YouTube started by a media provider). Recorded, never cast. */
+  | { kind: "external"; provider: string; app: string; title?: string };
 
 export interface ShowResult {
   ok: boolean;
@@ -115,6 +117,12 @@ export interface DisplayDriver {
   typeText?(device: DisplayDevice, text: string): Promise<void>;
   /** A small JPEG of what the box is rendering for this TV, if it's casting. */
   preview?(device: DisplayDevice): Promise<Buffer | undefined>;
+  /** TV apps this driver can start (media providers), e.g. ["youtube"]. */
+  launchableApps?(device: DisplayDevice): string[];
+  /** Starts a TV app. Returns once the TV accepted the request. */
+  launchApp?(device: DisplayDevice, app: string): Promise<{ ok: true } | { ok: false; reason: "unsupported" | "offline" | "ecp-blocked" | "error"; message: string }>;
+  /** DIAL: an app's screen id (YouTube's Lounge screen id). GET only, never launches. */
+  dialScreenId?(device: DisplayDevice, app: string): Promise<string | undefined>;
 }
 
 /**

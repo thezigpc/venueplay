@@ -13,13 +13,16 @@ export type StartupRule =
   /** Leave the TV alone (nothing cast). */
   | { mode: "off" }
   /** A game (new venue room on this TV) or a menu/display module. */
-  | { mode: "game"; gameId: string };
+  | { mode: "game"; gameId: string }
+  /** SDK 0.9.0: a media provider's list on this TV (e.g. a YouTube list). */
+  | { mode: "media"; gameId: string; itemId: string };
 
 export function checkStartupRule(r: unknown, gameExists: (id: string) => boolean): string | undefined {
   if (typeof r !== "object" || r === null) return "rule: { mode: last | idle | off | game, gameId? }";
   const v = r as Record<string, unknown>;
   if (v.mode === "last" || v.mode === "idle" || v.mode === "off") return undefined;
   if (v.mode === "game") return typeof v.gameId === "string" && gameExists(v.gameId) ? undefined : "gameId: an installed game or menu";
+  if (v.mode === "media") return typeof v.gameId === "string" && gameExists(v.gameId) && typeof v.itemId === "string" && v.itemId ? undefined : "media: gameId (a media app) and itemId";
   return "mode: last, idle, off or game";
 }
 

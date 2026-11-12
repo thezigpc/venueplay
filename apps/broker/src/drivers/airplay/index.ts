@@ -89,6 +89,7 @@ export class AirplayDriver implements DisplayDriver {
       return { ok: true };
     }
     if (content.kind === "idle") return { ok: false, message: "idle screen is rendered by the broker (Phase 3)" };
+    if (content.kind === "external") return { ok: false, message: "an app on the TV: nothing to cast" };
     if (delivery !== "airplay") return { ok: false, message: `AirPlay receivers can't use ${delivery}` };
     return this.streams.startAirplay(device, content);
   }
