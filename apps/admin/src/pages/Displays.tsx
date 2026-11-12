@@ -82,6 +82,7 @@ export function DisplaysPage() {
         {note && <p className="muted">{note}</p>}
         {displays.error && <p className="error">{displays.error}</p>}
       </section>
+      <VenueboxCard reload={displays.reload} />
       {(displays.data ?? []).map((d) => (
         <DisplayCard key={d.id} d={d} busy={busy} run={run} reload={displays.reload} previews={previews} startup={startup.data?.[d.id]} games={games.data ?? []} />
       ))}
@@ -186,6 +187,13 @@ function DisplayCard({
         )}
       </div>
       {(d.capabilities?.remoteKeys?.length ?? 0) > 0 && <Remote d={d} keys={d.capabilities!.remoteKeys!} />}
+      {d.driver === "venuebox" && online && (
+        <p>
+          <button type="button" onClick={() => void api.identify(d.id)}>
+            Identify (show its name on screen)
+          </button>
+        </p>
+      )}
     </section>
   );
 }
@@ -243,6 +251,78 @@ function ShowOnTv({ d, games, reload }: { d: Display; games: Game[]; reload: () 
       </label>
       {msg && <p className="muted">{msg}</p>}
     </div>
+  );
+}
+
+/** Venuebox apps (desktop, Android, iOS…): pair by the code they show; rename; remove. */
+function VenueboxCard({ reload }: { reload: () => unknown }) {
+  const view = useLoad(api.venuebox, 10_000);
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [msg, setMsg] = useState("");
+  const pair = async () => {
+    setMsg("");
+    try {
+      const dev = await api.pairVenuebox(code, name);
+      setMsg(`Paired ${dev.name}: ${dev.screens.length} screen(s) added below.`);
+      setCode("");
+      setName("");
+      await Promise.all([view.reload(), reload()]);
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  };
+  if (view.error && !view.data) return null; // Venuebox clients turned off on this box
+  const devices = view.data?.devices ?? [];
+  return (
+    <section className="card wide">
+      <h2>Venuebox apps</h2>
+      <p className="muted">
+        PCs, Android TVs and iPads running the Venuebox app. They render games themselves (no encoding on the box). To pair one, open the app, point it at this box, and type the code it shows.
+      </p>
+      <div className="inline">
+        <input placeholder="6-digit code" inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} style={{ maxWidth: 140 }} />
+        <input placeholder="Name (optional), e.g. Patio PC" value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="primary" disabled={code.length !== 6} onClick={() => void pair()}>
+          Pair
+        </button>
+      </div>
+      {(view.data?.pending ?? []).length > 0 && (
+        <p className="muted">
+          Waiting to pair: {view.data!.pending.map((p) => `${p.name} (${p.platform}, ${p.screens} screen(s))`).join(", ")}
+        </p>
+      )}
+      {msg && <p className="muted">{msg}</p>}
+      {devices.map((dv) => (
+        <div key={dv.id} className="row">
+          <div>
+            <b>
+              <span className={`dot ${dv.online ? "on" : "off"}`} /> {dv.name}
+            </b>
+            <small>
+              {dv.platform}
+              {dv.model ? ` · ${dv.model}` : ""} · {dv.screens.length} screen(s){dv.appVersion ? ` · app ${dv.appVersion}` : ""} · {dv.online ? "online" : dv.lastSeen ? `last seen ${new Date(dv.lastSeen).toLocaleString()}` : "never connected"}
+            </small>
+          </div>
+          <div className="buttons">
+            <button
+              onClick={() => {
+                const n = window.prompt("Name for this device", dv.name);
+                if (n?.trim()) void api.renameVenuebox(dv.id, n.trim()).then(() => Promise.all([view.reload(), reload()]));
+              }}
+            >
+              Rename
+            </button>
+            <button
+              className="danger"
+              onClick={() => window.confirm(`Remove ${dv.name}? Its screens disappear from the box, and it has to pair again.`) && void api.revokeVenuebox(dv.id).then(() => Promise.all([view.reload(), reload()]))}
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+    </section>
   );
 }
 

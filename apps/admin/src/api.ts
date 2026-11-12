@@ -75,6 +75,17 @@ export interface Updates {
   lastRun?: string;
   games: UpdateInfo[];
 }
+export interface VenueboxDevice {
+  id: string;
+  name: string;
+  platform: string;
+  model?: string;
+  appVersion?: string;
+  screens: { id: string; name: string; w: number; h: number; hz?: number }[];
+  pairedAt: string;
+  lastSeen?: string;
+  online: boolean;
+}
 export interface SystemStats {
   at: string;
   host: {
@@ -186,6 +197,11 @@ export const api = {
   access: () => call<Access>("GET", "/access"),
   saveAccess: (a: Partial<Access>) => call<Access>("PUT", "/access", a),
   games: () => call<Game[]>("GET", "/games"),
+  venuebox: () => call<{ devices: VenueboxDevice[]; pending: { code: string; name: string; platform: string; screens: number; expiresAt: string }[] }>("GET", "/broker/venuebox"),
+  pairVenuebox: (code: string, name?: string) => call<VenueboxDevice>("POST", "/broker/venuebox/pair", { code, name: name || undefined }),
+  renameVenuebox: (id: string, name: string) => call<VenueboxDevice>("PATCH", `/broker/venuebox/devices/${encodeURIComponent(id)}`, { name }),
+  revokeVenuebox: (id: string) => call("DELETE", `/broker/venuebox/devices/${encodeURIComponent(id)}`),
+  identify: (displayId: string) => call("POST", `/broker/displays/${encodeURIComponent(displayId)}/identify`),
   systemStats: () => call<SystemStats>("GET", "/system/stats"),
   reboot: () => call<{ ok: boolean; message?: string }>("POST", "/system/reboot", { confirm: "reboot" }),
   updates: () => call<Updates>("GET", "/games/updates"),

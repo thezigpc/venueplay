@@ -190,3 +190,113 @@ test("system: host network interfaces from /proc/net/dev (bridges and veths left
     { name: "tailscale0", rxBytes: 300, txBytes: 400 },
   ]);
 });
+
+test("venuebox: pair by code, connect, get shows per screen, hotplug, preview, revoke", async () => {
+  const { WebSocket } = await import("ws");
+  const { DeviceStore, Pairings } = await import("./venuebox/devices.js");
+  const { VenueboxHub } = await import("./venuebox/hub.js");
+  const { playable } = await import("./registry.js");
+  const dir = mkdtempSync(path.join(tmpdir(), "bg-vb-"));
+  const drivers = new Map();
+  const registry = new DisplayRegistry(new JsonStore<{ displays: DisplayRecord[] }>(path.join(dir, "displays.json"), { displays: [] }), drivers);
+  const hub = new VenueboxHub({
+    devices: new DeviceStore(new JsonStore(path.join(dir, "devices.json"), { devices: [] })),
+    pairings: new Pairings(),
+    log: createLogger("test", "error"),
+    boxName: () => "Test box",
+    displaysChanged: async (found, removed) => {
+      await registry.merge(found);
+      await registry.removeMany(removed);
+    },
+    reconnected: (ids) => {
+      for (const id of ids) {
+        const d = registry.get(id);
+        if (d?.content && playable(d.content).kind === "url") void registry.show({ displayIds: [id] }, d.content);
+      }
+    },
+  });
+  drivers.set(hub.id, hub);
+  const server = hub.listen(0, "127.0.0.1");
+  await new Promise((r) => server.once("listening", r));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const app = createBrokerApp({ registry, venuebox: hub, token: "t", log: createLogger("test", "error") });
+  const api = app.listen(0);
+  const apiBase = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  const admin = (method: string, p: string, body?: unknown) =>
+    fetch(apiBase + p, { method, headers: { authorization: "Bearer t", "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const screens = [{ id: "1", name: "HDMI 1", w: 1920, h: 1080, hz: 60 }];
+  try {
+    assert.equal(((await (await fetch(base + "/health")).json()) as { protocol: number }).protocol, 1);
+    assert.equal((await fetch(base + "/pair/start", { method: "POST", body: JSON.stringify({ name: "Bar PC" }) })).status, 400, "screens required");
+    const start = (await (await fetch(base + "/pair/start", { method: "POST", body: JSON.stringify({ name: "Bar PC", platform: "windows", screens }) })).json()) as { pairingId: string; code: string };
+    assert.match(start.code, /^\d{6}$/);
+    assert.deepEqual(await (await fetch(`${base}/pair/status?id=${start.pairingId}`)).json(), { status: "pending" });
+    assert.equal((await admin("POST", "/venuebox/pair", { code: "000000" === start.code ? "111111" : "000000" })).status, 404, "wrong code");
+    const paired = (await (await admin("POST", "/venuebox/pair", { code: start.code, name: "Patio PC" })).json()) as { id: string; name: string };
+    assert.equal(paired.name, "Patio PC");
+    const approved = (await (await fetch(`${base}/pair/status?id=${start.pairingId}`)).json()) as { status: string; token: string; wsPath: string };
+    assert.equal(approved.status, "approved");
+    assert.equal((await fetch(`${base}/pair/status?id=${start.pairingId}`)).status, 404, "the token is handed out once");
+    const displayId = `venuebox:${paired.id}:1`;
+    assert.ok(registry.get(displayId), "its screen is a display right away");
+
+    // Bad token: refused.
+    const bad = new WebSocket(base.replace("http", "ws") + "/client");
+    const badClose = new Promise<number>((r) => bad.on("close", (code) => r(code)));
+    bad.on("open", () => bad.send(JSON.stringify({ type: "hello", v: 1, token: "x".repeat(40), platform: "windows", screens, deliveries: ["native-url"] })));
+    assert.equal(await badClose, 4401);
+
+    // The real client.
+    const ws = new WebSocket(base.replace("http", "ws") + approved.wsPath);
+    const inbox: Record<string, unknown>[] = [];
+    const next = (type: string) =>
+      new Promise<Record<string, unknown>>((resolve) => {
+        const hit = inbox.find((m) => m.type === type);
+        if (hit) return resolve(inbox.splice(inbox.indexOf(hit), 1)[0]);
+        const on = (raw: Buffer) => {
+          const m = JSON.parse(String(raw));
+          if (m.type !== type) return void inbox.push(m);
+          ws.off("message", on);
+          resolve(m);
+        };
+        ws.on("message", on);
+      });
+    await new Promise((r) => ws.on("open", r));
+    ws.send(JSON.stringify({ type: "hello", v: 1, token: approved.token, platform: "windows", appVersion: "0.1.0", screens, deliveries: ["native-url"] }));
+    const welcome = await next("welcome");
+    assert.equal(welcome.name, "Patio PC");
+    assert.equal(((await hub.health(registry.get(displayId)!)) as { online: boolean }).online, true);
+
+    // Casting to the screen sends it a show.
+    const shown = registry.show({ displayIds: [displayId] }, { kind: "url", url: "https://bingo.example.com/room/AB?role=table", title: "Bingo · AB" });
+    const show = await next("show");
+    assert.deepEqual(show, { type: "show", screen: "1", url: "https://bingo.example.com/room/AB?role=table", kind: "native-url", title: "Bingo · AB" });
+    assert.equal((await shown)[displayId].ok, true);
+    ws.send(JSON.stringify({ type: "state", screen: "1", showing: "https://bingo.example.com/room/AB?role=table", status: "playing" }));
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(hub.streamState(registry.get(displayId)!)?.state, "streaming");
+
+    // Preview round trip.
+    const pv = hub.preview(registry.get(displayId)!);
+    const req = await next("preview");
+    ws.send(JSON.stringify({ type: "preview", requestId: req.requestId, screen: "1", jpeg: Buffer.from("JPEGDATA").toString("base64") }));
+    assert.equal(String(await pv), "JPEGDATA");
+
+    // A second TV plugged into the PC: a new display; the first one is untouched.
+    ws.send(JSON.stringify({ type: "screens", screens: [...screens, { id: "2", name: "HDMI 2", w: 1280, h: 720 }] }));
+    await next("welcome");
+    assert.ok(registry.get(`venuebox:${paired.id}:2`), "the new screen is a display");
+    assert.equal(((await (await admin("GET", "/venuebox")).json()) as { devices: { online: boolean; screens: unknown[] }[] }).devices[0].screens.length, 2);
+
+    // Revoked: told, disconnected, its displays gone, and its token no longer works.
+    const closed = new Promise<number>((r) => ws.on("close", (code) => r(code)));
+    assert.equal((await admin("DELETE", `/venuebox/devices/${paired.id}`)).status, 200);
+    assert.equal(await closed, 4403);
+    assert.equal(registry.get(displayId), undefined);
+    assert.equal(registry.get(`venuebox:${paired.id}:2`), undefined);
+  } finally {
+    hub.close();
+    server.close();
+    api.close();
+  }
+});

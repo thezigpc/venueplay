@@ -115,6 +115,15 @@ export class DisplayRegistry {
     return this.driverFor(d).preview?.(d);
   }
 
+  /** Drops displays that no longer exist (a revoked Venuebox device, unplugged screens). */
+  async removeMany(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    const gone = new Set(ids);
+    await this.store.update((s) => {
+      s.displays = s.displays.filter((d) => !gone.has(d.id));
+    });
+  }
+
   async remove(id: string): Promise<void> {
     await this.store.update((s) => {
       s.displays = s.displays.filter((d) => d.id !== id);

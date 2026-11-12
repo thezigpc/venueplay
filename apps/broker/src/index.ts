@@ -7,6 +7,9 @@ import { MockDriver } from "./drivers/mock.js";
 import { AirplayDriver } from "./drivers/airplay/index.js";
 import { RokuDriver } from "./drivers/roku/index.js";
 import { LocalScreenDriver } from "./drivers/local/index.js";
+import { DeviceStore, Pairings, type Device } from "./venuebox/devices.js";
+import { VenueboxHub } from "./venuebox/hub.js";
+import { playable } from "./registry.js";
 import { DisplayRegistry, type DisplayRecord } from "./registry.js";
 import { AirplayStreams } from "./airplay.js";
 import { NodeProcRunner } from "./procs.js";
@@ -53,7 +56,32 @@ if (mockCount) drivers.set("mock", new MockDriver(mockCount));
 
 const registry = new DisplayRegistry(new JsonStore<{ displays: DisplayRecord[] }>(path.join(dataDir, "displays.json"), { displays: [] }), drivers);
 
-createBrokerApp({ registry, roku, airplay: airplayDriver, token, log }).listen(port, host, () => {
+// Venuebox apps (docs/NATIVE-CLIENTS.md): pair with the box, render TV pages themselves.
+const clientPort = envNum("CLIENT_PORT", 7210);
+// On unless VENUEBOX=off (it only answers devices staff paired).
+const venuebox = process.env.VENUEBOX !== "off"
+  ? new VenueboxHub({
+      devices: new DeviceStore(new JsonStore<{ devices: Device[] }>(path.join(dataDir, "venuebox-devices.json"), { devices: [] }, 0o600)),
+      pairings: new Pairings(),
+      log,
+      boxName: () => process.env.BOX_NAME ?? "Bar Games box",
+      displaysChanged: async (found, removed) => {
+        await registry.merge(found);
+        await registry.removeMany(removed);
+      },
+      reconnected: (ids) => {
+        for (const id of ids) {
+          const d = registry.get(id);
+          if (d?.content && playable(d.content).kind === "url") void registry.show({ displayIds: [id] }, d.content).catch(() => undefined);
+        }
+      },
+    })
+  : undefined;
+if (venuebox) drivers.set(venuebox.id, venuebox);
+
+if (venuebox) venuebox.listen(clientPort).on("listening", () => log.info("boot", "venuebox clients", { port: clientPort }));
+
+createBrokerApp({ registry, roku, airplay: airplayDriver, venuebox, token, log }).listen(port, host, () => {
   log.info("boot", "listening", { port, host, drivers: [...drivers.keys()], airplay: Boolean(airplay) });
   if (mockCount) void registry.discover();
   if (airplay) {

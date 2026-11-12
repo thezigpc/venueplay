@@ -86,6 +86,25 @@ Client → box:
 The protocol is versioned (`v: 1` in `hello`); the box keeps the previous version working,
 the same rule as the game SDK.
 
+## v1 as built (box side, 2026-11-12)
+
+- **Where:** the broker (it owns the displays and shares the host's network), port
+  **7210** (`CLIENT_PORT`), plain HTTP/WebSocket on the LAN and Tailscale only. Clients use
+  `http://<box address>:7210`. `VENUEBOX=off` turns it off.
+- **Endpoints and messages:** exactly as typed in
+  `apps/broker/src/venuebox/protocol.ts` (the source of truth for field names):
+  `GET /health`, `POST /pair/start`, `GET /pair/status?id=`, WebSocket `/client`.
+  The first message is `hello`; the box answers `welcome` (device id, name, a label per
+  screen) or `error` + close (4401 bad token, 4403 revoked, 4400 protocol, 4409 replaced
+  by a newer connection of the same device). The box pings every 30 s.
+- **Pairing codes** last 10 minutes; 3 pending per source address, 20 in all. The token is
+  handed out once (the next status poll is 404).
+- **Reconnects:** on `hello` (and for newly plugged screens) the box re-sends what each
+  screen was showing.
+- **Admin:** TVs page, "Venuebox apps" card (pair by code, rename, remove) and Identify on
+  each Venuebox screen's card. Core reaches it through `/api/broker/venuebox*`.
+- Not yet: mDNS (`_venuebox._tcp`) and HLS for Roku/Apple TV.
+
 ## Box side (when building starts)
 
 1. Core: pairing endpoints and the device registry (data/core/devices.json), LAN-only.

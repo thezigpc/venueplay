@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import type { AirplayDriver } from "./drivers/airplay/index.js";
 import type { RokuDriver } from "./drivers/roku/index.js";
+import type { VenueboxHub } from "./venuebox/hub.js";
 import type { DisplayRegistry } from "./registry.js";
 import { checkStreamSettings, type DeliveryMethod, type DisplayContent, type StreamSettings } from "./types.js";
 
@@ -12,7 +13,7 @@ const h =
     Promise.resolve(fn(req, res)).catch(next);
 
 /** Broker API. Only core calls it (bearer token); it never faces players. */
-export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; token: string; log: Logger }) {
+export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; venuebox?: VenueboxHub; token: string; log: Logger }) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "64kb" }));
@@ -119,6 +120,48 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
       const code = req.body?.code === undefined ? undefined : String(req.body.code).trim();
       if (code !== undefined && !/^[ -~]{1,64}$/.test(code)) return void res.status(400).json({ error: "code: 1-64 printable characters" });
       res.json(await d.registry.pair(req.params.id, code || undefined));
+    }),
+  );
+
+  // Venuebox apps: paired devices, pending codes, pair / rename / revoke.
+  const hub = () => {
+    if (!d.venuebox) throw Object.assign(new Error("Venuebox clients are turned off on this box"), { status: 400 });
+    return d.venuebox;
+  };
+  app.get("/venuebox", (_req, res) => res.json(hub().devicesView()));
+  /** { code, name? }: the code a Venuebox app shows on its screen. */
+  app.post(
+    "/venuebox/pair",
+    h(async (req, res) => {
+      const code = String(req.body?.code ?? "").replace(/\D/g, "");
+      if (code.length !== 6) return void res.status(400).json({ error: "the code is 6 digits" });
+      res.json(await hub().approve(code, typeof req.body?.name === "string" ? req.body.name : undefined));
+    }),
+  );
+  app.patch(
+    "/venuebox/devices/:id",
+    h(async (req, res) => {
+      const name = String(req.body?.name ?? "").trim();
+      if (!name) return void res.status(400).json({ error: "name required" });
+      const dev = await hub().rename(req.params.id, name);
+      if (!dev) return void res.status(404).json({ error: "no such device" });
+      res.json(dev);
+    }),
+  );
+  app.delete(
+    "/venuebox/devices/:id",
+    h(async (req, res) => {
+      if (!(await hub().revoke(req.params.id))) return void res.status(404).json({ error: "no such device" });
+      res.json({ ok: true });
+    }),
+  );
+  /** Flashes the screen's name on it. */
+  app.post(
+    "/displays/:id/identify",
+    h(async (req, res) => {
+      const dev = one(req.params.id);
+      if (dev.driver !== "venuebox" || !d.venuebox?.identify(dev)) return void res.status(400).json({ error: "only connected Venuebox screens can do that" });
+      res.json({ ok: true });
     }),
   );
 
