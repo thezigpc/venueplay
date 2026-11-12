@@ -2,7 +2,7 @@
 
 Plan: GAMEPLAN.md · Vision: VISION.md · SDK guide: docs/SDK.md · Overview: README.md
 
-Repo: https://github.com/thezigpc/venueplay (private, branch `main`). Commits use the user's GitHub no-reply email (repo-local git config). The product and code are still called "Bar Games" (`@bargames/*`); only the repo is named venueplay.
+Repo: https://github.com/thezigpc/venueplay (public, branch `main`). Commits use the user's GitHub no-reply email (repo-local git config). The product and code are still called "Bar Games" (`@bargames/*`); only the repo is named venueplay.
 
 ## Conventions
 - npm workspaces, TypeScript (NodeNext), Express 4, React 18 + Vite 5, Node 22 images. These match the user's other games (Bingo, CAH, Pool).
@@ -21,12 +21,8 @@ Repo: https://github.com/thezigpc/venueplay (private, branch `main`). Commits us
 - Core needs `ATTACH_CONTAINERS` (core and gateway container names) so they can join each game's internal network.
 - Python edits on this Windows box: use `encoding="utf8", newline=""`. Otherwise text mode writes CRLF and cp1252, and multi-line matches on CRLF files fail silently.
 
-## Dev box: bg-box (192.168.77.13)
-- Ubuntu Server 26.04 (minimized install). **Install only what's needed on the host.** Everything else goes in containers.
-- `ssh -i ~/.ssh/<ssh-key> <user>@192.168.77.13`. (Login details are in CLAUDE.local.md.)
-- The stack is in `~/bargames/deploy` (`docker compose`). Admin UI: http://192.168.77.13/ from the LAN. The user sets the password on the first visit; first-run setup is accepted only from the LAN.
-- The render GID is 991. The bench Rokus are an Express 3930RW (192.168.77.132) and a Streaming Stick 3800X (192.168.77.133). Both report AirPlay.
+## The dev box
+- Its address, login and bench devices are in `CLAUDE.local.md` (git-ignored, this machine only). Never put them in committed files: this repo is public.
+- **Install only what's needed on the box host.** Everything else goes in containers.
 - Don't send power, input or launch commands to the user's devices without asking. Read-only discovery is fine.
-- **Game updates from the command line (`bgctl`):** `ssh -i ~/.ssh/<ssh-key> <user>@192.168.77.13 '~/bargames/deploy/bgctl update <game> --wait 20'`.
-  Also `bgctl status`, `bgctl check [game]`, `bgctl update --all`, `bgctl install <GitHub repo URL> --enable --wait 20` (first install), `bgctl startup` (apply the TVs' "When the box starts" choices now), `--json`. It runs inside the core container with core's ops token (`data/core/ops.token`; never copy it anywhere).
-  An update restarts the game and closes its open rooms, so run it when the user (or a game session acting for them) asks. `--wait` covers an image that's still building.
+- **Game updates from the command line (`bgctl`, on the box):** `~/bargames/deploy/bgctl update <game> --wait 20`; also `status`, `check [game]`, `update --all`, `install <GitHub repo URL> --enable --wait 20`, `startup`, `--json`. It runs inside the core container with core's ops token (`data/core/ops.token`; never copy it anywhere). An update restarts the game and closes its open rooms, so run it when the user (or a game session acting for them) asks.
