@@ -107,6 +107,11 @@ test("api: setup, install, brand, events, gateway config", async () => {
     assert.equal(setup.status, 200);
     const cookie = setup.headers.get("set-cookie")!.split(";")[0];
     const authed = { cookie };
+    assert.match(setup.headers.get("set-cookie")!, /bg_admin=[^;]+;.*Path=\/;/);
+    // Under /admin on the games list's hostname, the session cookie is scoped to /admin/.
+    const underAdmin = await json("POST", "/api/auth/login", { password: "correct horse" }, { "x-forwarded-prefix": "/admin" });
+    assert.equal(underAdmin.status, 200);
+    assert.match(underAdmin.headers.get("set-cookie")!, /bg_admin=[^;]+;.*Path=\/admin\/;/);
 
     const inst = await json("POST", "/api/games/install", { manifest, devTarget: "http://127.0.0.1:7300" }, authed);
     assert.equal(inst.status, 200);
@@ -147,16 +152,19 @@ test("api: setup, install, brand, events, gateway config", async () => {
     assert.equal(await (await json("GET", "/api/announcement", undefined, authed)).json(), null);
 
     assert.equal((await json("GET", "/internal/gateway-config")).status, 401);
-    const gw = (await (await json("GET", "/internal/gateway-config", undefined, { authorization: "Bearer gw" })).json()) as { routes: { host: string; kind: string; target?: string }[] };
+    const gw = (await (await json("GET", "/internal/gateway-config", undefined, { authorization: "Bearer gw" })).json()) as { routes: { host: string; kind: string; path?: string; target?: string; redirectTo?: string }[]; adminUrl: string };
+    // Admin at /admin on the games list's hostname (default); its old hostname redirects there.
     assert.deepEqual(
-      gw.routes.map((r) => [r.host, r.kind]),
+      gw.routes.map((r) => [r.host, r.kind, r.path ?? "", r.redirectTo ?? ""]),
       [
-        ["admin.localhost", "admin"],
-        ["play.localhost", "hub"],
-        ["kavabingo.localhost", "game"],
+        ["play.localhost", "admin", "/admin", ""],
+        ["play.localhost", "hub", "", ""],
+        ["admin.localhost", "admin", "", "http://play.localhost:7080/admin"],
+        ["kavabingo.localhost", "game", "", ""],
       ],
     );
-    assert.equal(gw.routes[2].target, "http://127.0.0.1:7300");
+    assert.equal(gw.adminUrl, "http://play.localhost:7080/admin");
+    assert.equal(gw.routes[3].target, "http://127.0.0.1:7300");
 
     const badVenue = await json("PUT", "/api/venue", { hostnamePattern: "{domain}" }, authed);
     assert.equal(badVenue.status, 400);
@@ -343,4 +351,14 @@ test("path routing (SDK 0.10.0): games that support it live at <play host>/<id>,
   assert.ok((spec.body.Env as string[]).includes(`BG_PUBLIC_URL=https://${play}/bingo`));
   assert.ok(!(containerSpec(pool, { coreUrl: "http://core:7100", publicUrl: gameUrl(venue, pool) }).body.Env as string[]).some((e) => e.startsWith("BG_BASE_PATH=")));
   assert.ok(RESERVED_PATHS.includes("admin"));
+
+  // Admin: /admin on the games list's hostname by default (no DNS record), or its own hostname.
+  const { adminUrl } = await import("./venue.js");
+  assert.equal(adminUrl(venue), `https://${play}/admin`);
+  assert.ok(!allHosts(venue, []).includes(hostFor(venue, venue.adminLabel)));
+  const own = { ...venue, adminOwnHost: true, adminLabel: "pachakava-admin" };
+  assert.equal(adminUrl(own), "https://pachakava-admin.example.com");
+  assert.ok(allHosts(own, []).includes("pachakava-admin.example.com"));
+  const ownCfg = buildGatewayConfig({ venue: own, access: openState(dir).access.get(), games: [], coreUrl: "http://core", boxVersion: "x", setupRequired: false });
+  assert.deepEqual(ownCfg.routes.filter((x) => x.kind === "admin").map((x) => [x.host, x.path]), [["pachakava-admin.example.com", undefined]]);
 });

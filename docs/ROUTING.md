@@ -59,3 +59,17 @@ for the admin.
 - Reserved names (a game can't take them): admin, api, internal, health, assets.
 - Same origin means shared cookies and storage: games must key storage per game (the kit's
   session store already does) and scope their cookies to their prefix.
+
+## As built (box 0.11.0): the admin
+- Default: the admin is at `<play host>/admin` (route `path: "/admin"`, kind admin). Its old
+  hostname gets a 301 route there and leaves the DNS list.
+- Option (Venue → Addresses, `adminOwnHost`): its own hostname from `adminLabel`, suggested
+  as `<play label>-admin` (one level deep). This is the security recommendation, and the
+  setup for client boxes.
+- Core serves the admin page with the prefix injected (from the gateway's `X-Forwarded-Prefix`)
+  and scopes its session cookie (`bg_admin`) to `/admin/`. The gateway also strips that cookie
+  from every non-admin request.
+- From the LAN by IP, the admin answers at the root and at `/admin`.
+- Known trade-off (accepted 2026-11-12, decided again at the admin-hostname option): on one
+  hostname a game page's script can call `/admin/api/*` with the staff's session, and can read
+  other games' localStorage.

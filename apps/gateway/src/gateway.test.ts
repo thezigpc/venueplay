@@ -253,9 +253,9 @@ test("path routing (SDK 0.10.0): a game under /<id> on the venue hostname, WebSo
   assert.deepEqual(stripPrefix("/bingo", "/bingo?y=1"), { redirect: "/bingo/?y=1" });
   assert.deepEqual(stripPrefix("/bingo", "/bingoextra/x"), {});
 
-  const seen: { url?: string; prefix?: string }[] = [];
+  const seen: { url?: string; prefix?: string; cookie?: string; proof?: string }[] = [];
   const upstream = createServer((req, res) => {
-    seen.push({ url: req.url, prefix: req.headers["x-forwarded-prefix"] as string | undefined });
+    seen.push({ url: req.url, prefix: req.headers["x-forwarded-prefix"] as string | undefined, cookie: req.headers.cookie, proof: req.headers["x-bargames-gateway"] as string | undefined });
     if (req.url === "/old") return void res.writeHead(302, { location: "/new" }).end();
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("game");
@@ -274,6 +274,7 @@ test("path routing (SDK 0.10.0): a game under /<id> on the venue hostname, WebSo
     venue,
     routes: [
       { host: "play.example.com", kind: "hub", enabled: true, injectTheme: false },
+      { host: "play.example.com", path: "/admin", kind: "admin", target, enabled: true, injectTheme: false },
       { host: "play.example.com", path: "/bingo", kind: "game", gameId: "bingo", target, enabled: true, injectTheme: false },
       { host: "bingo.example.com", kind: "game", gameId: "bingo", enabled: true, injectTheme: false, redirectTo: "https://play.example.com/bingo" },
       { host: "admin.example.com", kind: "admin", target, enabled: true, injectTheme: false },
@@ -299,7 +300,7 @@ test("path routing (SDK 0.10.0): a game under /<id> on the venue hostname, WebSo
   try {
     let r = await get("play.example.com", "/bingo/api/rooms?x=1", { "x-forwarded-prefix": "/evil" });
     assert.equal(r.body, "game");
-    assert.deepEqual(seen.at(-1), { url: "/api/rooms?x=1", prefix: "/bingo" });
+    assert.deepEqual(seen.at(-1), { url: "/api/rooms?x=1", prefix: "/bingo", cookie: undefined, proof: undefined });
     r = await get("play.example.com", "/bingo?a=1");
     assert.equal(r.status, 302);
     assert.equal(r.headers.location, "/bingo/?a=1");
@@ -315,6 +316,18 @@ test("path routing (SDK 0.10.0): a game under /<id> on the venue hostname, WebSo
     r = await get("bingo.example.com", "/join/AB?x=1");
     assert.equal(r.status, 301);
     assert.equal(r.headers.location, "https://play.example.com/bingo/join/AB?x=1");
+
+    // Admin at /admin on the same hostname: core gets the prefix, the proof and its cookie...
+    r = await get("play.example.com", "/admin/api/venue", { cookie: "bg_admin=sess; x=1" });
+    assert.deepEqual(seen.at(-1), { url: "/api/venue", prefix: "/admin", cookie: "bg_admin=sess; x=1", proof: "core-tok" });
+    // ...and a game never sees the admin's session cookie.
+    r = await get("play.example.com", "/bingo/", { cookie: "bg_admin=sess; x=1" });
+    assert.equal(seen.at(-1)!.cookie, "x=1");
+    // By IP from the LAN: the admin at the root, and at /admin.
+    r = await get("192.168.77.13", "/admin/api/venue");
+    assert.deepEqual([seen.at(-1)!.url, seen.at(-1)!.prefix], ["/api/venue", "/admin"]);
+    r = await get("192.168.77.13", "/api/venue");
+    assert.deepEqual([seen.at(-1)!.url, seen.at(-1)!.prefix], ["/api/venue", undefined]);
 
     // Staff sign-in link on a path: lands back on the game's own path.
     const t = signToken("core-tok", "staff-link", Date.now() + 60_000, "n-path");

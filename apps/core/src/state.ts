@@ -20,6 +20,12 @@ export interface VenueSettings {
   /** {game} value used for the landing page and the admin UI. */
   playLabel: string;
   adminLabel: string;
+  /**
+   * The admin on its own hostname (adminLabel, e.g. "pachakava-admin") instead of /admin on the
+   * games list's hostname (the default). Recommended for security: on one hostname any game
+   * page can act as signed-in staff (browsers isolate by hostname, not path).
+   */
+  adminOwnHost?: boolean;
   /** Short venue slug for the {venue} token. */
   slug: string;
   /**

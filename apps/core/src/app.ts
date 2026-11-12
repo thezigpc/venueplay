@@ -24,6 +24,8 @@ import {
   PATHS,
   isApp,
   joinUrl,
+  injectBasePath,
+  normalizeBasePath,
 } from "@bargames/sdk";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -399,9 +401,13 @@ export function createApp(d: AppDeps) {
     return domain && domain !== "localhost" && host.endsWith(`.${domain}`) ? domain : undefined;
   };
 
+  /** The admin's path prefix ("/admin" on the games list's hostname), from the gateway; "" at a hostname's root. */
+  const adminPrefix = (req: Request) => normalizeBasePath(String(req.headers["x-forwarded-prefix"] ?? ""));
+
   const login = (req: Request, res: Response) => {
     const secure = req.headers["x-forwarded-proto"] === "https";
-    res.cookie(ADMIN_COOKIE, d.auth.issue(), { httpOnly: true, sameSite: "strict", secure, maxAge: 12 * 3600e3, path: "/" });
+    // Under /admin the session cookie is scoped to it, so browsing games doesn't send it around.
+    res.cookie(ADMIN_COOKIE, d.auth.issue(), { httpOnly: true, sameSite: "strict", secure, maxAge: 12 * 3600e3, path: `${adminPrefix(req)}/` });
     // Signed in here = signed in to every game's and app's own admin (SDK 0.7.0+): the
     // gateway checks this cookie and tells games "staff", never passing the cookie on.
     const domain = staffCookieDomain(req);
@@ -437,6 +443,7 @@ export function createApp(d: AppDeps) {
   });
 
   app.post("/api/auth/logout", (req, res) => {
+    res.clearCookie(ADMIN_COOKIE, { path: `${adminPrefix(req)}/` });
     res.clearCookie(ADMIN_COOKIE, { path: "/" });
     const domain = staffCookieDomain(req);
     if (domain) res.clearCookie(STAFF_COOKIE, { path: "/", domain });
@@ -1010,9 +1017,9 @@ export function createApp(d: AppDeps) {
   // ------------------------------------------------------------ venue
 
   const venueView = (v: VenueSettings) => {
-    const hosts = { play: hostFor(v, v.playLabel), admin: hostFor(v, v.adminLabel) };
+    const hosts = { play: hostFor(v, v.playLabel), admin: v.adminOwnHost ? hostFor(v, v.adminLabel) : `${hostFor(v, v.playLabel)}/admin` };
     const warnings = [...checkTheme(v.theme)];
-    for (const host of [hosts.play, hosts.admin, ...d.games.list().map((g) => gameHost(v, g))]) {
+    for (const host of [hosts.play, ...(v.adminOwnHost ? [hosts.admin] : []), ...d.games.list().map((g) => gameHost(v, g))]) {
       const w = certificateWarning(host, v.domain);
       if (w) warnings.push(w);
     }
@@ -1028,7 +1035,7 @@ export function createApp(d: AppDeps) {
       const b = req.body as Partial<VenueSettings>;
       const next: VenueSettings = {
         ...cur,
-        ...pick(b, ["name", "theme", "wifi", "domain", "hostnamePattern", "playLabel", "adminLabel", "slug", "publicScheme", "publicPort", "location", "timezone", "units", "idleModule"]),
+        ...pick(b, ["name", "theme", "wifi", "domain", "hostnamePattern", "playLabel", "adminLabel", "adminOwnHost", "slug", "publicScheme", "publicPort", "location", "timezone", "units", "idleModule"]),
       };
       const venueProblem = checkVenueExtras(next, (id) => d.games.get(id));
       if (venueProblem) throw new HttpError(400, venueProblem);
@@ -1724,7 +1731,13 @@ export function createApp(d: AppDeps) {
 
   if (existsSync(d.config.adminDist)) {
     app.use(express.static(d.config.adminDist, { index: false }));
-    app.get(/^\/(?!api\/|internal\/).*/, (_req, res) => res.sendFile(path.join(d.config.adminDist, "index.html")));
+    // The page carries its prefix ("/admin" on the games list's hostname) so its relative
+    // assets and API calls resolve under it. A missing asset is a 404, never the page.
+    const indexFile = path.join(d.config.adminDist, "index.html");
+    app.get(/^\/(?!api\/|internal\/).*/, (req, res, next) => {
+      if (req.path.startsWith("/assets/")) return next();
+      res.set("cache-control", "no-cache").type("html").send(injectBasePath(readFileSync(indexFile, "utf8"), adminPrefix(req)));
+    });
   }
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

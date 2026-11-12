@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { bgUrl } from "@bargames/sdk";
 import { api, type SystemStats } from "../api";
 
 const gb = (b?: number) => (b === undefined ? "?" : b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
@@ -64,7 +65,7 @@ export function SystemPage() {
       const started = Date.now();
       let wentDown = false;
       const poll = setInterval(() => {
-        fetch("/health", { cache: "no-store" })
+        fetch(bgUrl("/health"), { cache: "no-store" })
           .then((x) => {
             if (x.ok && (wentDown || Date.now() - started > 90_000)) {
               clearInterval(poll);

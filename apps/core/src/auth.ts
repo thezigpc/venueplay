@@ -1,7 +1,8 @@
 import type { JsonStore } from "@bargames/common";
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
-export const ADMIN_COOKIE = "bg_admin";
+export { ADMIN_COOKIE } from "@bargames/common";
+import { ADMIN_COOKIE } from "@bargames/common";
 const SESSION_MS = 12 * 60 * 60 * 1000;
 
 /** Admin login for the iPad/admin UI. One password for now; roles come later. */

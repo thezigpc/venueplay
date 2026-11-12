@@ -109,9 +109,16 @@ export function buildGatewayConfig(input: {
   const { venue, access, games } = input;
   const extras: VenueExtras = { games, announcement: input.announcement, countdown: input.countdown, leaderboards: input.leaderboards };
   const routes: GatewayRoute[] = [
-    { host: hostFor(venue, venue.adminLabel), kind: "admin", target: input.coreUrl, enabled: true, injectTheme: false },
+    // The admin: /admin on the games list's hostname (default), or its own hostname.
+    venue.adminOwnHost
+      ? { host: hostFor(venue, venue.adminLabel), kind: "admin", target: input.coreUrl, enabled: true, injectTheme: false }
+      : { host: hostFor(venue, venue.playLabel), path: "/admin", kind: "admin", target: input.coreUrl, enabled: true, injectTheme: false },
     { host: hostFor(venue, venue.playLabel), kind: "hub", enabled: true, injectTheme: false },
   ];
+  // The admin moved to /admin: its old hostname redirects there while it still resolves.
+  if (!venue.adminOwnHost && hostFor(venue, venue.adminLabel) !== hostFor(venue, venue.playLabel)) {
+    routes.push({ host: hostFor(venue, venue.adminLabel), kind: "admin", enabled: true, injectTheme: false, redirectTo: adminUrl(venue) });
+  }
   const contexts: Record<string, VenueContext> = {};
   const hub: HubGame[] = [];
   for (const g of games) {
@@ -142,11 +149,16 @@ export function buildGatewayConfig(input: {
     contexts,
     hub: { games: hub },
     setupRequired: input.setupRequired,
-    adminUrl: publicUrl(venue, hostFor(venue, venue.adminLabel)),
+    adminUrl: adminUrl(venue),
   };
 }
 
 /** Every hostname the box serves: admin, landing page, then each game. */
 export function allHosts(venue: VenueSettings, games: InstalledGame[]): string[] {
-  return [...new Set([hostFor(venue, venue.adminLabel), hostFor(venue, venue.playLabel), ...games.map((g) => gameHost(venue, g))])];
+  return [...new Set([...(venue.adminOwnHost ? [hostFor(venue, venue.adminLabel)] : []), hostFor(venue, venue.playLabel), ...games.map((g) => gameHost(venue, g))])];
+}
+
+/** The admin's address: https://play.example.com/admin, or its own hostname. */
+export function adminUrl(venue: VenueSettings): string {
+  return venue.adminOwnHost ? publicUrl(venue, hostFor(venue, venue.adminLabel)) : `${publicUrl(venue, hostFor(venue, venue.playLabel))}/admin`;
 }

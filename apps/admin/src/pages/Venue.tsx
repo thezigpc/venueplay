@@ -202,8 +202,33 @@ export function VenuePage() {
           </select>
         </label>
         <input value={v.hostnamePattern} onChange={(e) => set("hostnamePattern", e.target.value)} />
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={Boolean(v.adminOwnHost)}
+            onChange={(e) => {
+              const on = e.target.checked;
+              // Suggest "<games list name>-admin": one level deep, so the free certificate covers it.
+              const label = on && v.adminLabel === "admin" && v.playLabel !== "play" ? `${v.playLabel}-admin` : v.adminLabel;
+              setV({ ...v, adminOwnHost: on, adminLabel: label });
+            }}
+          />
+          Give the admin its own hostname (recommended)
+          <small className="muted">
+            Off: the admin is at /admin on the games list's address, with no extra DNS record. On: it gets its own hostname, so no game page can act as signed-in staff (browsers keep hostnames apart, not paths).
+          </small>
+        </label>
+        {v.adminOwnHost && (
+          <label>
+            Admin hostname name
+            <input value={v.adminLabel} onChange={(e) => set("adminLabel", e.target.value.toLowerCase())} autoCapitalize="none" placeholder={`${v.playLabel}-admin`} />
+          </label>
+        )}
         <p className="muted">
           Landing page: <b>{view.data?.hosts.play}</b> · Admin: <b>{view.data?.hosts.admin}</b>
+        </p>
+        <p className="muted">
+          <small>Moving the admin signs you out here: sign in again at its new address.</small>
         </p>
         {(view.data?.warnings ?? []).map((w) => (
           <p key={w} className="warn">

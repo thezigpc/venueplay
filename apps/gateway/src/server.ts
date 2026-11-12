@@ -1,4 +1,4 @@
-import { GATEWAY_PROOF_HEADER, signToken, STAFF_COOKIE, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
+import { ADMIN_COOKIE, GATEWAY_PROOF_HEADER, signToken, STAFF_COOKIE, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
 import { GAMES_LINK_CSS, gamesLinkHtml, HEADERS, PATHS, themeToCss, type VenueContext } from "@bargames/sdk";
 import httpProxy from "http-proxy";
 import { createHmac, randomBytes } from "node:crypto";
@@ -113,7 +113,8 @@ export function createGateway(d: GatewayDeps) {
     req.headers[HEADERS.via] = "1";
     // Staff: the game hears "staff", never the cookie (a game could replay it elsewhere).
     if (isStaff(req)) req.headers[HEADERS.staff] = "1";
-    const cookies = withoutCookie(req.headers.cookie, STAFF_COOKIE);
+    // Games never see the box admin's session either (it's scoped to /admin, but be sure).
+    const cookies = route.kind === "admin" ? withoutCookie(req.headers.cookie, STAFF_COOKIE) : withoutCookie(withoutCookie(req.headers.cookie, STAFF_COOKIE), ADMIN_COOKIE);
     if (cookies) req.headers.cookie = cookies;
     else delete req.headers.cookie;
     if (decision.clientIp) req.headers[HEADERS.clientIp] = decision.clientIp;
@@ -272,10 +273,14 @@ function findRoute(cfg: GatewayConfig, req: IncomingMessage): GatewayRoute | und
  * admin console: first-run setup, then login. Never via the tunnel.
  */
 function consoleRoute(cfg: GatewayConfig, req: IncomingMessage): GatewayRoute | undefined {
-  const admin = cfg.routes.find((r) => r.kind === "admin");
+  const admin = cfg.routes.find((r) => r.kind === "admin" && !r.redirectTo);
   if (!admin) return undefined;
   const local = checkAccess({ cfIp: header(req, "cf-connecting-ip"), remote: req.socket.remoteAddress }, { venueCidrs: [], whitelist: [] });
-  return local.reason === "local" ? { ...admin, host: "" } : undefined;
+  if (local.reason !== "local") return undefined;
+  // By IP the admin answers at the root, and at /admin too (the address staff learn).
+  const p = (req.url ?? "/").split("?")[0];
+  const { path: _p, redirectTo: _r, ...rest } = admin;
+  return p === "/admin" || p.startsWith("/admin/") ? { ...rest, host: "", path: "/admin" } : { ...rest, host: "" };
 }
 
 function header(req: IncomingMessage, name: string): string | undefined {

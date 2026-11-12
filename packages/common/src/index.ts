@@ -93,6 +93,8 @@ export function verifyToken(secret: string, kind: string, token: string | undefi
 
 /** The venue-wide staff cookie (gateway-signed "staff" token): staff signed in to the box admin. */
 export const STAFF_COOKIE = "bg_staff";
+/** The box admin's session cookie (core). The gateway never passes it to a game. */
+export const ADMIN_COOKIE = "bg_admin";
 /** Staff cookies last as long as a box admin login. */
 export const STAFF_TTL_MS = 12 * 3600e3;
 

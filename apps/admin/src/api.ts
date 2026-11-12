@@ -1,3 +1,4 @@
+import { bgUrl } from "@bargames/sdk";
 import type { BarGamesEvent, GameBranding, GameManifest, VenueContext, VenueLocation, VenueTheme, WifiInfo } from "@bargames/sdk";
 
 export class ApiError extends Error {
@@ -10,7 +11,7 @@ export class ApiError extends Error {
 }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(bgUrl(`/api${path}`), {
     method,
     headers: body ? { "content-type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -29,6 +30,8 @@ export interface Venue {
   hostnamePattern: string;
   playLabel: string;
   adminLabel: string;
+  /** The admin on its own hostname instead of /admin on the games list's (security recommendation). */
+  adminOwnHost?: boolean;
   slug: string;
   publicScheme: "https" | "http";
   publicPort?: number | null;
@@ -288,7 +291,7 @@ export const api = {
   key: (id: string, key: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/key`, { key }),
   typeText: (id: string, text: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/text`, { text }),
   /** For <img src>: changes every call so the browser fetches a fresh picture. */
-  previewUrl: (id: string) => `/api/broker/displays/${encodeURIComponent(id)}/preview?t=${Date.now()}`,
+  previewUrl: (id: string) => bgUrl(`/api/broker/displays/${encodeURIComponent(id)}/preview?t=${Date.now()}`),
   power: (id: string, on: boolean) => call("POST", `/broker/displays/${encodeURIComponent(id)}/power`, { on }),
   pair: (id: string, code?: string) => call<ShowResult>("POST", `/broker/displays/${encodeURIComponent(id)}/pair`, code ? { code } : {}),
   command: (id: string, body: { command: string; roomCode?: string; args?: Record<string, unknown> }) =>
