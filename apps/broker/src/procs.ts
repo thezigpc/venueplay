@@ -89,33 +89,44 @@ export class NodeProcRunner implements ProcRunner {
     return sleep(ms);
   }
 
-  /** Page.captureScreenshot over Chromium's DevTools (127.0.0.1 only), scaled down, as JPEG. */
+  /**
+   * A small JPEG of the page over Chromium's DevTools (127.0.0.1 only), for previews.
+   *
+   * Never Page.captureScreenshot with a clip scale: Chromium re-renders the live page at that
+   * scale to take it, and the TV (this same window is what's streamed) flashes a small copy
+   * in the corner. A screencast frame is scaled by the compositor without touching the page.
+   * If no frame comes (some builds only send one on a change), a full-size screenshot, unscaled.
+   */
   async screenshot(debugPort: number, size: { width: number; height: number }, outWidth: number): Promise<Buffer> {
     const targets = (await (await fetch(`http://127.0.0.1:${debugPort}/json/list`, { signal: AbortSignal.timeout(3000) })).json()) as { type: string; webSocketDebuggerUrl?: string }[];
     const page = targets.find((t) => t.type === "page" && t.webSocketDebuggerUrl);
     if (!page) throw new Error("no page to capture");
     const ws = new WebSocket(page.webSocketDebuggerUrl!);
+    const maxWidth = Math.min(size.width, outWidth);
+    const maxHeight = Math.round((size.height * maxWidth) / size.width);
     try {
       const data = await new Promise<string>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("screenshot timed out")), 5000);
-        ws.onerror = () => {
+        let fallback: ReturnType<typeof setTimeout> | undefined;
+        const done = (fn: () => void) => {
           clearTimeout(timer);
-          reject(new Error("DevTools connection failed"));
+          clearTimeout(fallback);
+          fn();
         };
-        ws.onopen = () =>
-          ws.send(
-            JSON.stringify({
-              id: 1,
-              method: "Page.captureScreenshot",
-              params: { format: "jpeg", quality: 60, clip: { x: 0, y: 0, width: size.width, height: size.height, scale: Math.min(1, outWidth / size.width) } },
-            }),
-          );
+        ws.onerror = () => done(() => reject(new Error("DevTools connection failed")));
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ id: 1, method: "Page.startScreencast", params: { format: "jpeg", quality: 60, maxWidth, maxHeight, everyNthFrame: 1 } }));
+          fallback = setTimeout(() => ws.send(JSON.stringify({ id: 3, method: "Page.captureScreenshot", params: { format: "jpeg", quality: 50 } })), 1500);
+        };
         ws.onmessage = (ev) => {
-          const msg = JSON.parse(String(ev.data)) as { id?: number; result?: { data?: string }; error?: { message?: string } };
-          if (msg.id !== 1) return;
-          clearTimeout(timer);
-          if (msg.result?.data) resolve(msg.result.data);
-          else reject(new Error(msg.error?.message ?? "no image"));
+          const msg = JSON.parse(String(ev.data)) as { id?: number; method?: string; params?: { data?: string; sessionId?: number }; result?: { data?: string }; error?: { message?: string } };
+          if (msg.method === "Page.screencastFrame" && msg.params?.data) {
+            const frame = msg.params.data;
+            ws.send(JSON.stringify({ id: 2, method: "Page.screencastFrameAck", params: { sessionId: msg.params.sessionId } }));
+            ws.send(JSON.stringify({ id: 4, method: "Page.stopScreencast" }));
+            return done(() => resolve(frame));
+          }
+          if (msg.id === 3) done(() => (msg.result?.data ? resolve(msg.result.data) : reject(new Error(msg.error?.message ?? "no image"))));
         };
       });
       return Buffer.from(data, "base64");

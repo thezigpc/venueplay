@@ -636,6 +636,7 @@ test("0.9.0 media providers: TVs for providers, launch rules, play/stop from the
     if (url === "http://yt/__bargames/command") {
       commands.push(body);
       if (body.command === "media_list") return reply({ ok: true, data: { items: [{ id: "L1", name: "Friday mix", kind: "list" }, { id: "P1", name: "Saturday", kind: "plan" }] } });
+      if (body.command === "media_play" && (body.args as { itemId?: string } | undefined)?.itemId === "BAD") return reply({ ok: false, message: "no such list" });
       if (body.command === "media_play") return reply({ ok: true, data: { ok: true, pending: true, launched: true } });
       if (body.command === "media_stop") return reply({ ok: true });
     }
@@ -679,6 +680,11 @@ test("0.9.0 media providers: TVs for providers, launch rules, play/stop from the
     assert.ok(brokerCalls.includes("/displays/tv1/external"), "the TV is recorded as showing YouTube");
     await b.json("POST", "/api/media/youtube/play", { itemId: "P1" }, b.authed);
     assert.deepEqual(commands.at(-1)?.args, { itemId: "P1", takeBack: true }, "plans have no displayId");
+    // A failed play on a TV: the box's cast was stopped first, so the idle screen goes back.
+    const before = b.shows.length;
+    assert.equal(((await (await b.json("POST", "/api/media/youtube/play", { displayId: "tv1", itemId: "BAD" }, b.authed)).json()) as { ok: boolean }).ok, false);
+    assert.equal(b.shows.length, before + 1);
+    assert.equal(b.shows.at(-1)?.content.kind, "idle");
 
     const shows = b.shows.length;
     assert.equal(((await (await b.json("POST", "/api/media/youtube/stop", { displayId: "tv1" }, b.authed)).json()) as { ok: boolean }).ok, true);

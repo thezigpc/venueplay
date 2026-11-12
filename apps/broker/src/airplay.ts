@@ -316,7 +316,7 @@ export class AirplayStreams implements StreamService {
       await runner.sleep(200);
     }
     this.channels.set(ch.key, ch);
-    this.o.log.info("airplay", "channel opened", { url, display, size: `${width}x${height}`, fps: profile.fps, bitrateKbps: profile.bitrateKbps || "auto" });
+    this.o.log.info("airplay", "channel opened", { url: logUrl(url), display, size: `${width}x${height}`, fps: profile.fps, bitrateKbps: profile.bitrateKbps || "auto" });
     return ch;
   }
 
@@ -334,7 +334,7 @@ export class AirplayStreams implements StreamService {
     for (const p of [ch.procs.daemon, ch.procs.chrome, ch.procs.xvfb]) p.kill();
     for (const id of ch.targets.keys()) this.member.delete(id);
     this.channels.delete(ch.key);
-    this.o.log.info("airplay", "channel closed", { url: ch.url });
+    this.o.log.info("airplay", "channel closed", { url: logUrl(ch.url) });
   }
 
   private async leave(deviceId: string): Promise<void> {
@@ -407,11 +407,11 @@ export class AirplayStreams implements StreamService {
       const { xvfb, chrome, daemon } = ch.procs;
       if (!xvfb.alive || !chrome.alive || !daemon.alive) {
         const dead = Object.entries(ch.procs).filter(([, p]) => !p.alive).map(([k, p]) => `${k}: ${p.tail().slice(-2).join(" | ")}`);
-        this.o.log.warn("airplay", "channel died, restarting", { url: ch.url, dead });
+        this.o.log.warn("airplay", "channel died, restarting", { url: logUrl(ch.url), dead });
         const targets = [...ch.targets.entries()];
         this.close(ch);
         const fresh = await this.open(ch.url, ch.profile).catch((err: Error) => {
-          this.o.log.error("airplay", "channel restart failed", { url: ch.url, err: err.message });
+          this.o.log.error("airplay", "channel restart failed", { url: logUrl(ch.url), err: err.message });
           return undefined;
         });
         if (!fresh) continue;
@@ -441,4 +441,9 @@ export class AirplayStreams implements StreamService {
 
 function channelKey(url: string, p: Profile): string {
   return `${p.width}x${p.height}@${p.fps}/${p.bitrateKbps}|${url}`;
+}
+
+/** A page address for the log: data: pages (the idle screen) are kilobytes long. */
+function logUrl(url: string): string {
+  return url.startsWith("data:") ? `data: page (${url.length} chars)` : url.slice(0, 200);
 }

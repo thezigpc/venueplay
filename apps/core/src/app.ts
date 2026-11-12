@@ -568,11 +568,19 @@ export function createApp(d: AppDeps) {
       const { displayId, itemId } = (req.body ?? {}) as { displayId?: unknown; itemId?: unknown };
       if (typeof itemId !== "string" || !itemId) throw new HttpError(400, "itemId required");
       const args = { itemId, takeBack: true, ...(typeof displayId === "string" && displayId ? { displayId } : {}) };
-      const r = await gameCommand(game, { command: "media_play", args });
+      // Stop the box's own cast to that TV first: an AirPlay mirror (the idle screen) would
+      // reconnect over the app while it opens. Put the idle screen back if the play fails.
+      const onTv = typeof displayId === "string" && displayId ? displayId : undefined;
+      if (onTv) await brokerCall("POST", "/displays/" + encodeURIComponent(onTv) + "/external", { app: game.manifest.media!.launch[0] ?? game.id, provider: game.id }).catch(() => undefined);
+      const backToIdle = async () => {
+        if (onTv) await brokerCall("POST", "/show", { displayIds: [onTv], content: await idleContent() }).catch(() => undefined);
+      };
+      const r = await gameCommand(game, { command: "media_play", args }).catch(async (err: unknown) => {
+        await backToIdle();
+        throw err;
+      });
       const data = (r.result.data ?? {}) as { pending?: boolean; launched?: boolean };
-      if (r.result.ok && typeof displayId === "string" && displayId) {
-        await brokerCall("POST", "/displays/" + encodeURIComponent(displayId) + "/external", { app: game.manifest.media!.launch[0] ?? game.id, provider: game.id }).catch(() => undefined);
-      }
+      if (!r.result.ok) await backToIdle();
       if (r.result.ok) roomCache.boost(game.id);
       else void roomCache.refresh(game.id).catch(() => undefined);
       d.log.info("media", "play", { game: game.id, display: displayId, item: itemId, ok: r.result.ok, pending: data.pending });

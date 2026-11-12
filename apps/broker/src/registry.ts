@@ -125,9 +125,15 @@ export class DisplayRegistry {
     return r;
   }
 
-  /** Media providers: record that a TV now shows an app (no launch needed). */
+  /**
+   * Media providers: record that a TV now shows an app (no launch needed). Stops what the box
+   * was casting there: an AirPlay mirror left running reconnects and covers the app.
+   */
   async markExternal(id: string, provider: string, app: string, title?: string): Promise<void> {
-    if (!this.get(id)) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    const d = this.get(id);
+    if (!d) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    const drv = this.driverFor(d);
+    if (drv.streamState?.(d)) await drv.stop(d).catch(() => undefined);
     await this.setContent(id, { kind: "external", provider, app, ...(title ? { title } : {}) });
   }
 
