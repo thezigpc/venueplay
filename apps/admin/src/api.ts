@@ -164,7 +164,7 @@ export interface Display {
   capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[] };
   streamSettings?: StreamSettings;
   health?: { online: boolean; powerMode?: string; detail?: string };
-  content?: { kind: string; url?: string; title?: string };
+  content?: { kind: string; url?: string; title?: string; app?: string; provider?: string };
   stream?: { delivery: string; url: string; state: string; needsCode: boolean; detail?: string; settings?: string };
 }
 

@@ -1,62 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "./api";
-import { AccessPage } from "./pages/Access";
+import { go, useRoute, type Section } from "./nav";
 import { DisplaysPage } from "./pages/Displays";
-import { AppsPage, GamesPage } from "./pages/Games";
+import { GamesPage } from "./pages/Games";
 import { HomePage } from "./pages/Home";
-import { InternetPage } from "./pages/Internet";
-import { RoomsPage } from "./pages/Rooms";
-import { SystemPage } from "./pages/System";
-import { VenuePage } from "./pages/Venue";
+import { SettingsPage } from "./pages/Settings";
 
-const TABS = [
-  { id: "home", label: "Tonight" },
-  { id: "rooms", label: "Rooms" },
-  { id: "games", label: "Games" },
-  { id: "apps", label: "Apps" },
-  { id: "displays", label: "TVs" },
-  { id: "venue", label: "Venue" },
-  { id: "access", label: "Access" },
-  { id: "internet", label: "Internet" },
-  { id: "system", label: "System" },
-] as const;
-type Tab = (typeof TABS)[number]["id"];
+const NAV: { id: Section; label: string; icon: JSX.Element }[] = [
+  { id: "tonight", label: "Tonight", icon: <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z" /> },
+  { id: "tvs", label: "TVs", icon: <path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zM8 21h8M12 17v4" /> },
+  { id: "games", label: "Games", icon: <path d="M4 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM15 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM4 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1zM15 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z" /> },
+  { id: "settings", label: "Settings", icon: <path d="M4 6h8M18 6h2M4 12h2M12 12h8M4 18h10M20 18h0M16 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM10 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM18 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" /> },
+];
 
 export function App() {
   const [auth, setAuth] = useState<{ setup: boolean; loggedIn: boolean; canSetup: boolean } | null>(null);
-  // The tab lives in the address (#rooms), so the browser's Back/Forward move between tabs and a
-  // tab can be bookmarked; without one, the last tab used.
-  const fromHash = (): Tab | undefined => TABS.find((t) => `#${t.id}` === window.location.hash)?.id;
-  const [tab, setTabState] = useState<Tab>(() => {
-    try {
-      return fromHash() ?? ((localStorage.getItem("bg-tab") as Tab) || "home");
-    } catch {
-      return fromHash() ?? "home";
-    }
-  });
-  const setTab = (t: Tab) => {
-    if (window.location.hash !== `#${t}`) window.location.hash = t;
-    setTabState(t);
-  };
-  useEffect(() => {
-    const onHash = () => {
-      const t = fromHash();
-      if (t) setTabState(t);
-    };
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const route = useRoute();
 
   const refreshAuth = useCallback(() => api.authStatus().then(setAuth).catch(() => setAuth({ setup: true, loggedIn: false, canSetup: false })), []);
   useEffect(() => void refreshAuth(), [refreshAuth]);
-  useEffect(() => {
-    try {
-      localStorage.setItem("bg-tab", tab);
-    } catch {
-      /* private mode */
-    }
-  }, [tab]);
 
   if (!auth) return <div className="center">Loading…</div>;
   if (!auth.loggedIn && !auth.setup && !auth.canSetup)
@@ -70,29 +32,28 @@ export function App() {
 
   return (
     <div className="shell">
-      <nav className="tabs">
-        <button type="button" className="brand" onClick={() => setTab("home")} title="Home">
+      <nav className="rail" aria-label="Sections">
+        <button type="button" className="brand" onClick={() => go("tonight")} title="Tonight">
           Bar Games
         </button>
-        {TABS.map((t) => (
-          <button key={t.id} className={t.id === tab ? "active" : ""} onClick={() => setTab(t.id)}>
-            {t.label}
+        {NAV.map((n) => (
+          <button key={n.id} type="button" className={`rail-item${n.id === route.section ? " active" : ""}`} aria-current={n.id === route.section ? "page" : undefined} onClick={() => go(n.id)}>
+            <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {n.icon}
+            </svg>
+            {n.label}
           </button>
         ))}
-        <button className="ghost" onClick={() => api.logout().then(refreshAuth)}>
+        <span className="rail-gap" />
+        <button type="button" className="ghost rail-logout" onClick={() => api.logout().then(refreshAuth)}>
           Log out
         </button>
       </nav>
       <main>
-        {tab === "home" && <HomePage />}
-        {tab === "rooms" && <RoomsPage />}
-        {tab === "games" && <GamesPage />}
-        {tab === "apps" && <AppsPage />}
-        {tab === "displays" && <DisplaysPage />}
-        {tab === "internet" && <InternetPage />}
-        {tab === "system" && <SystemPage />}
-        {tab === "venue" && <VenuePage />}
-        {tab === "access" && <AccessPage />}
+        {route.section === "tonight" && <HomePage />}
+        {route.section === "tvs" && <DisplaysPage selected={route.rest[0]} tab={route.rest[1]} />}
+        {route.section === "games" && <GamesPage />}
+        {route.section === "settings" && <SettingsPage page={route.rest[0]} />}
       </main>
     </div>
   );

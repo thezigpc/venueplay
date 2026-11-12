@@ -3,92 +3,163 @@ import { useState } from "react";
 import { api, type Game, type UpdateInfo } from "../api";
 import { useAction, useLoad } from "../useLoad";
 
+/** Games and apps in one list: a row each, with the rarely needed settings behind "More". */
 export function GamesPage() {
-  return <CatalogPage kind="game" />;
-}
-
-/** Apps (SDK 0.6.0): menus, signage and other non-games. Installed and updated like games. */
-export function AppsPage() {
-  return <CatalogPage kind="app" />;
-}
-
-function CatalogPage({ kind }: { kind: "game" | "app" }) {
-  const app = kind === "app";
-  const noun = app ? "app" : "game";
-  const games = useLoad(api.games);
+  const games = useLoad(api.games, 15_000);
   const updates = useLoad(api.updates);
+  const rooms = useLoad(api.rooms, 15_000);
   const reloadAll = async () => {
     await Promise.all([games.reload(), updates.reload()]);
   };
   const { busy, run } = useAction(reloadAll, games.setError);
   const [checking, setChecking] = useState(false);
-  const available = (updates.data?.games ?? []).filter((u) => u.available);
+  const [adding, setAdding] = useState(false);
+  const [open, setOpen] = useState("");
   const [url, setUrl] = useState("");
   const [sub, setSub] = useState("");
   const [notes, setNotes] = useState<string[]>([]);
+  const all = games.data ?? [];
+  const updateOf = (g: Game) => updates.data?.games.find((u) => u.gameId === g.id);
+  const ready = all.filter((g) => {
+    const u = updateOf(g);
+    return u?.available && u.installed === g.manifest.version;
+  });
+  const openRooms = (id: string) => rooms.data?.games.find((g) => g.id === id)?.rooms.length ?? 0;
 
   const install = () =>
     run(async () => {
       const r = await api.install(url, sub.trim().toLowerCase());
-      const elsewhere = isApp(r.game.manifest) !== app ? ` It's ${app ? "a game" : "an app"}, so it's under ${app ? "Games" : "Apps"}.` : "";
-      setNotes([`${r.upgraded ? "Updated" : "Installed"} ${r.game.manifest.name} ${r.game.manifest.version}${r.game.verified ? "" : " (unverified source)"}.${elsewhere}`, ...r.warnings]);
+      setNotes([`${r.upgraded ? "Updated" : "Installed"} ${r.game.manifest.name} ${r.game.manifest.version}${r.game.verified ? "" : " (unverified source)"}. Turn it on in the list below.`, ...r.warnings]);
       setUrl("");
       setSub("");
     });
+  const check = () => {
+    setChecking(true);
+    api
+      .checkUpdates()
+      .then(() => updates.reload())
+      .catch((e: Error) => games.setError(e.message))
+      .finally(() => setChecking(false));
+  };
+
+  const list = (items: Game[]) =>
+    items.map((g) => (
+      <GameRow key={g.id} game={g} busy={busy} run={run} update={updateOf(g)} rooms={openRooms(g.id)} open={open === g.id} toggle={() => setOpen(open === g.id ? "" : g.id)} />
+    ));
+  const gamesOnly = all.filter((g) => !isApp(g.manifest));
+  const apps = all.filter((g) => isApp(g.manifest));
 
   return (
-    <div className="grid">
-      <section className="card wide">
-        <h2>Add {app ? "an app" : "a game"}</h2>
-        <p className="muted">
-          {app ? "Apps are the things that aren't games: the menu, signage, and more to come. " : ""}Paste a GitHub repo or a bargames.json URL. Leave the subdomain empty to use the {noun}'s id; you can change it later.
-        </p>
-        <div className="inline">
-          <input placeholder={`https://github.com/owner/${noun}`} value={url} onChange={(e) => setUrl(e.target.value)} />
-          <input placeholder="Subdomain (optional)" value={sub} onChange={(e) => setSub(e.target.value)} autoCapitalize="none" style={{ maxWidth: 200 }} />
-          <button className="primary" disabled={!url || busy} onClick={install}>
-            Install
-          </button>
-        </div>
-        {notes.map((n, i) => (
-          <p key={i} className={i ? "warn" : "ok"}>
-            {n}
-          </p>
-        ))}
-        {games.error && <p className="error">{games.error}</p>}
-        <div className="inline">
-          <button
-            disabled={checking || busy}
-            onClick={() => {
-              setChecking(true);
-              api
-                .checkUpdates()
-                .then(() => updates.reload())
-                .catch((e: Error) => games.setError(e.message))
-                .finally(() => setChecking(false));
-            }}
-          >
-            {checking ? "Checking…" : "Check for updates"}
-          </button>
-          <span className="muted">
-            {available.length ? `${available.length} update(s) available. ` : ""}
-            {updates.data?.lastRun ? `Last checked ${new Date(updates.data.lastRun).toLocaleString()}.` : "The box checks every 6 hours."}
-          </span>
-        </div>
-      </section>
-      {(games.data ?? []).filter((g) => isApp(g.manifest) === app).length === 0 && games.data && (
-        <section className="card">
-          <p className="muted">No {noun}s installed yet.</p>
+    <div>
+      <div className="page-head">
+        <h1>Games and apps</h1>
+        <button type="button" disabled={checking || busy} onClick={check}>
+          {checking ? "Checking…" : "Check for updates"}
+        </button>
+        <button type="button" className="primary" aria-expanded={adding} onClick={() => setAdding(!adding)}>
+          Add a game or app
+        </button>
+      </div>
+      {games.error && <p className="error">{games.error}</p>}
+
+      {adding && (
+        <section className="card stack-gap">
+          <h2>Add a game or app</h2>
+          <p className="muted">Paste a GitHub repo or a bargames.json address. Leave the name empty to use its id; you can change it later.</p>
+          <div className="inline">
+            <input placeholder="https://github.com/owner/game" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Repo or manifest address" />
+            <input placeholder="Address name (optional)" value={sub} onChange={(e) => setSub(e.target.value)} autoCapitalize="none" style={{ maxWidth: 220 }} aria-label="Address name" />
+            <button className="primary" disabled={!url || busy} onClick={install}>
+              Install
+            </button>
+          </div>
         </section>
       )}
-      {(games.data ?? []).filter((g) => isApp(g.manifest) === app).map((g) => (
-        <GameCard key={g.id} game={g} busy={busy} run={run} update={updates.data?.games.find((u) => u.gameId === g.id)} />
+      {notes.map((n, i) => (
+        <p key={i} className={i ? "warn" : "ok"}>
+          {n}
+        </p>
       ))}
+
+      {ready.length > 0 && (
+        <section className="card stack-gap update-ready">
+          <h2>
+            {ready.length} update{ready.length === 1 ? "" : "s"} ready
+          </h2>
+          {ready.map((g) => (
+            <div key={g.id}>
+              <UpdateBanner game={g} update={updateOf(g)} busy={busy} run={run} rooms={openRooms(g.id)} named />
+            </div>
+          ))}
+        </section>
+      )}
+
+      <section className="card game-list">
+        {all.length === 0 && games.data && <p className="muted">Nothing installed yet. Use "Add a game or app".</p>}
+        {gamesOnly.length > 0 && <h2 className="list-head">Games</h2>}
+        {list(gamesOnly)}
+        {apps.length > 0 && <h2 className="list-head">Apps</h2>}
+        {list(apps)}
+      </section>
+      <p className="muted small-print">
+        {updates.data?.lastRun ? `Updates last checked ${new Date(updates.data.lastRun).toLocaleString()}.` : "The box checks for updates every 6 hours."}
+      </p>
     </div>
   );
 }
 
-function UpdateBanner({ game, update, busy, run }: { game: Game; update?: UpdateInfo; busy: boolean; run: (fn: () => Promise<unknown>) => void }) {
+function GameRow({ game, busy, run, update, rooms, open, toggle }: { game: Game; busy: boolean; run: (fn: () => Promise<unknown>) => void; update?: UpdateInfo; rooms: number; open: boolean; toggle: () => void }) {
+  const name = game.context.game.displayName;
+  const url = game.context.game.publicUrl;
+  const hasUpdate = Boolean(update?.available && update.installed === game.manifest.version);
+  const state = !game.enabled ? "Turned off" : rooms ? `${rooms} open room${rooms === 1 ? "" : "s"}` : game.state && game.state !== "running" ? game.state : "";
+  const setOn = (on: boolean) => {
+    if (!on && rooms && !window.confirm(`Turn ${name} off? Its ${rooms} open room${rooms === 1 ? "" : "s"} will close.`)) return;
+    run(() => api.patchGame(game.id, { enabled: on }));
+  };
+  return (
+    <div className={`game-row-wrap${game.enabled ? "" : " off"}`}>
+      <div className="game-row">
+        {game.context.game.iconUrl ? (
+          <img className="game-icon" src={game.context.game.iconUrl} alt="" />
+        ) : (
+          <span className="game-icon" aria-hidden="true">
+            {name.slice(0, 1).toUpperCase()}
+          </span>
+        )}
+        <div className="game-main">
+          <b>{name}</b> <span className="muted">{game.manifest.version}</span>
+          <div className="muted game-sub">
+            {url ? (
+              <a href={url} target="_blank" rel="noreferrer">
+                {url.replace(/^https?:\/\//, "")}
+              </a>
+            ) : (
+              game.host
+            )}
+            {state ? ` · ${state}` : ""}
+          </div>
+        </div>
+        {hasUpdate ? <span className="pill warn">Update ready</span> : game.enabled && update && !update.error ? <span className="pill ok">Up to date</span> : null}
+        {adminPath(game.manifest) && game.enabled && <OpenSettings game={game} compact />}
+        <label className="toggle" title={game.enabled ? "On" : "Off"}>
+          <input type="checkbox" role="switch" checked={game.enabled} disabled={busy} onChange={(e) => setOn(e.target.checked)} aria-label={`${name} is ${game.enabled ? "on" : "off"}`} />
+          <span aria-hidden="true" />
+        </label>
+        <button type="button" className="ghost more" aria-expanded={open} aria-label={`More for ${name}`} onClick={toggle}>
+          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="2" />
+            <circle cx="12" cy="12" r="2" />
+            <circle cx="19" cy="12" r="2" />
+          </svg>
+        </button>
+      </div>
+      {open && <GameCard game={game} busy={busy} run={run} update={update} embedded />}
+    </div>
+  );
+}
+
+function UpdateBanner({ game, update, busy, run, rooms = 0, named = false }: { game: Game; update?: UpdateInfo; busy: boolean; run: (fn: () => Promise<unknown>) => void; rooms?: number; named?: boolean }) {
   const [done, setDone] = useState("");
   if (done) return <p className="ok">{done}</p>;
   if (!update || update.installed !== game.manifest.version) return null;
@@ -105,8 +176,10 @@ function UpdateBanner({ game, update, busy, run }: { game: Game; update?: Update
   return (
     <div className="inline update">
       <b>
-        Update available: {update.installed} → {update.latest}
+        {named ? `${game.context.game.displayName}: ` : "Update available: "}
+        {update.installed} to {update.latest}
       </b>
+      {named && game.enabled && <span className="muted">Restarts it{rooms ? ` and closes its ${rooms} open room${rooms === 1 ? "" : "s"}` : ""}.</span>}
       <button className="primary" disabled={busy} onClick={go}>
         Update
       </button>
@@ -119,7 +192,7 @@ function UpdateBanner({ game, update, busy, run }: { game: Game; update?: Update
  * Opens the game's/app's own admin page, signed in as staff (SDK 0.7.0 games skip their
  * own password; older ones still ask for it).
  */
-function OpenSettings({ game }: { game: Game }) {
+function OpenSettings({ game, compact = false }: { game: Game; compact?: boolean }) {
   const [note, setNote] = useState("");
   const open = () => {
     // Open the tab now (inside the tap), or iPad Safari blocks it as a pop-up.
@@ -136,6 +209,12 @@ function OpenSettings({ game }: { game: Game }) {
       },
     );
   };
+  if (compact)
+    return (
+      <button type="button" onClick={open} title={note || `Open ${game.context.game.displayName}'s own settings`}>
+        Settings
+      </button>
+    );
   return (
     <p>
       <button type="button" onClick={open}>
@@ -197,7 +276,7 @@ function SecretSettings({ game }: { game: Game }) {
   );
 }
 
-function GameCard({ game, busy, run, update }: { game: Game; busy: boolean; run: (fn: () => Promise<unknown>) => void; update?: UpdateInfo }) {
+function GameCard({ game, busy, run, update, embedded = false }: { game: Game; busy: boolean; run: (fn: () => Promise<unknown>) => void; update?: UpdateInfo; embedded?: boolean }) {
   const slots = new Set(game.manifest.brandable);
   const [name, setName] = useState(game.branding.displayName ?? "");
   const [tagline, setTagline] = useState(game.branding.tagline ?? "");
@@ -212,23 +291,25 @@ function GameCard({ game, busy, run, update }: { game: Game; busy: boolean; run:
   const url = game.context.game.publicUrl;
 
   return (
-    <section className="card">
-      <h2>
-        {url ? (
-          <a href={url} target="_blank" rel="noreferrer" title="Open the game's site">
-            {game.context.game.displayName} ↗
-          </a>
-        ) : (
-          game.context.game.displayName
-        )}{" "}
-        <small>{game.manifest.version}</small>
-      </h2>
+    <section className={embedded ? "game-detail" : "card"}>
+      {!embedded && (
+        <h2>
+          {url ? (
+            <a href={url} target="_blank" rel="noreferrer" title="Open the game's site">
+              {game.context.game.displayName} ↗
+            </a>
+          ) : (
+            game.context.game.displayName
+          )}{" "}
+          <small>{game.manifest.version}</small>
+        </h2>
+      )}
       <p className="muted">
         {isApp(game.manifest) ? "App · " : ""}
         {game.host} · SDK level {game.manifest.sdk.level} · {game.state} · {game.verified ? "verified" : <span className="warn">unverified source</span>}
       </p>
       <UpdateBanner game={game} update={update} busy={busy} run={run} />
-      {adminPath(game.manifest) && <OpenSettings game={game} />}
+      {!embedded && adminPath(game.manifest) && <OpenSettings game={game} />}
       <SecretSettings game={game} />
       {slots.has("displayName") && (
         <label>
@@ -282,9 +363,11 @@ function GameCard({ game, busy, run, update }: { game: Game; busy: boolean; run:
         >
           Save
         </button>
+        {!embedded && (
         <button disabled={busy} onClick={() => run(() => api.patchGame(game.id, { enabled: !game.enabled }))}>
           {game.enabled ? "Turn off" : "Turn on"}
         </button>
+        )}
         <button className="danger" disabled={busy} onClick={() => confirm(`Remove ${game.manifest.name}? Its data is kept.`) && run(() => api.removeGame(game.id))}>
           Remove
         </button>

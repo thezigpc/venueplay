@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { isApp } from "@bargames/sdk";
 import { MediaControls, useMediaItems } from "./MediaControls";
-import { Remote } from "./Remote";
+import { Remote, TvApps } from "./Remote";
+import { go } from "../nav";
 import { api, type CastSettings, type Display, type Game, type MediaProvider, type StartupRule, type StreamSettings } from "../api";
 
 const PREVIEWS_KEY = "bargames.tvPreviews";
-const readPreviews = () => {
+export const readPreviews = () => {
   try {
     return localStorage.getItem(PREVIEWS_KEY) !== "off";
   } catch {
@@ -14,7 +15,7 @@ const readPreviews = () => {
 };
 import { useAction, useLoad } from "../useLoad";
 
-export function DisplaysPage() {
+export function DisplaysPage({ selected, tab }: { selected?: string; tab?: string }) {
   const displays = useLoad(api.displays, 10_000);
   const startup = useLoad(api.tvStartup);
   const media = useLoad(api.media, 5000);
@@ -23,8 +24,8 @@ export function DisplaysPage() {
     await Promise.all([displays.reload(), startup.reload()]);
   };
   const { busy, run } = useAction(reloadAll, displays.setError);
-  const [host, setHost] = useState("");
-  const [kind, setKind] = useState<"roku" | "airplay">("roku");
+  const [adding, setAdding] = useState(false);
+  const [group, setGroup] = useState("");
   const [note, setNote] = useState("");
   const [previews, setPreviews] = useState(readPreviews);
   const togglePreviews = (on: boolean) => {
@@ -35,61 +36,56 @@ export function DisplaysPage() {
       /* this iPad only */
     }
   };
+  const list = displays.data ?? [];
+  const groups = [...new Set(list.map((d) => d.group).filter(Boolean))] as string[];
+  const shown = list.filter((d) => !group || d.group === group);
+  const sel = list.find((d) => d.id === selected);
+  const providers = media.data?.providers ?? [];
 
   return (
-    <div className="grid">
-      <section className="card wide">
-        <h2>TVs</h2>
-        <div className="buttons">
-          <button
-            className="primary"
-            disabled={busy}
-            onClick={() =>
-              run(async () => {
-                const r = await api.discover();
-                setNote(`Found ${r.found} device(s).${r.errors.length ? ` Problems: ${r.errors.join("; ")}` : ""}`);
-              })
-            }
-          >
-            Find TVs
+    <div className={`tv-layout${sel ? " has-panel" : ""}`}>
+      <div className="tv-main">
+        <div className="page-head">
+          <h1>TVs</h1>
+          <button type="button" disabled={busy || !list.length} onClick={() => run(async () => void (await api.idleTvs(), setNote("Every TV is on the idle screen.")))}>
+            All to idle screen
           </button>
-          <select value={kind} onChange={(e) => setKind(e.target.value as "roku" | "airplay")}>
-            <option value="roku">Roku</option>
-            <option value="airplay">AirPlay (Apple TV, AirPlay TV)</option>
-          </select>
-          <input placeholder="Add by IP" value={host} onChange={(e) => setHost(e.target.value)} />
-          <button disabled={!host || busy} onClick={() => run(() => (kind === "roku" ? api.addRoku(host) : api.addAirplay(host)).then(() => setHost("")))}>
-            Add
+          <button type="button" aria-expanded={adding} onClick={() => setAdding(!adding)}>
+            Add a TV
           </button>
         </div>
-        <label className="inline">
-          <input type="checkbox" checked={previews} onChange={(e) => togglePreviews(e.target.checked)} style={{ width: "auto" }} /> Show what each TV is showing
-          (previews refresh every few seconds)
-        </label>
-        {Object.keys(startup.data ?? {}).length > 0 && (
-          <div className="inline">
-            <button
-              disabled={busy}
-              onClick={() =>
-                run(async () => {
-                  const r = await api.runTvStartup();
-                  setNote(r.waiting.length ? `Starting ${r.waiting.length} TV(s) as after a reboot; offline TVs are retried for 30 minutes.` : "No TV has a startup choice.");
-                })
-              }
-            >
-              Try startup choices now
-            </button>
-            <span className="muted">Does what a reboot does, without rebooting.</span>
-          </div>
-        )}
         {note && <p className="muted">{note}</p>}
         {displays.error && <p className="error">{displays.error}</p>}
-      </section>
-      <VenueboxCard reload={displays.reload} />
-      {(displays.data ?? []).map((d) => (
-        <DisplayCard key={d.id} d={d} busy={busy} run={run} reload={displays.reload} previews={previews} startup={startup.data?.[d.id]} games={games.data ?? []} media={media.data?.providers ?? []} reloadMedia={media.reload} />
-      ))}
-      <CastFromGames />
+        {adding && (
+          <div className="grid stack-gap">
+            <AddTvCard busy={busy} run={run} setNote={setNote} previews={previews} togglePreviews={togglePreviews} hasStartup={Object.keys(startup.data ?? {}).length > 0} />
+            <VenueboxCard reload={displays.reload} />
+            <CastFromGames />
+          </div>
+        )}
+        {groups.length > 0 && (
+          <div className="chips" role="group" aria-label="Filter by room">
+            <button type="button" className={`chip${group ? "" : " on"}`} aria-pressed={!group} onClick={() => setGroup("")}>
+              All · {list.length}
+            </button>
+            {groups.map((g) => (
+              <button key={g} type="button" className={`chip${group === g ? " on" : ""}`} aria-pressed={group === g} onClick={() => setGroup(g)}>
+                {g} · {list.filter((d) => d.group === g).length}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="tv-wall">
+          {shown.map((d) => (
+            <TvTile key={d.id} d={d} media={providers} previews={previews} selected={d.id === sel?.id} onClick={() => go("tvs", d.id)} />
+          ))}
+        </div>
+        {displays.data && !list.length && <p className="muted">No TVs yet. Use "Add a TV" to find the Rokus and Apple TVs on this network.</p>}
+        {list.length > 0 && !sel && <p className="muted small-print">Tap a TV to control it.</p>}
+      </div>
+      {sel && (
+        <TvPanel key={sel.id} d={sel} tab={tab} busy={busy} run={run} reload={displays.reload} previews={previews} startup={startup.data?.[sel.id]} games={games.data ?? []} media={providers} reloadMedia={media.reload} />
+      )}
     </div>
   );
 }
@@ -102,8 +98,113 @@ const STREAM_LABEL: Record<string, string> = {
   error: "error",
 };
 
-function DisplayCard({
+/** One line on what a TV shows now, and whether that needs attention. */
+export function describeTv(d: Display, media: MediaProvider[] = []): { text: string; warn: boolean } {
+  if (d.health?.online === false) return { text: "Not answering", warn: true };
+  const target = media.flatMap((p) => p.targets.filter((t) => t.displayId === d.id).map((t) => ({ p, t }))).find((x) => ["playing", "paused", "starting"].includes(x.t.state));
+  if (target) return { text: `${target.p.displayName}${target.t.nowPlaying?.listName ? ` · ${target.t.nowPlaying.listName}` : ""} · ${target.t.state}`, warn: false };
+  if (d.stream) {
+    const state = d.stream.state === "streaming" ? "" : ` · ${STREAM_LABEL[d.stream.state] ?? d.stream.state}`;
+    return { text: `${d.content?.kind === "idle" ? "Idle screen" : (d.content?.title ?? "Showing a page")}${state}`, warn: d.stream.state !== "streaming" && d.stream.state !== "connecting" };
+  }
+  if (d.content?.kind === "external") return { text: d.content.title ?? d.content.app ?? "A TV app", warn: false };
+  if (d.content?.kind === "idle") return { text: "Idle screen", warn: false };
+  return { text: "Nothing from the box", warn: false };
+}
+
+const kindOf = (d: Display) => (d.driver === "airplay" ? (d.model ? `AirPlay · ${d.model}` : "AirPlay") : d.driver === "venuebox" ? "Venuebox app" : (d.model ?? d.driver));
+
+/** A TV on the wall: what it shows (a live picture when the box is casting to it), name, room. */
+export function TvTile({ d, media, previews, selected, onClick, children }: { d: Display; media: MediaProvider[]; previews: boolean; selected?: boolean; onClick?: () => void; children?: React.ReactNode }) {
+  const now = describeTv(d, media);
+  const body = (
+    <>
+      {previews && d.stream ? (
+        <TvPreview id={d.id} />
+      ) : (
+        <span className={`tv-screen${d.health?.online === false ? " offline" : ""}`}>{now.text}</span>
+      )}
+      <b>{d.label || d.name}</b>
+      <span className={now.warn ? "warn tv-sub" : "tv-sub"}>{[d.group, previews && d.stream ? now.text : kindOf(d)].filter(Boolean).join(" · ")}</span>
+    </>
+  );
+  if (!onClick)
+    return (
+      <div className="tv-tile">
+        {body}
+        {children}
+      </div>
+    );
+  return (
+    <button type="button" className={`tv-tile${selected ? " selected" : ""}`} aria-pressed={selected} onClick={onClick}>
+      {body}
+    </button>
+  );
+}
+
+/** Finding and adding TVs, and the page's own switches. */
+function AddTvCard({ busy, run, setNote, previews, togglePreviews, hasStartup }: { busy: boolean; run: (fn: () => Promise<unknown>) => void; setNote: (s: string) => void; previews: boolean; togglePreviews: (on: boolean) => void; hasStartup: boolean }) {
+  const [host, setHost] = useState("");
+  const [kind, setKind] = useState<"roku" | "airplay">("roku");
+  return (
+    <section className="card wide">
+      <h2>Add a TV</h2>
+      <div className="buttons">
+        <button
+          className="primary"
+          disabled={busy}
+          onClick={() =>
+            run(async () => {
+              const r = await api.discover();
+              setNote(`Found ${r.found} device(s).${r.errors.length ? ` Problems: ${r.errors.join("; ")}` : ""}`);
+            })
+          }
+        >
+          Find TVs on this network
+        </button>
+        <select value={kind} onChange={(e) => setKind(e.target.value as "roku" | "airplay")} aria-label="Kind of TV">
+          <option value="roku">Roku</option>
+          <option value="airplay">AirPlay (Apple TV, AirPlay TV)</option>
+        </select>
+        <input placeholder="Or add by IP address" value={host} onChange={(e) => setHost(e.target.value)} aria-label="IP address" />
+        <button disabled={!host || busy} onClick={() => run(() => (kind === "roku" ? api.addRoku(host) : api.addAirplay(host)).then(() => setHost("")))}>
+          Add
+        </button>
+      </div>
+      <label className="check">
+        <input type="checkbox" checked={previews} onChange={(e) => togglePreviews(e.target.checked)} /> Show a live picture of what each TV is showing
+      </label>
+      {hasStartup && (
+        <div className="inline">
+          <button
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                const r = await api.runTvStartup();
+                setNote(r.waiting.length ? `Starting ${r.waiting.length} TV(s) as after a reboot; offline TVs are retried for 30 minutes.` : "No TV has a startup choice.");
+              })
+            }
+          >
+            Try startup choices now
+          </button>
+          <span className="muted">Does what a reboot does, without rebooting.</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const PANEL_TABS = [
+  { id: "now", label: "Now" },
+  { id: "remote", label: "Remote" },
+  { id: "apps", label: "Apps" },
+  { id: "setup", label: "Setup" },
+] as const;
+
+/** Everything for one TV, in tabs: what it shows now, its remote, its apps, its setup. */
+function TvPanel({
   d,
+  tab,
   busy,
   run,
   reload,
@@ -114,6 +215,7 @@ function DisplayCard({
   reloadMedia,
 }: {
   d: Display;
+  tab?: string;
   busy: boolean;
   run: (fn: () => Promise<unknown>) => void;
   reload: () => unknown;
@@ -127,82 +229,127 @@ function DisplayCard({
   const [label, setLabel] = useState(d.label ?? "");
   const [group, setGroup] = useState(d.group ?? "");
   const [delivery, setDelivery] = useState(d.delivery ?? "");
+  const [saved, setSaved] = useState("");
   const online = d.health?.online;
   const stream = d.stream;
   const canPair = d.capabilities?.delivery.includes("airplay");
+  const hasRemote = (d.capabilities?.remoteKeys?.length ?? 0) > 0;
+  const tabs = PANEL_TABS.filter((t) => (t.id === "remote" ? hasRemote : t.id === "apps" ? d.driver === "roku" : true));
+  const active = tabs.find((t) => t.id === tab)?.id ?? "now";
+  const now = describeTv(d, media);
+
   return (
-    <section className="card">
-      <h2>
-        <span className={`dot ${online ? (stream?.state === "streaming" ? "on" : stream ? "warn" : "on") : "off"}`} /> {d.label || d.name}
-      </h2>
-      <p className="muted">
-        {d.driver === "airplay" ? `AirPlay${d.model ? ` · ${d.model}` : ""}` : `${d.model} · ${d.isTv ? "TV" : "player"}`} · {d.health?.powerMode ?? (online ? "online" : "offline")}
-      </p>
-      {stream ? (
-        <p className="muted">
-          {d.content?.title ?? "Showing"}: <b>{STREAM_LABEL[stream.state] ?? stream.state}</b>
-          {stream.settings ? ` · ${stream.settings}` : ""}
-          {stream.detail ? ` (${stream.detail})` : ""}
-        </p>
-      ) : (
-        d.content?.kind === "url" && <p className="muted">Last shown: {d.content.title ?? d.content.url}</p>
-      )}
-      {previews && stream && <TvPreview id={d.id} />}
-      {canPair && <Pairing d={d} needsCode={Boolean(stream?.needsCode)} reload={reload} />}
-      <label>
-        Name
-        <input placeholder={d.name} value={label} onChange={(e) => setLabel(e.target.value)} />
-      </label>
-      <label>
-        Group
-        <input placeholder="e.g. main, patio" value={group} onChange={(e) => setGroup(e.target.value)} />
-      </label>
-      <label>
-        Delivery
-        <select value={delivery} onChange={(e) => setDelivery(e.target.value)}>
-          <option value="">Auto ({d.capabilities?.delivery[0] ?? "none"})</option>
-          {(d.capabilities?.delivery ?? []).map((m) => (
-            <option key={m}>{m}</option>
-          ))}
-        </select>
-      </label>
-      <MediaControls displayId={d.id} providers={media} reload={reloadMedia} />
-      <ShowOnTv d={d} games={games} reload={reload} />
-      <StartupChoice d={d} rule={startup} games={games} run={run} busy={busy} media={media.filter((p) => p.targets.some((t) => t.displayId === d.id))} />
-      {canPair && <StreamSettingsFields value={settings} onChange={setSettings} />}
-      <div className="buttons">
-        <button
-          className="primary"
-          disabled={busy}
-          onClick={() => run(() => api.patchDisplay(d.id, { label, group, delivery: delivery || undefined, ...(canPair ? { streamSettings: settings } : {}) }))}
-        >
-          Save
+    <aside className="tv-panel" aria-label={d.label || d.name}>
+      <div className="tv-panel-head">
+        <div>
+          <h2>{d.label || d.name}</h2>
+          <span className="muted">
+            {[d.group, kindOf(d), d.health?.powerMode ?? (online ? "online" : "offline")].filter(Boolean).join(" · ")}
+          </span>
+        </div>
+        <button type="button" className="ghost close" aria-label="Close" onClick={() => go("tvs")}>
+          ×
         </button>
-        {stream && (
-          <button disabled={busy} onClick={() => run(() => api.show({ displayIds: [d.id] }, { kind: "off" }))}>
-            Stop casting
-          </button>
-        )}
-        {d.capabilities?.power && (
-          <>
-            <button disabled={busy} onClick={() => run(() => api.power(d.id, true))}>
-              On
-            </button>
-            <button disabled={busy} onClick={() => run(() => api.power(d.id, false))}>
-              Off
-            </button>
-          </>
-        )}
       </div>
-      {(d.capabilities?.remoteKeys?.length ?? 0) > 0 && <Remote d={d} keys={d.capabilities!.remoteKeys!} />}
-      {d.driver === "venuebox" && online && (
-        <p>
-          <button type="button" onClick={() => void api.identify(d.id)}>
-            Identify (show its name on screen)
+      <div className="seg" role="tablist" aria-label="TV controls">
+        {tabs.map((t) => (
+          <button key={t.id} type="button" role="tab" aria-selected={t.id === active} className={t.id === active ? "on" : ""} onClick={() => go("tvs", d.id, t.id)}>
+            {t.label}
           </button>
-        </p>
+        ))}
+      </div>
+
+      {active === "now" && (
+        <div className="tv-panel-body">
+          {previews && stream ? <TvPreview id={d.id} /> : <span className={`tv-screen big${online === false ? " offline" : ""}`}>{now.text}</span>}
+          <p className={now.warn ? "warn" : ""}>
+            <b>{now.text}</b>
+            {stream?.settings ? <span className="muted"> · {stream.settings}</span> : null}
+            {stream?.detail ? <span className="muted"> ({stream.detail})</span> : null}
+          </p>
+          {canPair && stream?.needsCode && <Pairing d={d} needsCode reload={reload} />}
+          <ShowOnTv d={d} games={games} reload={reload} />
+          <MediaControls displayId={d.id} providers={media} reload={reloadMedia} />
+          <div className="buttons">
+            <button disabled={busy} onClick={() => run(() => api.idleTvs({ displayIds: [d.id] }))}>
+              Idle screen
+            </button>
+            {stream && (
+              <button disabled={busy} onClick={() => run(() => api.show({ displayIds: [d.id] }, { kind: "off" }))}>
+                Stop casting
+              </button>
+            )}
+            {d.capabilities?.power && (
+              <>
+                <button disabled={busy} onClick={() => run(() => api.power(d.id, true))}>
+                  Power on
+                </button>
+                <button disabled={busy} onClick={() => run(() => api.power(d.id, false))}>
+                  Power off
+                </button>
+              </>
+            )}
+            {d.driver === "venuebox" && online && (
+              <button type="button" onClick={() => void api.identify(d.id)}>
+                Flash its name
+              </button>
+            )}
+          </div>
+        </div>
       )}
-    </section>
+
+      {active === "remote" && hasRemote && (
+        <div className="tv-panel-body">
+          <Remote d={d} keys={d.capabilities!.remoteKeys!} embedded />
+        </div>
+      )}
+
+      {active === "apps" && d.driver === "roku" && (
+        <div className="tv-panel-body">
+          <TvApps d={d} online={online !== false} />
+        </div>
+      )}
+
+      {active === "setup" && (
+        <div className="tv-panel-body">
+          <label>
+            Name
+            <input placeholder={d.name} value={label} onChange={(e) => setLabel(e.target.value)} />
+          </label>
+          <label>
+            Room (group)
+            <input placeholder="e.g. Main room, Patio" value={group} onChange={(e) => setGroup(e.target.value)} />
+          </label>
+          <label>
+            How the box sends to it
+            <select value={delivery} onChange={(e) => setDelivery(e.target.value)}>
+              <option value="">Auto ({d.capabilities?.delivery[0] ?? "none"})</option>
+              {(d.capabilities?.delivery ?? []).map((m) => (
+                <option key={m}>{m}</option>
+              ))}
+            </select>
+          </label>
+          {canPair && <StreamSettingsFields value={settings} onChange={setSettings} />}
+          <div className="buttons">
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  await api.patchDisplay(d.id, { label, group, delivery: delivery || undefined, ...(canPair ? { streamSettings: settings } : {}) });
+                  setSaved("Saved.");
+                })
+              }
+            >
+              Save
+            </button>
+            {saved && <span className="ok">{saved}</span>}
+          </div>
+          <StartupChoice d={d} rule={startup} games={games} run={run} busy={busy} media={media.filter((p) => p.targets.some((t) => t.displayId === d.id))} />
+          {canPair && <Pairing d={d} needsCode={Boolean(stream?.needsCode)} reload={reload} />}
+        </div>
+      )}
+    </aside>
   );
 }
 

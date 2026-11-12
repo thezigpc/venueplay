@@ -17,9 +17,9 @@ const KEYBOARD: Record<string, string> = {
   " ": "Play",
 };
 
-export function Remote({ d, keys }: { d: Display; keys: string[] }) {
+export function Remote({ d, keys, embedded = false }: { d: Display; keys: string[]; embedded?: boolean }) {
   const has = new Set(keys);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(embedded);
   const [lit, setLit] = useState("");
   const [msg, setMsg] = useState("");
   const [text, setText] = useState("");
@@ -81,18 +81,20 @@ export function Remote({ d, keys }: { d: Display; keys: string[] }) {
     return (
       <p>
         <button type="button" onClick={() => setOpen(true)}>
-          🎮 Remote
+          Remote
         </button>
       </p>
     );
   return (
     <div className="remote-panel" tabIndex={0} onKeyDown={onKey} aria-label={`Remote for ${d.label || d.name}`}>
-      <div className="remote-head">
-        <b>{d.label || d.name}</b>
-        <button type="button" className="ghost" onClick={() => setOpen(false)}>
-          Close
-        </button>
-      </div>
+      {!embedded && (
+        <div className="remote-head">
+          <b>{d.label || d.name}</b>
+          <button type="button" className="ghost" onClick={() => setOpen(false)}>
+            Close
+          </button>
+        </div>
+      )}
       {!online && <p className="warn">This TV isn't answering right now.</p>}
       <div className="rk-row">
         {btn("Back", "↩", "small")}
@@ -129,7 +131,7 @@ export function Remote({ d, keys }: { d: Display; keys: string[] }) {
           {btn("ChannelUp", "CH +")}
         </div>
       )}
-      {d.driver === "roku" && <TvApps d={d} online={online} />}
+      {!embedded && d.driver === "roku" && <TvApps d={d} online={online} />}
       <form
         className="inline"
         onSubmit={(e) => {
@@ -153,7 +155,7 @@ export function Remote({ d, keys }: { d: Display; keys: string[] }) {
 }
 
 /** The TV's installed apps (Roku channels): tap one to open it on the TV. */
-function TvApps({ d, online }: { d: Display; online: boolean }) {
+export function TvApps({ d, online }: { d: Display; online: boolean }) {
   const [apps, setApps] = useState<{ id: string; name: string }[] | undefined>();
   const [active, setActive] = useState<string | undefined>();
   const [error, setError] = useState("");
