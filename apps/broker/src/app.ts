@@ -191,6 +191,16 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
     h(async (req, res) => res.json({ screenId: await d.registry.dialScreenId(req.params.id, req.params.app) })),
   );
 
+  /** What's on screen (Roku: ECP active-app). {} when the TV can't say. */
+  app.get(
+    "/displays/:id/active-app",
+    h(async (req, res) => {
+      const dev = one(req.params.id);
+      const r = await d.registry.driverFor(dev).foregroundApp?.(dev).catch(() => undefined);
+      res.json(r ?? {});
+    }),
+  );
+
   // The remote's Apps list (Roku channels).
   const APP_ID = /^[A-Za-z0-9_.-]{1,40}$/;
   app.get(

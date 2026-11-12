@@ -348,6 +348,7 @@ test("0.9.0: Roku launches YouTube (837), explains a 403, and reads YouTube's DI
     await registry.appIcon(dev.id, "12");
     assert.equal(calls.filter((c) => c === "GET /query/icon/12").length, iconCalls, "icons are cached");
     assert.equal(await registry.appIcon(dev.id, "999"), undefined);
+    assert.deepEqual(await roku.foregroundApp(registry.get(dev.id)!), { id: "12", name: "Netflix", home: false });
     await registry.launchChannel(dev.id, "12");
     assert.ok(calls.includes("POST /launch/12"));
     assert.deepEqual(registry.get(dev.id)?.content, { kind: "external", provider: "remote", app: "Netflix & Co" });

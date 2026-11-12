@@ -643,6 +643,7 @@ test("0.9.0 media providers: TVs for providers, launch rules, play/stop from the
     if (url.startsWith("http://broker/displays/tv1/")) {
       brokerCalls.push(url.replace("http://broker", ""));
       if (url.endsWith("/dial/youtube")) return reply({ screenId: "SCREEN-1" });
+      if (url.endsWith("/active-app")) return reply({ id: "562859", name: "Roku Dynamic Menu", home: true });
       return reply({ ok: true });
     }
     return undefined;
@@ -659,8 +660,8 @@ test("0.9.0 media providers: TVs for providers, launch rules, play/stop from the
 
     // TVs: only for media providers; the screen id only for a Roku when the app launches youtube.
     assert.equal((await b.json("GET", "/internal/tvs", undefined, notMedia)).status, 403);
-    const tvs = ((await (await b.json("GET", "/internal/tvs", undefined, g)).json()) as { tvs: { id: string; canLaunch: string[]; youtubeScreenId?: string; kind: string }[] }).tvs;
-    assert.deepEqual(tvs.map((t) => [t.id, t.kind, t.canLaunch, t.youtubeScreenId]), [["tv1", "roku", ["youtube"], "SCREEN-1"], ["tv2", "airplay", [], undefined]]);
+    const tvs = ((await (await b.json("GET", "/internal/tvs", undefined, g)).json()) as { tvs: { id: string; canLaunch: string[]; youtubeScreenId?: string; kind: string; activeApp?: string }[] }).tvs;
+    assert.deepEqual(tvs.map((t) => [t.id, t.kind, t.canLaunch, t.youtubeScreenId, t.activeApp]), [["tv1", "roku", ["youtube"], "SCREEN-1", "home"], ["tv2", "airplay", [], undefined, undefined]]);
 
     // Launch: declared apps only, on TVs the app reports as its targets.
     const launch = (displayId: string, app: string) => b.json("POST", "/internal/launch-app", { displayId, app }, g).then((r) => r.json() as Promise<{ ok: boolean; reason?: string }>);

@@ -469,7 +469,9 @@ test("0.9.0: off a box the new calls do nothing; on the mock box they work; mani
     const tvs = await bg.tvs();
     assert.deepEqual(tvs[0].canLaunch, ["youtube"]);
     assert.equal(tvs[0].youtubeScreenId, "fake-screen-id-bar");
+    assert.equal(tvs[0].activeApp, "home", "0.10.4: the fake Roku starts on its home screen");
     assert.deepEqual(await bg.launchApp(tvs[0].id, "youtube"), { ok: true });
+    assert.equal((await bg.tvs())[0].activeApp, "youtube", "and shows the app after a launch");
     assert.equal((await bg.launchApp(tvs[0].id, "netflix")).ok, false);
     const cd = await bg.startCountdown({ label: "Trivia starts in", minutes: 5 });
     assert.equal(cd?.label, "Trivia starts in");

@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.10.3";
+export const SDK_VERSION = "0.10.4";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -431,6 +431,13 @@ export interface BoxTv {
   canLaunch: string[];
   /** Only for providers declaring media.launch ["youtube"]: the TV's YouTube screen id, read over DIAL. */
   youtubeScreenId?: string;
+  /**
+   * SDK 0.10.4: what the TV shows now, asked of the TV itself (Roku): one of your
+   * media.launch apps ("youtube"), "home", or "other". Absent when the TV can't say.
+   * Trust it over a link's own idea of "open": a YouTube link can stay "connected" after
+   * the app closed on the TV.
+   */
+  activeApp?: string;
 }
 
 export type LaunchResult = { ok: true } | { ok: false; reason: "not-allowed" | "unsupported" | "offline" | "ecp-blocked" | "error"; message: string };

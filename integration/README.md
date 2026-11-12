@@ -44,6 +44,10 @@ proxy (`BASE_PATH=/bingo`). Unset, the game runs at the root exactly as before.
   `joinUrl(base, path)` does the same for your own links.
 - **Declare it** in bargames.json: `"routing": { "basePath": true }`. Without it the box keeps
   the game on its subdomain.
+- **0.10.4 (media apps):** `bg.tvs()` adds `activeApp` per TV, asked of the TV itself (Roku):
+  your launchable app (`"youtube"`), `"home"`, or `"other"`. Trust it over a link's own idea
+  of "open" (a YouTube link can say connected after the app closed): not `"youtube"` →
+  `bg.launchApp()`, wait, then play. The mock box's fake Roku starts on `"home"`.
 - **0.10.3:** `bg.basePath` logs a warning, and `mock-box --base` refuses to start, when the
   prefix isn't a path (the Git Bash rewrite). Kit 0.6.2: `serveSpa` answers missing files
   (under /assets/, or with a file extension) with 404 instead of the page.

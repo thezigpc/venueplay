@@ -110,6 +110,16 @@ export class RokuDriver implements DisplayDriver {
     }
   }
 
+  /** What's on screen: our app name when it's one we launch (837 → "youtube"), or "home". */
+  async foregroundApp(device: DisplayDevice): Promise<{ id: string; name: string; app?: string; home: boolean } | undefined> {
+    const a = await this.ecp(device).activeApp();
+    if (!a) return undefined;
+    const app = Object.entries(ROKU_APPS).find(([, ch]) => ch === a.id)?.[0];
+    // The home screen is a "home" app (Roku Dynamic Menu); older firmware reports just "Roku".
+    const home = a.id === "562859" || /^roku( dynamic menu)?$/i.test(a.name);
+    return { id: a.id, name: a.name, ...(app ? { app } : {}), home };
+  }
+
   /** Installed channels and the one on screen (remote's Apps list). */
   async listApps(device: DisplayDevice): Promise<{ apps: { id: string; name: string }[]; active?: string }> {
     const ecp = this.ecp(device);

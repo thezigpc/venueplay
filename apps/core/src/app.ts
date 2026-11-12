@@ -519,6 +519,12 @@ export function createApp(d: AppDeps) {
             const r = (await brokerCall("GET", "/displays/" + encodeURIComponent(x.id) + "/dial/youtube").catch(() => undefined)) as { screenId?: string } | undefined;
             if (r?.screenId) tv.youtubeScreenId = r.screenId;
           }
+          // SDK 0.10.4: what's on screen, from the TV itself (a YouTube link can still say
+          // "connected" after the app closed). Only the provider's own apps are named.
+          if (x.health?.online && x.driver === "roku") {
+            const a = (await brokerCall("GET", "/displays/" + encodeURIComponent(x.id) + "/active-app").catch(() => undefined)) as { app?: string; home?: boolean; id?: string } | undefined;
+            if (a?.id) tv.activeApp = a.app && allowed.includes(a.app) ? a.app : a.home ? "home" : "other";
+          }
           return tv;
         }),
       );
@@ -533,9 +539,13 @@ export function createApp(d: AppDeps) {
       const game = mediaProviderAuth(req);
       const { displayId, app: tvApp } = (req.body ?? {}) as { displayId?: unknown; app?: unknown };
       if (typeof displayId !== "string" || typeof tvApp !== "string") throw new HttpError(400, "displayId and app required");
-      if (!game.manifest.media!.launch.includes(tvApp)) return void res.json({ ok: false, reason: "not-allowed", message: tvApp + " isn't in media.launch in bargames.json" });
+      const refuse = (message: string) => {
+        d.log.warn("media", "launch app refused", { game: game.id, display: displayId, app: tvApp, message });
+        res.json({ ok: false, reason: "not-allowed", message });
+      };
+      if (!game.manifest.media!.launch.includes(tvApp)) return refuse(tvApp + " isn't in media.launch in bargames.json");
       await roomCache.refresh(game.id).catch(() => undefined);
-      if (!roomCache.mediaTargets(game.id).some((t) => t.displayId === displayId)) return void res.json({ ok: false, reason: "not-allowed", message: "report this TV in status.media.targets first" });
+      if (!roomCache.mediaTargets(game.id).some((t) => t.displayId === displayId)) return refuse("report this TV in status.media.targets first");
       const r = await brokerCall("POST", "/displays/" + encodeURIComponent(displayId) + "/launch", { app: tvApp, provider: game.id }).catch((err: Error) => ({ ok: false, reason: "error", message: err.message }));
       d.log.info("media", "launch app", { game: game.id, display: displayId, app: tvApp, ok: (r as { ok?: boolean }).ok });
       res.json(r);

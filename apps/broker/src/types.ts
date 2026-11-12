@@ -113,6 +113,8 @@ export interface DisplayDriver {
   streamState?(device: DisplayDevice): StreamState | undefined;
   /** Presses a remote-control key (one of capabilities.remoteKeys). */
   keypress?(device: DisplayDevice, key: string): Promise<void>;
+  /** What's on screen now (Roku: ECP active-app); app is our name for it when we know it. */
+  foregroundApp?(device: DisplayDevice): Promise<{ id: string; name: string; app?: string; home: boolean } | undefined>;
   /** The TV's installed apps and the one on screen (Roku channels). */
   listApps?(device: DisplayDevice): Promise<{ apps: { id: string; name: string }[]; active?: string }>;
   appIcon?(device: DisplayDevice, appId: string): Promise<{ type: string; data: Buffer } | undefined>;

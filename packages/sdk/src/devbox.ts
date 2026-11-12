@@ -112,6 +112,8 @@ export const FAKE_TVS: readonly { id: string; name: string; group: string; unpai
 
 export function mockBox(o: MockBoxOptions) {
   let countdown: Countdown | undefined;
+  /** What the fake Roku (fake-bar) shows: "home" until a launch. */
+  let fakeRokuApp = "home";
   const base = normalizeBasePath(o.basePath);
   const origin = `http://localhost:${o.gatewayPort}`;
   const publicUrl = origin + base;
@@ -195,6 +197,8 @@ export function mockBox(o: MockBoxOptions) {
           online: !t.unpaired,
           canLaunch: i === 0 ? launch.filter((a) => a === "youtube") : [],
           ...(i === 0 && launch.includes("youtube") ? { youtubeScreenId: "fake-screen-id-bar" } : {}),
+          // SDK 0.10.4: the fake Roku starts on its home screen; a launch puts the app up.
+          ...(i === 0 ? { activeApp: fakeRokuApp } : {}),
         })),
       });
     }
@@ -203,6 +207,7 @@ export function mockBox(o: MockBoxOptions) {
       if (!o.manifest?.media?.launch.includes(String(b.app))) return json(200, { ok: false, reason: "not-allowed", message: `${b.app} isn't in media.launch` });
       if (b.displayId !== FAKE_TVS[0].id) return json(200, { ok: false, reason: "unsupported", message: "only the fake Roku (fake-bar) can start apps" });
       console.log(`${c.ok("launch")} ${b.app} on ${b.displayId} (pretend)`);
+      fakeRokuApp = String(b.app);
       return json(200, { ok: true });
     }
     if (req.url?.startsWith("/internal/profiles")) return json(501, { error: "player profiles aren't built yet" });
