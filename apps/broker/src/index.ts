@@ -6,6 +6,7 @@ import { createBrokerApp } from "./app.js";
 import { MockDriver } from "./drivers/mock.js";
 import { AirplayDriver } from "./drivers/airplay/index.js";
 import { RokuDriver } from "./drivers/roku/index.js";
+import { LocalScreenDriver } from "./drivers/local/index.js";
 import { DisplayRegistry, type DisplayRecord } from "./registry.js";
 import { AirplayStreams } from "./airplay.js";
 import { NodeProcRunner } from "./procs.js";
@@ -45,6 +46,8 @@ const roku = enabled.includes("roku") ? new RokuDriver(streams) : undefined;
 if (roku) drivers.set(roku.id, roku);
 const airplayDriver = enabled.includes("airplay") ? new AirplayDriver(streams) : undefined;
 if (airplayDriver) drivers.set(airplayDriver.id, airplayDriver);
+// Plugged-in screens: scaffolding only (lists connected outputs, can't show yet).
+if (enabled.includes("local")) drivers.set("local", new LocalScreenDriver());
 const mockCount = envNum("MOCK_DISPLAYS", 0);
 if (mockCount) drivers.set("mock", new MockDriver(mockCount));
 

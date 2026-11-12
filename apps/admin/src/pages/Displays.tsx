@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type CastSettings, type Display, type StreamSettings } from "../api";
+import { isDisplayModule } from "@bargames/sdk";
+import { api, type CastSettings, type Display, type Game, type StartupRule, type StreamSettings } from "../api";
 
 const PREVIEWS_KEY = "bargames.tvPreviews";
 const readPreviews = () => {
@@ -13,7 +14,12 @@ import { useAction, useLoad } from "../useLoad";
 
 export function DisplaysPage() {
   const displays = useLoad(api.displays, 10_000);
-  const { busy, run } = useAction(displays.reload, displays.setError);
+  const startup = useLoad(api.tvStartup);
+  const games = useLoad(api.games);
+  const reloadAll = async () => {
+    await Promise.all([displays.reload(), startup.reload()]);
+  };
+  const { busy, run } = useAction(reloadAll, displays.setError);
   const [host, setHost] = useState("");
   const [kind, setKind] = useState<"roku" | "airplay">("roku");
   const [note, setNote] = useState("");
@@ -57,11 +63,27 @@ export function DisplaysPage() {
           <input type="checkbox" checked={previews} onChange={(e) => togglePreviews(e.target.checked)} style={{ width: "auto" }} /> Show what each TV is showing
           (previews refresh every few seconds)
         </label>
+        {Object.keys(startup.data ?? {}).length > 0 && (
+          <div className="inline">
+            <button
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  const r = await api.runTvStartup();
+                  setNote(r.waiting.length ? `Starting ${r.waiting.length} TV(s) as after a reboot; offline TVs are retried for 30 minutes.` : "No TV has a startup choice.");
+                })
+              }
+            >
+              Try startup choices now
+            </button>
+            <span className="muted">Does what a reboot does, without rebooting.</span>
+          </div>
+        )}
         {note && <p className="muted">{note}</p>}
         {displays.error && <p className="error">{displays.error}</p>}
       </section>
       {(displays.data ?? []).map((d) => (
-        <DisplayCard key={d.id} d={d} busy={busy} run={run} reload={displays.reload} previews={previews} />
+        <DisplayCard key={d.id} d={d} busy={busy} run={run} reload={displays.reload} previews={previews} startup={startup.data?.[d.id]} games={games.data ?? []} />
       ))}
       <CastFromGames />
     </div>
@@ -76,7 +98,23 @@ const STREAM_LABEL: Record<string, string> = {
   error: "error",
 };
 
-function DisplayCard({ d, busy, run, reload, previews }: { d: Display; busy: boolean; run: (fn: () => Promise<unknown>) => void; reload: () => unknown; previews: boolean }) {
+function DisplayCard({
+  d,
+  busy,
+  run,
+  reload,
+  previews,
+  startup,
+  games,
+}: {
+  d: Display;
+  busy: boolean;
+  run: (fn: () => Promise<unknown>) => void;
+  reload: () => unknown;
+  previews: boolean;
+  startup?: StartupRule;
+  games: Game[];
+}) {
   const [settings, setSettings] = useState<StreamSettings | null>(d.streamSettings ?? null);
   const [label, setLabel] = useState(d.label ?? "");
   const [group, setGroup] = useState(d.group ?? "");
@@ -120,6 +158,7 @@ function DisplayCard({ d, busy, run, reload, previews }: { d: Display; busy: boo
           ))}
         </select>
       </label>
+      <StartupChoice d={d} rule={startup} games={games} run={run} busy={busy} />
       {canPair && <StreamSettingsFields value={settings} onChange={setSettings} />}
       <div className="buttons">
         <button
@@ -147,6 +186,42 @@ function DisplayCard({ d, busy, run, reload, previews }: { d: Display; busy: boo
       </div>
       {(d.capabilities?.remoteKeys?.length ?? 0) > 0 && <Remote d={d} keys={d.capabilities!.remoteKeys!} />}
     </section>
+  );
+}
+
+/** "When the box starts": what this TV shows after the box boots (saved right away). */
+function StartupChoice({ d, rule, games, run, busy }: { d: Display; rule?: StartupRule; games: Game[]; run: (fn: () => Promise<unknown>) => void; busy: boolean }) {
+  const value = !rule || rule.mode === "last" ? "last" : rule.mode === "game" ? `game:${rule.gameId}` : rule.mode;
+  const castable = games.filter((g) => g.manifest.routes.table);
+  const choose = (v: string) => {
+    const next: StartupRule = v.startsWith("game:") ? { mode: "game", gameId: v.slice(5) } : { mode: v as "last" | "idle" | "off" };
+    run(() => api.setTvStartup(d.id, next));
+  };
+  return (
+    <label>
+      When the box starts
+      <select value={value} disabled={busy} onChange={(e) => choose(e.target.value)}>
+        <option value="last">Keep what it was showing</option>
+        <option value="idle">The idle screen</option>
+        {castable
+          .filter((g) => isDisplayModule(g.manifest))
+          .map((g) => (
+            <option key={g.id} value={`game:${g.id}`}>
+              {g.context.game.displayName}
+              {g.enabled ? "" : " (turned off)"}
+            </option>
+          ))}
+        {castable
+          .filter((g) => !isDisplayModule(g.manifest) && g.manifest.commands.includes("create_room"))
+          .map((g) => (
+            <option key={g.id} value={`game:${g.id}`}>
+              {g.context.game.displayName}: a new room
+              {g.enabled ? "" : " (turned off)"}
+            </option>
+          ))}
+        <option value="off">Nothing (leave the TV alone)</option>
+      </select>
+    </label>
   );
 }
 

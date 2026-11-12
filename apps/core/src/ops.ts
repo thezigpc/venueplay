@@ -6,6 +6,7 @@
 //   bgctl check [game]                re-check the games' sources now
 //   bgctl update <game…> | --all      install newer versions and restart them
 //   bgctl install <repo URL> [--enable]   install a game (first time) from its GitHub repo
+//   bgctl startup                     put TVs on their startup choices now (what a reboot does)
 //         --wait <minutes>            wait for an image that's still building
 //         --json                      machine-readable output
 
@@ -43,6 +44,7 @@ const HELP = `bgctl: Bar Games box command line
   bgctl update --all               every game with an update
   bgctl install <repo URL>         install a game from its GitHub repo
      --enable                      and turn it on (start it)
+  bgctl startup                    put TVs on their startup choices now (as after a reboot)
      --wait <minutes>              keep checking while a new image is still building
      --json                        machine-readable output
 
@@ -66,6 +68,7 @@ export function opsClient(baseUrl: string, token: string, doFetch: typeof fetch 
   return {
     games: () => call<Listing>("GET", "/internal/ops/games"),
     check: (gameId?: string) => call<Listing>("POST", "/internal/ops/check", { gameId }),
+    startup: () => call<{ waiting: string[]; rules: Record<string, { mode: string; gameId?: string }> }>("POST", "/internal/ops/startup"),
     install: (url: string, enable: boolean) =>
       call<{ id: string; version: string; upgraded: boolean; enabled: boolean; warnings: string[]; game: Row }>("POST", "/internal/ops/install", { url, enable }),
     update: (id: string) => call<{ id: string; from: string; to: string; warnings: string[] }>("POST", `/internal/ops/update/${encodeURIComponent(id)}`),
@@ -107,6 +110,19 @@ export async function runOps(argv: string[], client: Client, out: (line: string)
   }
   if (cmd === "check") {
     print(await client.check(rest[0]));
+    return 0;
+  }
+  if (cmd === "startup") {
+    const r = await client.startup();
+    if (json) out(JSON.stringify(r, null, 2));
+    else {
+      const ids = Object.keys(r.rules);
+      if (!ids.length) out("no TV has a startup choice (TVs page: \"When the box starts\")");
+      for (const id of ids) {
+        const rule = r.rules[id];
+        out(`${r.waiting.includes(id) ? "waiting" : "done   "} ${id}: ${rule.mode === "game" ? rule.gameId : rule.mode}${r.waiting.includes(id) ? " (TV offline; retried for 30 min)" : ""}`);
+      }
+    }
     return 0;
   }
   if (cmd === "install") {

@@ -27,6 +27,7 @@ import { GameRegistry, HttpError } from "./games.js";
 import { certificateWarning, checkPattern, hostFor } from "./hostnames.js";
 import { idleScreenUrl } from "./idleScreen.js";
 import { imageState, UpdateChecker } from "./updates.js";
+import { checkStartupRule, StartupRunner, type StartupRule } from "./startup.js";
 import { fetchManifest } from "./manifestSource.js";
 import { RoomCache } from "./roomCache.js";
 import { TvWatch } from "./tvWatch.js";
@@ -739,6 +740,17 @@ export function createApp(d: AppDeps) {
     }),
   );
 
+  /** Applies the TV startup choices now (bgctl startup). */
+  app.post(
+    "/internal/ops/startup",
+    opsAuth,
+    h(async (_req, res) => {
+      startup.start();
+      await startup.tick();
+      res.json({ waiting: startup.waiting, rules: d.state.tvStartup.get() });
+    }),
+  );
+
   app.post(
     "/internal/ops/update/:id",
     opsAuth,
@@ -791,48 +803,104 @@ export function createApp(d: AppDeps) {
    * Puts a game's table view on TVs: { gameId, roomCode?, title?, displayIds? | group? }.
    * Without a roomCode the game creates a venue room first (standard "create_room").
    */
+  /**
+   * Puts a game's (or menu's) TV view on TVs. A game without a roomCode creates a venue
+   * room first (standard "create_room"). Used by the admin and by TV startup rules.
+   */
+  const castGame = async (gameId: string, target: { displayIds?: string[]; group?: string }, opts: { roomCode?: string; title?: string } = {}) => {
+    const game = d.games.get(gameId);
+    if (!game) throw new HttpError(404, "no such game");
+    const ctx = buildContext(d.state.venue.get(), game);
+    const name = ctx.game.displayName;
+    if (!game.enabled) throw new HttpError(400, `${name} is turned off`);
+    if (!game.manifest.routes.table) throw new HttpError(400, `${name} has no TV view`);
+    const publicUrl = ctx.game.publicUrl!;
+    type Results = Record<string, { ok: boolean; message?: string; needsCode?: boolean }>;
+
+    // Menus and other display modules: no rooms, their TV view as is.
+    if (isDisplayModule(game.manifest)) {
+      const url = new URL(game.manifest.routes.table, publicUrl).toString();
+      const results = (await brokerCall("POST", "/show", { ...target, content: { kind: "url", url, title: name } })) as Results;
+      d.log.info("cast", "shown", { game: game.id, displays: Object.keys(results).length, failed: Object.values(results).filter((x) => !x.ok).length });
+      return { url, results } as { url: string; results: Results; roomCode?: string; created?: boolean; hostUrl?: string };
+    }
+
+    const { roomCode, title } = opts;
+    let code = typeof roomCode === "string" && roomCode.trim() ? roomCode.trim().toUpperCase() : undefined;
+    let hostUrl: string | undefined;
+    if (!code) {
+      if (game.manifest.sdk.level < 3 || !game.manifest.commands.includes("create_room")) {
+        throw new HttpError(400, `${name} can't create rooms from the box yet. Start a room on a phone and enter its code.`);
+      }
+      const r = await gameCommand(game, { command: "create_room", args: { kind: "venue", purpose: "display", title: typeof title === "string" ? title : undefined } });
+      const created = r.result.data as CreatedRoom | undefined;
+      if (!r.result.ok || typeof created?.roomCode !== "string" || !created.roomCode) {
+        throw new HttpError(502, `${name} didn't create a room: ${r.result.message ?? `HTTP ${r.status}`}`);
+      }
+      code = created.roomCode;
+      hostUrl = absoluteHttpUrl(created.hostUrl, publicUrl);
+      d.log.info("cast", "room created", { game: game.id, room: code });
+    }
+
+    const url = new URL(tableUrl(game.manifest, code)!, publicUrl).toString();
+    const results = (await brokerCall("POST", "/show", { ...target, content: { kind: "url", url, title: `${name} · ${code}` } })) as Results;
+    d.log.info("cast", "shown", { game: game.id, room: code, displays: Object.keys(results).length, failed: Object.values(results).filter((x) => !x.ok).length });
+    return { roomCode: code, created: !roomCode, hostUrl, url, results };
+  };
+
+  // ------------------------------------------------------------ TV startup rules
+
+  const applyStartup = async (displayId: string, rule: StartupRule) => {
+    const target = { displayIds: [displayId] };
+    let results: Record<string, { ok: boolean; message?: string }>;
+    if (rule.mode === "game") results = (await castGame(rule.gameId, target)).results;
+    else if (rule.mode === "idle") results = (await brokerCall("POST", "/show", { ...target, content: await idleContent() })) as typeof results;
+    else if (rule.mode === "off") results = (await brokerCall("POST", "/show", { ...target, content: { kind: "off" } })) as typeof results;
+    else return;
+    const r = results[displayId];
+    if (r && !r.ok) throw new Error(r.message ?? "the TV didn't start");
+  };
+  const startup = new StartupRunner({
+    rules: () => d.state.tvStartup.get(),
+    displays: async () => ((await brokerCall("GET", "/displays?health=1")) as { id: string; health?: { online?: boolean } }[]).map((x) => ({ id: x.id, online: Boolean(x.health?.online) })),
+    apply: applyStartup,
+    log: d.log,
+  });
+  app.locals.startup = startup;
+
+  app.get("/api/tv-startup", (_req, res) => res.json(d.state.tvStartup.get()));
+  /** { rule } for one TV; { mode: "last" } removes its rule. */
+  app.put(
+    "/api/tv-startup/:displayId",
+    h(async (req, res) => {
+      const rule = req.body as StartupRule;
+      const problem = checkStartupRule(rule, (id) => Boolean(d.games.get(id)));
+      if (problem) throw new HttpError(400, problem);
+      const id = req.params.displayId;
+      await d.state.tvStartup.update((s) => {
+        if (rule.mode === "last") delete s[id];
+        else s[id] = rule.mode === "game" ? { mode: "game", gameId: rule.gameId } : { mode: rule.mode };
+      });
+      res.json(d.state.tvStartup.get());
+    }),
+  );
+  /** Runs the startup choices now (what a reboot would do), for trying them out. */
+  app.post(
+    "/api/tv-startup/run",
+    h(async (_req, res) => {
+      startup.start();
+      res.json({ waiting: startup.waiting });
+    }),
+  );
+
   app.post(
     "/api/cast",
     h(async (req, res) => {
       const { gameId, roomCode, title, displayIds, group } = (req.body ?? {}) as { gameId?: string; roomCode?: string; title?: string; displayIds?: string[]; group?: string };
-      const game = d.games.get(String(gameId ?? ""));
-      if (!game) throw new HttpError(404, "no such game");
-      const ctx = buildContext(d.state.venue.get(), game);
-      const name = ctx.game.displayName;
-      if (!game.enabled) throw new HttpError(400, `${name} is turned off`);
-      if (!game.manifest.routes.table) throw new HttpError(400, `${name} has no TV view`);
       const target = Array.isArray(displayIds) && displayIds.length ? { displayIds: displayIds.map(String) } : typeof group === "string" && group ? { group } : undefined;
+      if (!d.games.get(String(gameId ?? ""))) throw new HttpError(404, "no such game");
       if (!target) throw new HttpError(400, "pick the TVs (displayIds or group)");
-      const publicUrl = ctx.game.publicUrl!;
-
-      // Menus and other display modules: no rooms, their TV view as is.
-      if (isDisplayModule(game.manifest)) {
-        const url = new URL(game.manifest.routes.table, publicUrl).toString();
-        const results = (await brokerCall("POST", "/show", { ...target, content: { kind: "url", url, title: name } })) as Record<string, { ok: boolean; message?: string }>;
-        d.log.info("cast", "shown", { game: game.id, displays: Object.keys(results).length, failed: Object.values(results).filter((x) => !x.ok).length });
-        return void res.json({ url, results });
-      }
-
-      let code = typeof roomCode === "string" && roomCode.trim() ? roomCode.trim().toUpperCase() : undefined;
-      let hostUrl: string | undefined;
-      if (!code) {
-        if (game.manifest.sdk.level < 3 || !game.manifest.commands.includes("create_room")) {
-          throw new HttpError(400, `${name} can't create rooms from the box yet. Start a room on a phone and enter its code.`);
-        }
-        const r = await gameCommand(game, { command: "create_room", args: { kind: "venue", purpose: "display", title: typeof title === "string" ? title : undefined } });
-        const created = r.result.data as CreatedRoom | undefined;
-        if (!r.result.ok || typeof created?.roomCode !== "string" || !created.roomCode) {
-          throw new HttpError(502, `${name} didn't create a room: ${r.result.message ?? `HTTP ${r.status}`}`);
-        }
-        code = created.roomCode;
-        hostUrl = absoluteHttpUrl(created.hostUrl, publicUrl);
-        d.log.info("cast", "room created", { game: game.id, room: code });
-      }
-
-      const url = new URL(tableUrl(game.manifest, code)!, publicUrl).toString();
-      const results = (await brokerCall("POST", "/show", { ...target, content: { kind: "url", url, title: `${name} · ${code}` } })) as Record<string, { ok: boolean; message?: string }>;
-      d.log.info("cast", "shown", { game: game.id, room: code, displays: Object.keys(results).length, failed: Object.values(results).filter((x) => !x.ok).length });
-      res.json({ roomCode: code, created: !roomCode, hostUrl, url, results });
+      res.json(await castGame(String(gameId), target, { roomCode, title }));
     }),
   );
 

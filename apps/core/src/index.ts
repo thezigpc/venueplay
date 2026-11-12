@@ -1,3 +1,5 @@
+import os from "node:os";
+import { BOOT_WINDOW_SEC } from "./startup.js";
 import { createLogger } from "@bargames/common";
 import { createApp } from "./app.js";
 import { AdminAuth } from "./auth.js";
@@ -54,6 +56,11 @@ app.listen(config.port, () => {
   (app.locals.tvWatch as { start(): void }).start();
   (app.locals.roomCache as { start(): void }).start();
   (app.locals.updates as { start(): void }).start();
+  // TV startup choices: only when the machine itself just booted, never on a core restart (deploys).
+  if (os.uptime() < BOOT_WINDOW_SEC) {
+    log.info("boot", "box just booted: applying TV startup choices", { uptimeSec: Math.round(os.uptime()) });
+    setTimeout(() => (app.locals.startup as { start(): void }).start(), 15_000).unref();
+  }
   // Bring enabled games back after a reboot.
   for (const g of games.list().filter((g) => g.enabled)) {
     runtime.ensureRunning(g).catch((err) => log.error("runtime", "failed to start game", { game: g.id, err: String(err) }));

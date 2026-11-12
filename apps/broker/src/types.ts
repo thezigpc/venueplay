@@ -7,7 +7,7 @@
  * airplay:    the box renders + encodes and mirrors over AirPlay (doubletake).
  * roku-hls:   the box renders + encodes HLS; a sideloaded Roku app plays it.
  */
-export type DeliveryMethod = "native-url" | "airplay" | "roku-hls" | "mock";
+export type DeliveryMethod = "native-url" | "airplay" | "roku-hls" | "local" | "mock";
 
 /** How the box renders and encodes for a TV (AirPlay). TVs with the same page and settings share one encoder. */
 export interface StreamSettings {
@@ -44,6 +44,11 @@ export interface DisplayDevice {
   meta?: Record<string, unknown>;
   /** The venue's choice for this TV; absent: the box default (1080p, 30 fps, automatic bitrate). */
   streamSettings?: StreamSettings;
+  /**
+   * Plugged-in screens (scaffolding): the HDMI-CEC adapter that controls this screen's
+   * power and input, e.g. "/dev/ttyACM0" (Pulse-Eight USB-CEC). Not used yet.
+   */
+  cecAdapter?: string;
 }
 
 export interface Capabilities {

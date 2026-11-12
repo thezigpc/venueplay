@@ -96,6 +96,7 @@ export interface StreamSettings {
   fps: 15 | 24 | 30 | 60;
   bitrateKbps?: number;
 }
+export type StartupRule = { mode: "last" | "idle" | "off" } | { mode: "game"; gameId: string };
 export interface ShowResult {
   ok: boolean;
   message?: string;
@@ -178,6 +179,9 @@ export const api = {
   addAirplay: (host: string) => call<Display>("POST", "/broker/displays/airplay", { host }),
   patchDisplay: (id: string, patch: { label?: string; group?: string; delivery?: string; streamSettings?: StreamSettings | null }) =>
     call<Display>("PATCH", `/broker/displays/${encodeURIComponent(id)}`, patch),
+  tvStartup: () => call<Record<string, StartupRule>>("GET", "/tv-startup"),
+  setTvStartup: (id: string, rule: StartupRule) => call<Record<string, StartupRule>>("PUT", `/tv-startup/${encodeURIComponent(id)}`, rule),
+  runTvStartup: () => call<{ waiting: string[] }>("POST", "/tv-startup/run"),
   key: (id: string, key: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/key`, { key }),
   typeText: (id: string, text: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/text`, { text }),
   /** For <img src>: changes every call so the browser fetches a fresh picture. */

@@ -156,3 +156,28 @@ test("roku remote: only its own keys, volume on TVs only, typing; the broker rou
     fake.close();
   }
 });
+
+test("local screens (scaffolding): connected outputs from sysfs, nothing shown yet", async () => {
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  const { LocalScreenDriver, readConnectors } = await import("./drivers/local/index.js");
+  const drm = mkdtempSync(path.join(tmpdir(), "bg-drm-"));
+  const port = (name: string, status: string, modes: string) => {
+    mkdirSync(path.join(drm, name));
+    writeFileSync(path.join(drm, name, "status"), `${status}\n`);
+    writeFileSync(path.join(drm, name, "modes"), modes);
+  };
+  port("card0-HDMI-A-1", "connected", "3840x2160\n1920x1080\n1920x1080\n");
+  port("card0-DP-1", "disconnected", "");
+  mkdirSync(path.join(drm, "renderD128"));
+  assert.deepEqual(readConnectors(drm).map((c) => [c.name, c.connected, c.modes]), [
+    ["DP-1", false, []],
+    ["HDMI-A-1", true, ["3840x2160", "1920x1080"]],
+  ]);
+  assert.deepEqual(readConnectors(path.join(drm, "missing")), [], "no DRM: nothing");
+  const drv = new LocalScreenDriver(drm);
+  const [screen] = await drv.discover();
+  assert.equal(screen.id, "local:HDMI-A-1");
+  assert.equal(screen.model, "up to 3840x2160");
+  assert.equal((await drv.show(screen, { kind: "url", url: "http://x" })).ok, false);
+  assert.equal((await drv.health(screen)).online, true);
+});

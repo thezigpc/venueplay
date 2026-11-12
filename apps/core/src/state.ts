@@ -2,6 +2,7 @@ import { JsonStore, type GatewayAccess } from "@bargames/common";
 import { DEFAULT_THEME, type Announcement, type GameBranding, type GameManifest, type VenueLocation, type VenueTheme, type WifiInfo } from "@bargames/sdk";
 import path from "node:path";
 import type { CloudflareSettings } from "./cloudflare/service.js";
+import type { StartupRule } from "./startup.js";
 
 export interface VenueSettings {
   name: string;
@@ -92,6 +93,8 @@ export function openState(dataDir: string) {
     cast: new JsonStore<CastSettings>(path.join(dataDir, "cast.json"), DEFAULT_CAST),
     /** The staff's current announcement (none: {}). */
     announcement: new JsonStore<Partial<Announcement>>(path.join(dataDir, "announcement.json"), {}),
+    /** What each TV shows when the box boots (display id → rule; absent: what it showed last). */
+    tvStartup: new JsonStore<Record<string, StartupRule>>(path.join(dataDir, "tv-startup.json"), {}),
     auth: new JsonStore<{ passwordHash?: string }>(path.join(dataDir, "auth.json"), {}),
     // Holds the Cloudflare API token and tunnel token: owner-only.
     cloudflare: new JsonStore<CloudflareSettings>(path.join(dataDir, "cloudflare.json"), {}, 0o600),

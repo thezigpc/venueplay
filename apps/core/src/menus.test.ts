@@ -17,6 +17,7 @@ import { GameRegistry } from "./games.js";
 import { NoopRuntime } from "./runtime/types.js";
 import { openState, type InstalledGame } from "./state.js";
 import { opsClient, runOps } from "./ops.js";
+import { StartupRunner, type StartupRule } from "./startup.js";
 import { imageState, parseImage, UpdateChecker } from "./updates.js";
 
 const reply = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -67,7 +68,7 @@ async function boot(extraFetch?: (url: string, init?: RequestInit) => Response |
   const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    if (url === "http://broker/displays") return reply(displays);
+    if (url === "http://broker/displays" || url === "http://broker/displays?health=1") return reply(displays.map((x) => ({ ...x, health: { online: x.id !== "tv-offline" } })));
     if (url === "http://broker/show") {
       shows.push(body);
       for (const id of body.displayIds ?? []) {
@@ -333,4 +334,58 @@ test("bgctl install: waits for the image, installs, and turns the game on", asyn
   } finally {
     b.close();
   }
+});
+
+test("tv startup: rules are validated, and running them puts the menu on its TV", async () => {
+  const b = await boot();
+  try {
+    for (const m of [bingo, menu]) {
+      await b.json("POST", "/api/games/install", { manifest: m, devTarget: `http://${m.id}` }, b.authed);
+      await b.json("PATCH", `/api/games/${m.id}`, { enabled: true }, b.authed);
+    }
+    assert.equal((await b.json("PUT", "/api/tv-startup/tv2", { mode: "game", gameId: "nope" }, b.authed)).status, 400);
+    assert.equal((await b.json("PUT", "/api/tv-startup/tv2", { mode: "dance" }, b.authed)).status, 400);
+    assert.equal((await b.json("PUT", "/api/tv-startup/tv2", { mode: "game", gameId: "menu" }, b.authed)).status, 200);
+    assert.equal((await b.json("PUT", "/api/tv-startup/tv1", { mode: "off" }, b.authed)).status, 200);
+    assert.deepEqual(await (await b.json("PUT", "/api/tv-startup/tv1", { mode: "last" }, b.authed)).json(), { tv2: { mode: "game", gameId: "menu" } }, "last removes the rule");
+
+    const r = (await (await b.json("POST", "/api/tv-startup/run", undefined, b.authed)).json()) as { waiting: string[] };
+    assert.deepEqual(r.waiting, ["tv2"]);
+    await new Promise((res) => setTimeout(res, 100));
+    assert.equal(b.displays[1].content?.url, "http://menu.localhost:7080/tv");
+    assert.equal(b.displays[0].content?.kind, "idle", "a TV without a rule is left alone");
+  } finally {
+    b.close();
+  }
+});
+
+test("tv startup runner: waits for TVs to come online, retries, gives up", async () => {
+  const online = new Set<string>();
+  const applied: string[] = [];
+  let failNext = 1;
+  const rules: Record<string, StartupRule> = { a: { mode: "idle" }, b: { mode: "game", gameId: "menu" }, c: { mode: "last" } };
+  const runner = new StartupRunner(
+    {
+      rules: () => rules,
+      displays: async () => ["a", "b", "c"].map((id) => ({ id, online: online.has(id) })),
+      apply: async (id) => {
+        if (id === "b" && failNext-- > 0) throw new Error("AirPlay still waking");
+        applied.push(id);
+      },
+      log: createLogger("test", "error"),
+    },
+    { intervalMs: 3_600_000, windowMs: 60_000 },
+  );
+  runner.start();
+  runner.stop(); // drive ticks by hand
+  assert.deepEqual(runner.waiting.sort(), ["a", "b"], "last needs nothing");
+  await runner.tick();
+  assert.deepEqual(applied, [], "nothing online yet");
+  online.add("a").add("b");
+  await runner.tick();
+  assert.deepEqual(applied, ["a"]);
+  assert.deepEqual(runner.waiting, ["b"], "b failed once; retried");
+  await runner.tick();
+  assert.deepEqual(applied, ["a", "b"]);
+  assert.deepEqual(runner.waiting, []);
 });
