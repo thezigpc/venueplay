@@ -1,7 +1,7 @@
 // Small Node helpers shared by core, gateway and broker. Not part of the game SDK.
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 // ---------------------------------------------------------------- JSON store
@@ -26,6 +26,15 @@ export class JsonStore<T> {
       this.data = isPlainObject(defaults) && isPlainObject(loaded) ? ({ ...defaults, ...loaded } as T) : loaded;
     } catch {
       this.data = structuredClone(defaults);
+    }
+    // A file written before its mode was set (e.g. 644 from an older box) is fixed now, not
+    // only at the next write. Errors are ignored (Windows development has no modes).
+    if (this.mode !== undefined && existsSync(file)) {
+      try {
+        chmodSync(file, this.mode);
+      } catch {
+        /* not ours to change, or no modes here */
+      }
     }
   }
 

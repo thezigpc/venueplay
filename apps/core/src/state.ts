@@ -123,8 +123,9 @@ export interface WifiSettings {
 export function openState(dataDir: string) {
   return {
     venue: new JsonStore<VenueSettings>(path.join(dataDir, "venue.json"), DEFAULT_VENUE),
-    access: new JsonStore<AccessSettings>(path.join(dataDir, "access.json"), DEFAULT_ACCESS),
-    games: new JsonStore<{ games: InstalledGame[] }>(path.join(dataDir, "games.json"), { games: [] }),
+    // Owner-only: the venue PIN, and every game's token.
+    access: new JsonStore<AccessSettings>(path.join(dataDir, "access.json"), DEFAULT_ACCESS, 0o600),
+    games: new JsonStore<{ games: InstalledGame[] }>(path.join(dataDir, "games.json"), { games: [] }, 0o600),
     cast: new JsonStore<CastSettings>(path.join(dataDir, "cast.json"), DEFAULT_CAST),
     /** The staff's current announcement (none: {}). */
     announcement: new JsonStore<Partial<Announcement>>(path.join(dataDir, "announcement.json"), {}),

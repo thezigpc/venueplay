@@ -21,3 +21,17 @@ test("token helpers", () => {
   assert.equal(safeEqual("abc", "abc"), true);
   assert.equal(safeEqual("abc", "abd"), false);
 });
+
+test("JsonStore with a mode fixes an existing file's permissions when it opens it", { skip: process.platform === "win32" ? "no file modes on Windows" : false }, async () => {
+  const { mkdtempSync, writeFileSync, statSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { JsonStore } = await import("./index.js");
+  const dir = mkdtempSync(path.join(tmpdir(), "bg-store-"));
+  const file = path.join(dir, "games.json");
+  writeFileSync(file, JSON.stringify({ games: [] }), { mode: 0o644 });
+  assert.equal(statSync(file).mode & 0o777, 0o644);
+  new JsonStore(file, { games: [] }, 0o600);
+  assert.equal(statSync(file).mode & 0o777, 0o600, "fixed at open, before any write");
+  new JsonStore(path.join(dir, "plain.json"), {});
+});
