@@ -72,7 +72,8 @@ for f in docker-compose.yml bgctl host/install.sh host/bargames-reboot.path host
 done
 mkdir -p "$here/host"
 for f in docker-compose.yml bgctl host/install.sh host/bargames-reboot.path host/bargames-reboot.service host/bargames-update.path host/bargames-update.service host/bargames-wifi host/bargames-wifi.path host/bargames-wifi.service; do
-  [ -f "$tmp/$f" ] && cp "$tmp/$f" "$here/$f"
+  # Replace, don't overwrite: this script is one of them, and sh is still reading it.
+  [ -f "$tmp/$f" ] && cp "$tmp/$f" "$here/$f.new" && mv -f "$here/$f.new" "$here/$f"
 done
 chmod +x "$here/bgctl" "$here/host/install.sh"
 rm -rf "$tmp"
