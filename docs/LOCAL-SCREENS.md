@@ -1,8 +1,14 @@
 # Plugged-in screens (HDMI / DisplayPort on the box)
 
-Status: **scaffolding.** `apps/broker/src/drivers/local/` lists connected outputs (read-only,
-from `/sys/class/drm`) when the broker runs with `DRIVERS=roku,airplay,local`. Nothing can
-be shown on them yet. Build the rest once a screen is attached to a test box.
+Status (box 0.13.6): **one screen works.** The first connected output shows up as a TV and
+can show anything a TV can (rooms, the idle screen, scenes, startup choices).
+- The broker runs `cage` (a one-app Wayland compositor) with Chromium full screen on the real
+  output, with no encoder. Page changes go over DevTools, so the screen doesn't blank.
+- "Off" shows black (no CEC yet).
+- `seatd` hands the screen to cage. It runs as root inside the broker container
+  (`deploy/broker-start`); the broker itself runs as `node` with no capabilities.
+- Needs `DRIVERS` to include `local` (the compose default does), `/dev/dri`, and the video
+  and render groups.
 
 ## Decisions (2026-11-12)
 
@@ -20,7 +26,8 @@ be shown on them yet. Build the rest once a screen is attached to a test box.
 
 ## What's left to build
 
-1. **Rendering on the real outputs:** a kiosk Wayland compositor (cage or sway) in the
+1. ~~Rendering on the real outputs~~ (done for one screen; more than one needs one cage per
+   output, or cage across outputs). Original note: a kiosk Wayland compositor (cage or sway) in the
    broker container with one Chromium per output, no encoder. The container needs
    `/dev/dri` (it already has it for QuickSync) and a seat manager (`seatd`), so nothing new
    goes on the host. Reuse the AirPlay channel's Chromium flags and the DevTools previews.

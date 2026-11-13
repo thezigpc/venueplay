@@ -157,7 +157,7 @@ test("roku remote: only its own keys, volume on TVs only, typing; the broker rou
   }
 });
 
-test("local screens (scaffolding): connected outputs from sysfs, nothing shown yet", async () => {
+test("local screens: connected outputs from sysfs; showing starts cage + Chromium on that output", async () => {
   const { mkdirSync, writeFileSync } = await import("node:fs");
   const { LocalScreenDriver, readConnectors } = await import("./drivers/local/index.js");
   const drm = mkdtempSync(path.join(tmpdir(), "bg-drm-"));
@@ -174,12 +174,35 @@ test("local screens (scaffolding): connected outputs from sysfs, nothing shown y
     ["HDMI-A-1", true, ["3840x2160", "1920x1080"]],
   ]);
   assert.deepEqual(readConnectors(path.join(drm, "missing")), [], "no DRM: nothing");
-  const drv = new LocalScreenDriver(drm);
-  const [screen] = await drv.discover();
+  const bare = new LocalScreenDriver({ drmDir: drm });
+  const [screen] = await bare.discover();
   assert.equal(screen.id, "local:HDMI-A-1");
   assert.equal(screen.model, "up to 3840x2160");
-  assert.equal((await drv.show(screen, { kind: "url", url: "http://x" })).ok, false);
-  assert.equal((await drv.health(screen)).online, true);
+  assert.equal((await bare.show(screen, { kind: "url", url: "http://x" })).ok, false, "no cage in this image: says so");
+  assert.equal((await bare.health(screen)).online, true);
+
+  const spawned: { cmd: string; args: string[]; env: Record<string, string> }[] = [];
+  const runner = {
+    spawn: (_tag: string, cmd: string, args: string[], env: Record<string, string> = {}) => {
+      spawned.push({ cmd, args, env });
+      return { alive: true, tail: () => [], kill: () => undefined };
+    },
+    ctl: async () => ({ ok: true }),
+    waitForDisplay: async () => undefined,
+    cleanSlot: () => undefined,
+    sleep: async () => undefined,
+  };
+  const drv = new LocalScreenDriver({ drmDir: drm, runner, runDir: mkdtempSync(path.join(tmpdir(), "bg-local-")), debugPort: 1 });
+  const r = await drv.show(screen, { kind: "url", url: "http://play.example.com/bingo/tv" });
+  assert.equal(r.ok, true);
+  assert.equal(spawned[0].cmd, "cage");
+  assert.equal(spawned[0].args.at(-1), "http://play.example.com/bingo/tv");
+  assert.ok(spawned[0].args.includes("--ozone-platform=wayland"));
+  assert.equal(spawned[0].env.WLR_DRM_DEVICES, "/dev/dri/card0");
+  assert.equal(spawned[0].env.LIBSEAT_BACKEND, "seatd");
+  assert.equal((await drv.show(screen, { kind: "external", provider: "youtube", app: "youtube" })).ok, false);
+  const [dp] = [{ ...screen, id: "local:DP-1" }];
+  assert.equal((await drv.show(dp, { kind: "off" })).ok, false, "unplugged screen");
 });
 
 test("system: host network interfaces from /proc/net/dev (bridges and veths left out)", async () => {

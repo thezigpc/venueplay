@@ -49,8 +49,11 @@ const roku = enabled.includes("roku") ? new RokuDriver(streams) : undefined;
 if (roku) drivers.set(roku.id, roku);
 const airplayDriver = enabled.includes("airplay") ? new AirplayDriver(streams) : undefined;
 if (airplayDriver) drivers.set(airplayDriver.id, airplayDriver);
-// Plugged-in screens: scaffolding only (lists connected outputs, can't show yet).
-if (enabled.includes("local")) drivers.set("local", new LocalScreenDriver());
+// Plugged-in screens (HDMI/DisplayPort): cage + Chromium on the real output.
+if (enabled.includes("local")) {
+  const localDir = process.env.LOCAL_RUN_DIR ?? "/tmp/bargames-local";
+  drivers.set("local", new LocalScreenDriver({ runner: existsSync("/usr/bin/cage") ? new NodeProcRunner(log, localDir) : undefined, log, runDir: localDir }));
+}
 const mockCount = envNum("MOCK_DISPLAYS", 0);
 if (mockCount) drivers.set("mock", new MockDriver(mockCount));
 

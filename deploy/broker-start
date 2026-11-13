@@ -1,0 +1,13 @@
+#!/bin/sh
+# Broker entry point. Started as root (compose: user "0:0") only so seatd can hand the
+# plugged-in screens (DRIVERS has "local") to cage; then the broker runs as node, with
+# the container's extra groups (render, video) and no capabilities.
+set -eu
+if [ "$(id -u)" = 0 ]; then
+  case ",${DRIVERS:-}," in
+    *,local,*) SEATD_VTBOUND=0 seatd -u node -g node > /tmp/seatd.log 2>&1 & ;;
+  esac
+  groups=$(id -G | tr ' ' ',')
+  exec setpriv --reuid=1000 --regid=1000 --groups="$groups" --inh-caps=-all --bounding-set=-all env HOME=/home/node USER=node "$@"
+fi
+exec "$@"

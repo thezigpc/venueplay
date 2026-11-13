@@ -59,6 +59,9 @@ services:
     image: ghcr.io/thezigpc/bargames-broker:${BARGAMES_VERSION:-dev}
     container_name: bargames-broker
     restart: unless-stopped
+    # Starts as root only to run seatd for plugged-in screens; the broker runs as node.
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/broker-start"]
     command: ["node", "apps/broker/dist/index.js"]
     # Host network: SSDP/mDNS discovery and AirPlay connections from the TVs.
     network_mode: host
@@ -67,7 +70,8 @@ services:
       HOST: "0.0.0.0"
       DATA_DIR: /data
       BROKER_TOKEN: ${BROKER_TOKEN}
-      DRIVERS: ${DRIVERS:-roku}
+      # local = screens plugged into the box (HDMI/DisplayPort).
+      DRIVERS: ${DRIVERS:-roku,airplay,local}
       MOCK_DISPLAYS: ${MOCK_DISPLAYS:-0}
       # AirPlay casting: auto picks the QuickSync encoder; vaapi forces it.
       AIRPLAY_HWACCEL: ${AIRPLAY_HWACCEL:-auto}
@@ -75,7 +79,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes: ["./data/broker:/data"]
     devices: ["/dev/dri:/dev/dri"]
-    group_add: ["${RENDER_GID:-991}"]
+    group_add: ["${RENDER_GID:-991}", "${VIDEO_GID:-44}"]
     shm_size: 2gb
 
   docker-proxy:
