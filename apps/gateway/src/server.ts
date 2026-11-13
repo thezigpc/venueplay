@@ -1,10 +1,11 @@
-import { ADMIN_COOKIE, GATEWAY_PROOF_HEADER, signToken, STAFF_COOKIE, STAFF_LINK_TTL_MS, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
+import { ADMIN_COOKIE, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_LINK_TTL_MS, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
 import { GAMES_LINK_CSS, gamesLinkHtml, HEADERS, PATHS, themeToCss, type VenueContext } from "@bargames/sdk";
 import httpProxy from "http-proxy";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { checkAccess, type AccessDecision } from "./ipgate.js";
+import { PinLimiter } from "./pinLimit.js";
 import { closedPage, hubPage, joinWifiPage, pinPage, simplePage } from "./pages.js";
 
 const PIN_COOKIE = "bg_pin";
@@ -18,6 +19,8 @@ export interface GatewayDeps {
   /** Sent to core (only core) so it can trust this gateway's access decision. */
   coreToken: string;
   log: Logger;
+  /** Wrong-PIN limits (tests pass their own). */
+  pinLimiter?: PinLimiter;
 }
 
 export function createGateway(d: GatewayDeps) {
@@ -59,6 +62,7 @@ export function createGateway(d: GatewayDeps) {
     });
   });
 
+  const pins = d.pinLimiter ?? new PinLimiter();
   const pinToken = (pin: string) => createHmac("sha256", d.secret).update(`pin:${pin}`).digest("base64url");
 
   function decide(req: IncomingMessage, cfg: GatewayConfig, route: GatewayRoute): AccessDecision {
@@ -170,7 +174,7 @@ export function createGateway(d: GatewayDeps) {
       return held(req, res, url, () => { const v = d.config()?.venue; return v ? { announcement: v.announcement ?? null, countdown: v.countdown ?? null } : undefined; }, { "access-control-allow-origin": "*", "access-control-expose-headers": "x-bargames-etag, x-bargames-wait" });
     }
 
-    if (url.pathname === PATHS.pin && req.method === "POST") return handlePin(req, res, cfg);
+    if (url.pathname === PATHS.pin && req.method === "POST") return handlePin(req, res, cfg, decision);
     if (url.pathname === PATHS.staff && req.method === "GET" && route.kind === "game") return handleStaff(req, res, cfg, url, route);
     if (!pinOk(req, cfg, decision, route)) {
       if (req.method !== "GET") return send(res, 401, JSON.stringify({ error: "venue PIN required" }), "application/json");
@@ -225,10 +229,19 @@ export function createGateway(d: GatewayDeps) {
     res.end(JSON.stringify(body));
   }
 
-  async function handlePin(req: IncomingMessage, res: ServerResponse, cfg: GatewayConfig): Promise<void> {
+  async function handlePin(req: IncomingMessage, res: ServerResponse, cfg: GatewayConfig, decision: AccessDecision): Promise<void> {
     const form = new URLSearchParams(await readBody(req, 4096));
     const to = safeReturn(form.get("to"));
-    if (!cfg.access.pinEnabled || form.get("pin") !== cfg.access.pin) return send(res, 401, pinPage(cfg.venue, to, true));
+    const ip = decision.clientIp ?? req.socket.remoteAddress ?? "unknown";
+    if (!pins.allowed(ip, decision.reason)) {
+      d.log.warn("pin", "PIN entry locked for a client", { reason: decision.reason });
+      return send(res, 429, pinPage(cfg.venue, to, "locked"));
+    }
+    if (!cfg.access.pinEnabled || !safeEqual(form.get("pin") ?? "", cfg.access.pin)) {
+      if (cfg.access.pinEnabled) pins.failed(ip, decision.reason);
+      return send(res, 401, pinPage(cfg.venue, to, true));
+    }
+    pins.succeeded(ip);
     const domain = cfg.domain && cfg.domain !== "localhost" ? `; Domain=${cfg.domain}` : "";
     res.writeHead(303, {
       location: to,

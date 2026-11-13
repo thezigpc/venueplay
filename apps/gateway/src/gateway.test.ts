@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { checkAccess, inCidr, isPrivate, parseCidr, parseIp, prefixCidr } from "./ipgate.js";
 import { createGateway, GATEWAY_HEALTH_PATH, injectTheme } from "./server.js";
+import { PinLimiter } from "./pinLimit.js";
 
 test("ip parsing: v4, v6, mapped, compressed", () => {
   assert.deepEqual(Array.from(parseIp("192.168.1.5")!.bytes), [192, 168, 1, 5]);
@@ -81,7 +82,7 @@ test("gateway: routing, gate, PIN, closed games, headers", async () => {
     setupRequired: false,
     adminUrl: "https://admin.example.com",
   };
-  const gw = createGateway({ config: () => cfg, detectedCidrs: () => ["203.0.113.10/32"], secret: "s", coreToken: "core-tok", log: createLogger("t", "error") });
+  const gw = createGateway({ config: () => cfg, detectedCidrs: () => ["203.0.113.10/32"], secret: "s", coreToken: "core-tok", log: createLogger("t", "error"), pinLimiter: new PinLimiter({ venuePerIp: 3 }) });
   await new Promise<void>((r) => gw.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(gw.address() as AddressInfo).port}`;
   // node:http, not fetch: fetch drops a custom Host header.
@@ -155,6 +156,11 @@ test("gateway: routing, gate, PIN, closed games, headers", async () => {
     assert.match(cookie, /Domain=example\.com/);
     assert.equal((await get("pool.example.com", "/", { ...venueIp, cookie: cookie.split(";")[0] })).status, 200);
     assert.equal((await get("pool.example.com", "/")).status, 200, "local traffic skips the PIN");
+    // Box 0.15.1: wrong PINs are limited per client (3 here); a locked client is refused even with the right one.
+    for (let i = 0; i < 3; i++) assert.equal((await send("POST", "pool.example.com", "/__bargames/pin", { ...venueIp, ...form }, "pin=1111&to=/")).status, 401);
+    const locked = await send("POST", "pool.example.com", "/__bargames/pin", { ...venueIp, ...form }, "pin=4321&to=/");
+    assert.equal(locked.status, 429);
+    assert.match(await locked.text(), /Too many wrong PINs/);
     cfg.access.pinEnabled = false;
 
     // LAN console: an unknown hostname (the box's IP) from the LAN gets the admin UI,
@@ -438,4 +444,36 @@ test("0.12.0: venue.json is held until the venue changes; live.json answers with
   } finally {
     gw.close();
   }
+});
+
+test("pin limiter: internet clients 10, venue clients 30, an internet-wide cap that never locks the venue", () => {
+  const l = new PinLimiter();
+  const t0 = 1_000_000;
+  for (let i = 0; i < 9; i++) l.failed("198.51.100.1", "open", t0);
+  assert.equal(l.allowed("198.51.100.1", "open", t0), true);
+  l.failed("198.51.100.1", "open", t0);
+  assert.equal(l.allowed("198.51.100.1", "open", t0), false, "10 wrong: locked");
+  assert.equal(l.allowed("198.51.100.1", "open", t0 + 15 * 60_000 + 1), true, "the lock expires");
+  assert.equal(l.allowed("198.51.100.2", "open", t0), true, "other IPs aren't affected");
+
+  for (let i = 0; i < 29; i++) l.failed("203.0.113.10", "venue-ip", t0);
+  assert.equal(l.allowed("203.0.113.10", "venue-ip", t0), true, "a shared venue IP gets 30");
+  l.failed("203.0.113.10", "venue-ip", t0);
+  assert.equal(l.allowed("203.0.113.10", "venue-ip", t0), false);
+
+  // 100 wrong tries spread over internet IPs lock PIN entry for internet clients only.
+  const m = new PinLimiter();
+  for (let i = 0; i < 100; i++) m.failed(`198.51.100.${i}`, "open", t0);
+  assert.equal(m.allowed("198.51.100.250", "open", t0), false, "a fresh internet IP is locked by the cap");
+  assert.equal(m.allowed("203.0.113.10", "venue-ip", t0), true, "the venue is never locked by it");
+  assert.equal(m.allowed("192.0.2.5", "whitelist", t0), true);
+
+  // A right PIN clears the IP's count; memory stays bounded.
+  const n = new PinLimiter({ maxEntries: 50 });
+  for (let i = 0; i < 9; i++) n.failed("198.51.100.9", "open", t0);
+  n.succeeded("198.51.100.9");
+  n.failed("198.51.100.9", "open", t0);
+  assert.equal(n.allowed("198.51.100.9", "open", t0), true);
+  for (let i = 0; i < 200; i++) n.failed(`2001:db8::${i.toString(16)}`, "venue-ip", t0);
+  assert.ok((n as unknown as { buckets: Map<string, unknown> }).buckets.size <= 50);
 });

@@ -36,14 +36,14 @@ export function joinWifiPage(venue: VenueInfo | undefined): string {
   );
 }
 
-export function pinPage(venue: VenueInfo | undefined, returnTo: string, error = false): string {
+export function pinPage(venue: VenueInfo | undefined, returnTo: string, error: boolean | "locked" = false): string {
   return page(
     venue,
     "Enter the venue PIN",
     `<h1>Enter the venue PIN</h1><p>You'll find it on the TV screens or ask the staff.</p>
 <form class="card" method="post" action="/__bargames/pin"><input type="hidden" name="to" value="${esc(returnTo)}">
 <input name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="8" autofocus required>
-${error ? '<p class="err">That PIN didn\'t work.</p>' : ""}<button>Continue</button></form>`,
+${error === "locked" ? '<p class="err">Too many wrong PINs. Try again in a few minutes.</p>' : error ? '<p class="err">That PIN didn\'t work.</p>' : ""}<button>Continue</button></form>`,
   );
 }
 
