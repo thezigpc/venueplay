@@ -306,3 +306,12 @@ button.tv-tile.selected { border-color: var(--primary); }
 .wifi-form .inline input { min-width: 0; }
 
 .forget-tv { margin-top: 20px; padding-top: 12px; border-top: 1px solid #252c55; }
+
+/* Schedule editor: stacked fields, days as a row of toggles. */
+.schedule-form { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+.schedule-form > label { margin-bottom: 0; }
+.schedule-form .buttons { margin-top: 4px; }
+.field { display: grid; gap: 6px; color: var(--muted); font-size: 0.9rem; }
+.day-picks { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.day-pick { min-height: 44px; padding: 0; border-radius: 10px; background: none; border: 1px solid #3a4170; color: var(--text); font-size: 0.85rem; }
+.day-pick.on { background: var(--primary); border-color: var(--primary); color: #1b1b1b; font-weight: 600; }

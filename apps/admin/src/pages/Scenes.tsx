@@ -180,7 +180,7 @@ export function SchedulesCard({ games, displays }: { games: Game[]; displays: Di
           + New schedule
         </button>
       ) : (
-        <div className="media">
+        <div className="media schedule-form">
           <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as "game" | "scene" })}>
             <option value="game">Start a game</option>
             <option value="scene">Apply a scene</option>
@@ -228,20 +228,29 @@ export function SchedulesCard({ games, displays }: { games: Game[]; displays: Di
               ))}
             </select>
           )}
-          <div className="inline">
-            {DAYS.map((d, i) => (
-              <label key={d} className="inline">
-                <input
-                  type="checkbox"
-                  style={{ width: "auto" }}
-                  checked={form.days.includes(i)}
-                  onChange={(e) => setForm({ ...form, days: e.target.checked ? [...form.days, i].sort() : form.days.filter((x) => x !== i) })}
-                />
-                {d}
-              </label>
-            ))}
-            <input type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} style={{ maxWidth: 140 }} />
+          <div className="field">
+            <span>Days</span>
+            <div className="day-picks" role="group" aria-label="Days">
+              {DAYS.map((d, i) => {
+                const on = form.days.includes(i);
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    className={`day-pick${on ? " on" : ""}`}
+                    aria-pressed={on}
+                    onClick={() => setForm({ ...form, days: on ? form.days.filter((x) => x !== i) : [...form.days, i].sort() })}
+                  >
+                    {d}
+                  </button>
+                );
+              })}
+            </div>
           </div>
+          <label>
+            Time
+            <input type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} />
+          </label>
           <div className="buttons">
             <button className="primary" onClick={() => void save()}>
               Save schedule
