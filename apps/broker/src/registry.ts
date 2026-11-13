@@ -9,6 +9,12 @@ export interface DisplayRecord extends DisplayDevice {
   delivery?: DeliveryMethod;
   lastSeen?: string;
   content?: DisplayContent;
+  /**
+   * Box 0.15.2: the venue set this TV aside (it's at the other site, unplugged…). The box
+   * leaves it alone: no health checks, no casting, no scenes or startup choices, not in
+   * games' or integrations' TV lists. Its name, room, pairings and settings are kept.
+   */
+  ignored?: boolean;
 }
 
 export interface DisplayView extends DisplayRecord {
@@ -51,11 +57,14 @@ export class DisplayRegistry {
     return drv;
   }
 
-  async view(withHealth = false): Promise<DisplayView[]> {
+  /** Every TV with its live state. Ignored TVs are left out unless asked for, and never contacted. */
+  async view(withHealth = false, includeIgnored = false): Promise<DisplayView[]> {
     return Promise.all(
-      this.list().map(async (d) => {
+      this.list()
+        .filter((d) => includeIgnored || !d.ignored)
+        .map(async (d) => {
         const drv = this.drivers.get(d.driver);
-        if (!drv) return d;
+        if (!drv || d.ignored) return d;
         const [capabilities, health] = await Promise.all([drv.capabilities(d).catch(() => undefined), withHealth ? drv.health(d) : undefined]);
         return { ...d, capabilities, health, stream: drv.streamState?.(d), launchable: drv.launchableApps?.(d) ?? [] };
       }),
@@ -272,8 +281,55 @@ export class DisplayRegistry {
 
   resolve(target: Target): DisplayRecord[] {
     if (target.displayIds?.length) return target.displayIds.map((id) => this.get(id)).filter((d): d is DisplayRecord => Boolean(d));
-    if (target.group) return this.list().filter((d) => d.group === target.group);
+    if (target.group) return this.list().filter((d) => d.group === target.group && !d.ignored);
     return [];
+  }
+
+  /**
+   * Ignore a TV, or stop ignoring it. Ignoring stops what the box casts to it and clears
+   * what it should show, so nothing reconnects to it or puts it back after a restart.
+   */
+  async setIgnored(id: string, ignored: boolean): Promise<DisplayRecord> {
+    const cur = this.get(id);
+    if (!cur) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    if (ignored && !cur.ignored) await this.driverFor(cur).stop(cur).catch(() => undefined);
+    await this.store.update((s) => {
+      s.displays = s.displays.map((d) => {
+        if (d.id !== id) return d;
+        const next: DisplayRecord = { ...d, ignored: ignored || undefined };
+        if (!ignored) delete next.ignored;
+        if (ignored) delete next.content;
+        return next;
+      });
+    });
+    return this.get(id)!;
+  }
+
+  /**
+   * Stops everything the box sends to every TV (ignored ones too): casts, the idle screen,
+   * plugged-in screens. Doesn't power anything off or change inputs. What each TV showed is
+   * cleared, so nothing comes back after a restart. Returns the TVs it stopped.
+   */
+  async detachAll(): Promise<{ stopped: string[]; failed: Record<string, string> }> {
+    const stopped: string[] = [];
+    const failed: Record<string, string> = {};
+    await Promise.all(
+      this.list().map(async (d) => {
+        try {
+          await this.driverFor(d).stop(d);
+          stopped.push(d.id);
+        } catch (err) {
+          failed[d.id] = String(err);
+        }
+      }),
+    );
+    await this.store.update((s) => {
+      s.displays = s.displays.map((d) => {
+        const { content: _c, ...rest } = d;
+        return rest;
+      });
+    });
+    return { stopped, failed };
   }
 
   /** Shows content on every target display; each display uses its own best delivery. */
@@ -281,6 +337,7 @@ export class DisplayRegistry {
     const results: Record<string, ShowResult> = {};
     await Promise.all(
       this.resolve(target).map(async (d) => {
+        if (d.ignored) return void (results[d.id] = { ok: false, message: `${d.label || d.name} is ignored (TVs page: Stop ignoring)` });
         try {
           const drv = this.driverFor(d);
           const delivery = d.delivery ?? (await drv.capabilities(d)).delivery[0];
@@ -334,7 +391,7 @@ export class DisplayRegistry {
   /** After a restart: put every TV back on what it was showing. */
   async resume(): Promise<void> {
     for (const d of this.list()) {
-      if (d.content && playable(d.content).kind === "url") await this.show({ displayIds: [d.id] }, d.content).catch(() => undefined);
+      if (!d.ignored && d.content && playable(d.content).kind === "url") await this.show({ displayIds: [d.id] }, d.content).catch(() => undefined);
     }
   }
 

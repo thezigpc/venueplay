@@ -17,6 +17,7 @@ Repo: https://github.com/thezigpc/venueplay (public, branch `main`). Commits use
   - **Container:** Docker hides `/proc/asound`, so outputs come from `aplay -l`, and screen detection from `/sys/class/drm`.
   - Guide: docs/AUDIO.md.
 - The broker's API listens only where core reaches it: compose sets `HOST: 127.0.0.1,docker0` (a comma list of IPs and interface names; anything unresolved falls back to 0.0.0.0). Port 7210 (Venuebox apps) stays on the LAN.
+- Ignored TVs (box 0.15.2, `DisplayRecord.ignored`) are left out of the broker's `GET /displays` unless `?all=1`, never health-checked, and refused by `show`. Anything that lists TVs gets that for free; only the admin's TVs page and core's startup runner ask for `all=1`.
 - `bgctl self-update` waits for core, gateway and broker to be healthy (each has a compose health check) and rolls back otherwise. Its snapshot leaves out `data/bluetooth` (root-only).
 - Game repos consume the SDK as a vendored tarball from `integration/` (built with `npm run sdk:pack`). **Bump the SDK version for every re-pack.** A changed tarball with the same name breaks `npm ci` in the games (lockfile integrity). Keep `integration/README.md` in step with SDK changes.
 - Off a box, the SDK must change nothing in a game (no theme, no events, gateway headers ignored). Games rely on this.

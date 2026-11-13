@@ -349,3 +349,7 @@ button.tv-tile.selected { border-color: var(--primary); }
 .volume input[type="range"] { flex: 1; min-width: 120px; min-height: 44px; accent-color: var(--primary); }
 .volume-value { width: 3ch; text-align: right; font-variant-numeric: tabular-nums; }
 .plain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+
+/* TVs page: ignored TVs (box 0.15.2) */
+.ignored-tvs { margin-top: 20px; padding-top: 12px; border-top: 1px solid #252c55; }
+.ignored-tvs summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: #c3cae6; }

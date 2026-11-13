@@ -32,7 +32,8 @@ export const BOOT_WINDOW_SEC = 10 * 60;
 export interface StartupDeps {
   rules: () => Record<string, StartupRule>;
   /** TVs and whether they answer right now. */
-  displays: () => Promise<{ id: string; online: boolean }[]>;
+  /** Every TV the box knows, ignored ones included (box 0.15.2: their choices wait). */
+  displays: () => Promise<{ id: string; online: boolean; ignored?: boolean }[]>;
   apply: (displayId: string, rule: StartupRule) => Promise<void>;
   log: Logger;
 }
@@ -67,6 +68,12 @@ export class StartupRunner {
     this.timer = undefined;
   }
 
+  /** Stops waiting for every TV (staff detached the box from all TVs). */
+  cancel(): void {
+    this.pending.clear();
+    this.stop();
+  }
+
   get waiting(): string[] {
     return [...this.pending.keys()];
   }
@@ -78,7 +85,10 @@ export class StartupRunner {
       this.pending.clear();
       return this.stop();
     }
-    const online = new Set((await this.d.displays().catch(() => [])).filter((x) => x.online).map((x) => x.id));
+    const list = await this.d.displays().catch(() => []);
+    const online = new Set(list.filter((x) => x.online && !x.ignored).map((x) => x.id));
+    // An ignored TV (at the other site) isn't waited for; its choice applies again once it's back.
+    for (const x of list) if (x.ignored) this.pending.delete(x.id);
     const rules = this.d.rules();
     for (const [id, attempts] of [...this.pending]) {
       const rule = rules[id];

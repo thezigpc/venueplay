@@ -735,6 +735,29 @@ export function createApp(d: AppDeps) {
       res.json({ ok: r.result.ok, message: r.result.message, pending: data.pending === true, launched: data.launched === true });
     }),
   );
+  /**
+   * Box 0.15.2: "Detach from all TVs". Every cast and sound session on a TV stops (broker),
+   * media apps stop what they play on TVs, and the startup choices still waiting are dropped.
+   * Nothing is powered off and no input changes; TVs go back to their own home screens.
+   */
+  app.post(
+    "/api/tvs/detach-all",
+    h(async (req, res) => {
+      startup.cancel();
+      const media: { gameId: string; displayId: string; ok: boolean; message?: string }[] = [];
+      for (const game of mediaApps()) {
+        for (const t of roomCache.mediaTargets(game.id).filter((x) => ["playing", "paused", "starting"].includes(x.state))) {
+          const r = await gameCommand(game, { command: "media_stop", args: { displayId: t.displayId } }).catch((err: Error) => ({ result: { ok: false, message: err.message } }));
+          media.push({ gameId: game.id, displayId: t.displayId, ok: r.result.ok, message: r.result.message });
+        }
+        void roomCache.refresh(game.id).catch(() => undefined);
+      }
+      const r = (await brokerCall("POST", "/detach-all", {})) as { stopped: string[]; failed: Record<string, string>; audioStopped: number };
+      d.log.info("displays", "staff detached the box from every TV", { by: clientIpOf(req), tvs: r.stopped.length, media: media.length });
+      res.json({ ...r, media });
+    }),
+  );
+
   /** { displayId }: pause + clear on that TV, then the box's idle screen (never over local control). */
   app.post(
     "/api/media/:gameId/stop",
@@ -1893,7 +1916,7 @@ export function createApp(d: AppDeps) {
   };
   const startup = new StartupRunner({
     rules: () => d.state.tvStartup.get(),
-    displays: async () => ((await brokerCall("GET", "/displays?health=1")) as { id: string; health?: { online?: boolean } }[]).map((x) => ({ id: x.id, online: Boolean(x.health?.online) })),
+    displays: async () => ((await brokerCall("GET", "/displays?health=1&all=1")) as { id: string; ignored?: boolean; health?: { online?: boolean } }[]).map((x) => ({ id: x.id, online: Boolean(x.health?.online), ignored: x.ignored })),
     apply: applyStartup,
     log: d.log,
   });

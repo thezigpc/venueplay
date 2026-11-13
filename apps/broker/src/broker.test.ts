@@ -461,3 +461,49 @@ Local:
   assert.equal(addressFromProc("docker0", {}), undefined, "off Linux: no tables");
   assert.deepEqual(listenHosts("127.0.0.1,docker0", noDocker0, () => proc), { hosts: ["127.0.0.1", "172.17.0.1"] });
 });
+
+test("ignored TVs (box 0.15.2): left out, never contacted, refused for casting; detach-all stops every TV", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "bg-ignore-"));
+  const mock = new MockDriver(3);
+  let healthCalls = 0;
+  const health = mock.health.bind(mock);
+  mock.health = async (d) => (healthCalls++, health(d));
+  const registry = new DisplayRegistry(new JsonStore<{ displays: DisplayRecord[] }>(path.join(dir, "displays.json"), { displays: [] }), new Map([["mock", mock]]));
+  await registry.discover();
+  await registry.patch("mock:tv1", { group: "Bar" });
+  await registry.patch("mock:tv2", { group: "Bar" });
+  await registry.show({ displayIds: ["mock:tv1", "mock:tv2", "mock:tv3"] }, { kind: "url", url: "http://x/tv" });
+
+  const ig = await registry.setIgnored("mock:tv2", true);
+  assert.equal(ig.ignored, true);
+  assert.equal(ig.content, undefined, "what it showed is cleared");
+  assert.equal(mock.shown.has("mock:tv2"), false, "its cast stopped");
+
+  healthCalls = 0;
+  const views = await registry.view(true);
+  assert.deepEqual(views.map((v) => v.id), ["mock:tv1", "mock:tv3"], "left out of lists");
+  assert.equal(healthCalls, 2, "and never checked on");
+  const withIgnored = await registry.view(true, true);
+  assert.equal(withIgnored.find((v) => v.id === "mock:tv2")?.ignored, true);
+  assert.equal(healthCalls, 4, "still not checked on when listed for the TVs page");
+
+  assert.match((await registry.show({ displayIds: ["mock:tv2"] }, { kind: "url", url: "http://x/y" }))["mock:tv2"].message!, /ignored/);
+  assert.deepEqual(Object.keys(await registry.show({ group: "Bar" }, { kind: "idle", url: "http://x/idle" })), ["mock:tv1"], "a room skips it");
+
+  // Rediscovery keeps it ignored; un-ignoring brings it back with its name and room.
+  await registry.discover();
+  assert.equal(registry.get("mock:tv2")?.ignored, true);
+  const back = await registry.setIgnored("mock:tv2", false);
+  assert.equal(back.ignored, undefined);
+  assert.equal(back.group, "Bar");
+
+  // Detach from every TV: all casts stop, nothing is powered off, nothing comes back after a restart.
+  await registry.show({ displayIds: ["mock:tv1", "mock:tv2", "mock:tv3"] }, { kind: "url", url: "http://x/tv" });
+  const r = await registry.detachAll();
+  assert.equal(r.stopped.length, 3);
+  assert.equal(mock.shown.size, 0);
+  assert.equal(mock.powered.size, 0, "no power commands");
+  assert.ok(registry.list().every((d) => !d.content));
+  await registry.resume();
+  assert.equal(mock.shown.size, 0);
+});

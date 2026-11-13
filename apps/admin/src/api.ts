@@ -207,6 +207,8 @@ export interface Display {
   health?: { online: boolean; powerMode?: string; detail?: string };
   content?: { kind: string; url?: string; title?: string; app?: string; provider?: string };
   stream?: { delivery: string; url: string; state: string; needsCode: boolean; detail?: string; settings?: string };
+  /** Box 0.15.2: set aside (at the other site…): not contacted, not used. */
+  ignored?: boolean;
 }
 
 export interface StreamSettings {
@@ -331,6 +333,10 @@ export const api = {
   events: () => call<BarGamesEvent[]>("GET", "/events/recent?limit=30"),
   displays: () => call<Display[]>("GET", "/broker/displays?health=1"),
   discover: () => call<{ found: number; errors: string[] }>("POST", "/broker/discover", {}),
+  /** Every TV, ignored ones too (box 0.15.2): the TVs page. Elsewhere use displays(). */
+  displaysAll: () => call<Display[]>("GET", "/broker/displays?health=1&all=1"),
+  ignoreDisplay: (id: string, ignored: boolean) => call<Display>("PATCH", `/broker/displays/${encodeURIComponent(id)}`, { ignored }),
+  detachAll: () => call<{ stopped: string[]; failed: Record<string, string>; audioStopped: number; media: { gameId: string; displayId: string; ok: boolean; message?: string }[] }>("POST", "/tvs/detach-all", {}),
   forgetDisplay: (id: string) => call<{ ok: boolean }>("DELETE", `/broker/displays/${encodeURIComponent(id)}`),
   addRoku: (host: string) => call<Display>("POST", "/broker/displays/roku", { host }),
   addAirplay: (host: string) => call<Display>("POST", "/broker/displays/airplay", { host }),

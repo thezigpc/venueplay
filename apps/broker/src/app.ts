@@ -43,7 +43,7 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
 
   app.get(
     "/displays",
-    h(async (req, res) => res.json(await d.registry.view(req.query.health === "1"))),
+    h(async (req, res) => res.json(await d.registry.view(req.query.health === "1", req.query.all === "1"))),
   );
 
   app.post(
@@ -108,7 +108,12 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
   app.patch(
     "/displays/:id",
     h(async (req, res) => {
-      const { label, group, delivery, streamSettings } = req.body ?? {};
+      const { label, group, delivery, streamSettings, ignored } = req.body ?? {};
+      if (ignored !== undefined) {
+        if (typeof ignored !== "boolean") return void res.status(400).json({ error: "ignored: true or false" });
+        await d.registry.setIgnored(req.params.id, ignored);
+        if (label === undefined && group === undefined && delivery === undefined && streamSettings === undefined) return void res.json(d.registry.get(req.params.id));
+      }
       // null clears a TV's own settings (back to the box default).
       if (streamSettings !== undefined && streamSettings !== null) {
         const problem = checkStreamSettings(streamSettings);
@@ -323,6 +328,28 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
       if (!/^\d{1,4}(\.\d{1,3})?$/.test(channel)) return void res.status(400).json({ error: "channel: like 7 or 7.1" });
       await d.registry.tuneChannel(req.params.id, channel);
       res.json({ ok: true });
+    }),
+  );
+
+  /**
+   * Box 0.15.2: "Detach from all TVs". Stops every cast and every sound session on a TV.
+   * Nothing is powered off and no input changes.
+   */
+  app.post(
+    "/detach-all",
+    h(async (_req, res) => {
+      const audioStopped: string[] = [];
+      if (d.audio) {
+        for (const s of d.audio.engine.list()) {
+          if (s.output.startsWith("tv:") && ["starting", "playing", "paused"].includes(s.state)) {
+            d.audio.engine.stop(s.id, "Staff detached the box from every TV.");
+            audioStopped.push(s.id);
+          }
+        }
+      }
+      const r = await d.registry.detachAll();
+      d.log.info("displays", "detached from every TV", { tvs: r.stopped.length, failed: Object.keys(r.failed).length, audio: audioStopped.length });
+      res.json({ ...r, audioStopped: audioStopped.length });
     }),
   );
 

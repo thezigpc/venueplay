@@ -16,7 +16,7 @@ export const readPreviews = () => {
 import { useAction, useLoad } from "../useLoad";
 
 export function DisplaysPage({ selected, tab }: { selected?: string; tab?: string }) {
-  const displays = useLoad(api.displays, 10_000);
+  const displays = useLoad(api.displaysAll, 10_000);
   const startup = useLoad(api.tvStartup);
   const media = useLoad(api.media, 5000);
   const games = useLoad(api.games);
@@ -36,10 +36,20 @@ export function DisplaysPage({ selected, tab }: { selected?: string; tab?: strin
       /* this iPad only */
     }
   };
-  const list = displays.data ?? [];
+  const all = displays.data ?? [];
+  const list = all.filter((d) => !d.ignored);
+  const ignoredTvs = all.filter((d) => d.ignored);
   const groups = [...new Set(list.map((d) => d.group).filter(Boolean))] as string[];
   const shown = list.filter((d) => !group || d.group === group);
   const sel = list.find((d) => d.id === selected);
+  const detachAll = () => {
+    if (!window.confirm("Detach the box from every TV?\n\nIt stops everything the box casts and plays on them, including YouTube started from the box. TVs aren't switched off: they go back to their own home screen.")) return;
+    run(async () => {
+      const r = await api.detachAll();
+      const failed = Object.keys(r.failed).length + r.media.filter((m) => !m.ok).length;
+      setNote(`Detached from ${r.stopped.length} TV${r.stopped.length === 1 ? "" : "s"}.${failed ? ` ${failed} didn't answer; they'll stop when they reconnect.` : ""}`);
+    });
+  };
   const providers = media.data?.providers ?? [];
 
   return (
@@ -49,6 +59,9 @@ export function DisplaysPage({ selected, tab }: { selected?: string; tab?: strin
           <h1>TVs</h1>
           <button type="button" disabled={busy || !list.length} onClick={() => run(async () => void (await api.idleTvs(), setNote("Every TV is on the idle screen.")))}>
             All to idle screen
+          </button>
+          <button type="button" disabled={busy || !all.length} onClick={detachAll}>
+            Detach from all TVs
           </button>
           <button type="button" aria-expanded={adding} onClick={() => setAdding(!adding)}>
             Add a TV
@@ -80,7 +93,26 @@ export function DisplaysPage({ selected, tab }: { selected?: string; tab?: strin
             <TvTile key={d.id} d={d} media={providers} previews={previews} selected={d.id === sel?.id} onClick={() => go("tvs", d.id)} />
           ))}
         </div>
-        {displays.data && !list.length && <p className="muted">No TVs yet. Use "Add a TV" to find the Rokus and Apple TVs on this network.</p>}
+        {displays.data && !all.length && <p className="muted">No TVs yet. Use "Add a TV" to find the Rokus and Apple TVs on this network.</p>}
+        {ignoredTvs.length > 0 && (
+          <details className="ignored-tvs">
+            <summary>
+              Ignored TVs · {ignoredTvs.length}
+            </summary>
+            <p className="muted small-print">The box leaves these alone: it doesn't check on them, cast to them or use them in scenes. Their names, rooms and pairings are kept.</p>
+            {ignoredTvs.map((d) => (
+              <div key={d.id} className="game-row">
+                <div className="game-main">
+                  <b>{d.label || d.name}</b>
+                  <div className="muted game-sub">{[d.group, kindOf(d)].filter(Boolean).join(" · ")}</div>
+                </div>
+                <button type="button" disabled={busy} onClick={() => run(async () => void (await api.ignoreDisplay(d.id, false), setNote(`${d.label || d.name} is back.`)))}>
+                  Stop ignoring
+                </button>
+              </div>
+            ))}
+          </details>
+        )}
         {list.length > 0 && !sel && <p className="muted small-print">Tap a TV to control it.</p>}
       </div>
       {sel && (
@@ -369,6 +401,24 @@ function TvPanel({
           <StartupChoice d={d} rule={startup} games={games} run={run} busy={busy} media={media.filter((p) => p.targets.some((t) => t.displayId === d.id))} />
           {d.capabilities?.control && <ControlPairing d={d} paired={d.capabilities.control.paired} reload={reload} />}
           {canPair && <Pairing d={d} needsCode={Boolean(stream?.needsCode)} reload={reload} />}
+          <div className="forget-tv">
+            <h3 className="sub-head">Ignore this TV</h3>
+            <p className="muted small-print">
+              For a TV that's away (at the other site, or unplugged). The box stops checking on it and leaves it out of casting, scenes and startup choices, but keeps its name, room and pairings. Bring it back from "Ignored TVs" at the bottom of this page.
+            </p>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  await api.ignoreDisplay(d.id, true);
+                  go("tvs");
+                })
+              }
+            >
+              Ignore this TV
+            </button>
+          </div>
           <div className="forget-tv">
             <h3 className="sub-head">Forget this TV</h3>
             <p className="muted small-print">

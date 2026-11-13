@@ -77,7 +77,7 @@ async function boot(extraFetch?: (url: string, init?: RequestInit) => Response |
   const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    if (url === "http://broker/displays" || url === "http://broker/displays?health=1") return reply(displays.map((x) => ({ ...x, health: { online: x.id !== "tv-offline" } })));
+    if (url === "http://broker/displays" || url === "http://broker/displays?health=1" || url === "http://broker/displays?health=1&all=1") return reply(displays.map((x) => ({ ...x, health: { online: x.id !== "tv-offline" } })));
     if (init?.method === "DELETE" && url.startsWith("http://broker/displays/")) {
       const i = displays.findIndex((x) => `http://broker/displays/${encodeURIComponent(x.id)}` === url);
       if (i >= 0) displays.splice(i, 1);
@@ -473,6 +473,28 @@ test("tv startup runner: waits for TVs to come online, retries, gives up", async
   await runner.tick();
   assert.deepEqual(applied, ["a", "b"]);
   assert.deepEqual(runner.waiting, []);
+});
+
+test("tv startup runner (box 0.15.2): an ignored TV isn't waited for; detaching cancels the wait", async () => {
+  const applied: string[] = [];
+  const ignored = new Set(["away"]);
+  const runner = new StartupRunner(
+    {
+      rules: () => ({ away: { mode: "idle" }, here: { mode: "idle" }, later: { mode: "idle" } }),
+      displays: async () => ["away", "here", "later"].map((id) => ({ id, online: id !== "later", ignored: ignored.has(id) })),
+      apply: async (id) => void applied.push(id),
+      log: createLogger("test", "error"),
+    },
+    { intervalMs: 3_600_000, windowMs: 60_000 },
+  );
+  runner.start(); // runs its first pass in the background
+  runner.stop();
+  for (let i = 0; i < 20 && !applied.length; i++) await new Promise((r) => setImmediate(r));
+  await runner.tick();
+  assert.deepEqual(applied, ["here"], "the ignored TV gets nothing, though it answers");
+  assert.deepEqual(runner.waiting, ["later"], "and isn't waited for");
+  runner.cancel();
+  assert.deepEqual(runner.waiting, [], "detach-all drops the rest");
 });
 
 test("casting from a game: a slow TV gets \"starting\" before the phone gives up, and still comes on", async () => {
