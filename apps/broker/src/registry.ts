@@ -213,6 +213,30 @@ export class DisplayRegistry {
     await this.setContent(id, { kind: "external", provider: "remote", app: name });
   }
 
+  /**
+   * Switches the TV to one of its own inputs, or tunes its own tuner. Stops the box's cast
+   * first (it would cover the input on a Roku), then records it so idle repaints leave it be.
+   */
+  async setInput(id: string, input: string): Promise<void> {
+    const d = this.get(id);
+    if (!d) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    const drv = this.driverFor(d);
+    if (!(await drv.capabilities(d)).inputs.includes(input)) throw Object.assign(new Error(`${d.label || d.name} has no input "${input}" the box can switch to`), { status: 400 });
+    if (drv.streamState?.(d)) await drv.stop(d).catch(() => undefined);
+    await drv.setInput(d, input);
+    await this.setContent(id, { kind: "external", provider: "remote", app: inputName(input) });
+  }
+
+  async tuneChannel(id: string, channel: string): Promise<void> {
+    const d = this.get(id);
+    if (!d) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    const drv = this.driverFor(d);
+    if (!drv.tuneChannel || !(await drv.capabilities(d)).tvChannels) throw Object.assign(new Error(`${d.label || d.name} can't tune TV channels`), { status: 400 });
+    if (drv.streamState?.(d)) await drv.stop(d).catch(() => undefined);
+    await drv.tuneChannel(d, channel);
+    await this.setContent(id, { kind: "external", provider: "remote", app: `Channel ${channel}` });
+  }
+
   /** A small JPEG of what this TV is being sent, or undefined when it isn't casting. */
   async preview(id: string): Promise<Buffer | undefined> {
     const d = this.get(id);
@@ -319,6 +343,13 @@ export class DisplayRegistry {
       s.displays = s.displays.map((d) => (d.id === id ? { ...d, content } : d));
     });
   }
+}
+
+/** "hdmi2" → "HDMI 2", for what the TV shows. */
+export function inputName(input: string): string {
+  const m = /^hdmi-?(\d+)$/i.exec(input);
+  if (m) return `HDMI ${m[1]}`;
+  return ({ tuner: "Antenna", comp: "Composite", cast: "TV home", av: "AV", av1: "AV" } as Record<string, string>)[input.toLowerCase()] ?? input;
 }
 
 const hostOf = (address: string): string | undefined => {

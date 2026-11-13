@@ -241,7 +241,8 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
   );
 
   // The remote's Apps list (Roku channels).
-  const APP_ID = /^[A-Za-z0-9_.-]{1,40}$/;
+  // Roku channel ids ("837", "dev") and Apple TV bundle ids ("com.example.App").
+  const APP_ID = /^[A-Za-z0-9_.-]{1,100}$/;
   app.get(
     "/displays/:id/apps",
     h(async (req, res) => res.json(await d.registry.listApps(req.params.id))),
@@ -306,8 +307,20 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
   app.post(
     "/displays/:id/input",
     h(async (req, res) => {
-      const dev = one(req.params.id);
-      await d.registry.driverFor(dev).setInput(dev, String(req.body?.input ?? ""));
+      one(req.params.id);
+      await d.registry.setInput(req.params.id, String(req.body?.input ?? ""));
+      res.json({ ok: true });
+    }),
+  );
+
+  /** { channel: "7.1" }: the TV's own tuner (Roku TVs). */
+  app.post(
+    "/displays/:id/channel",
+    h(async (req, res) => {
+      one(req.params.id);
+      const channel = String(req.body?.channel ?? "").trim();
+      if (!/^\d{1,4}(\.\d{1,3})?$/.test(channel)) return void res.status(400).json({ error: "channel: like 7 or 7.1" });
+      await d.registry.tuneChannel(req.params.id, channel);
       res.json({ ok: true });
     }),
   );

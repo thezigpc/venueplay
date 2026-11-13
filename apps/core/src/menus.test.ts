@@ -383,6 +383,50 @@ test("tv startup: a TV that moves to a new driver (AirPlay → Vizio) keeps its 
   }
 });
 
+test("scenes: TV control steps (power, input, app, channel) are checked against the TV and run in order", async () => {
+  const sent: { url: string; body?: unknown }[] = [];
+  const b = await boot((url, init) => {
+    if (init?.method === "POST" && /^http:\/\/broker\/displays\/tv1\/(power|input|channel|apps\/[^/]+\/launch)$/.test(url)) {
+      sent.push({ url: url.replace("http://broker", ""), body: init.body ? JSON.parse(String(init.body)) : undefined });
+      return reply({ ok: true });
+    }
+    return undefined;
+  });
+  try {
+    (b.displays[0] as Record<string, unknown>).capabilities = { delivery: ["airplay"], power: true, inputs: ["hdmi1", "hdmi2"], apps: true, tvChannels: true };
+    const put = (actions: unknown[]) => b.json("PUT", "/api/scenes/ballgame", { name: "Ballgame", actions }, b.authed);
+    assert.equal((await put([{ displayId: "tv2", do: "power", on: true }])).status, 400, "tv2 can't be powered");
+    assert.equal((await put([{ displayId: "tv1", do: "input", input: "hdmi9" }])).status, 400, "no such input");
+    assert.equal((await put([{ displayId: "tv1", do: "channel", channel: "seven" }])).status, 400);
+    assert.equal((await put([{ displayId: "tv2", do: "app", appId: "837" }])).status, 400, "tv2 has no apps");
+    const ok = await put([
+      { displayId: "tv1", do: "power", on: true },
+      { displayId: "tv1", do: "input", input: "hdmi2" },
+      { displayId: "tv1", do: "app", appId: "com.example.Sports", appName: "Sports" },
+      { displayId: "tv1", do: "channel", channel: "7.1" },
+      { displayId: "tv1", do: "power", on: false },
+    ]);
+    assert.equal(ok.status, 200);
+    const r = (await (await b.json("POST", "/api/scenes/ballgame/apply", undefined, b.authed)).json()) as { steps: { step: string; ok: boolean }[] };
+    assert.deepEqual(r.steps, [
+      { step: "tv1: power on", ok: true },
+      { step: "tv1: input hdmi2", ok: true },
+      { step: "tv1: app Sports", ok: true },
+      { step: "tv1: channel 7.1", ok: true },
+      { step: "tv1: power off", ok: true },
+    ]);
+    assert.deepEqual(sent, [
+      { url: "/displays/tv1/power", body: { on: true } },
+      { url: "/displays/tv1/input", body: { input: "hdmi2" } },
+      { url: "/displays/tv1/apps/com.example.Sports/launch", body: undefined },
+      { url: "/displays/tv1/channel", body: { channel: "7.1" } },
+      { url: "/displays/tv1/power", body: { on: false } },
+    ]);
+  } finally {
+    b.close();
+  }
+});
+
 test("tv startup runner: waits for TVs to come online, retries, gives up", async () => {
   const online = new Set<string>();
   const applied: string[] = [];

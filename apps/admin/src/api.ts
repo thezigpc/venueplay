@@ -136,7 +136,14 @@ export interface MediaProvider {
   displayName: string;
   targets: { displayId: string; label: string; state: string; nowPlaying?: { title: string; listName?: string }; itemId?: string }[];
 }
-export type SceneAction = { displayId: string; do: "game"; gameId: string } | { displayId: string; do: "media"; gameId: string; itemId: string } | { displayId: string; do: "idle" | "off" };
+export type SceneAction =
+  | { displayId: string; do: "game"; gameId: string }
+  | { displayId: string; do: "media"; gameId: string; itemId: string }
+  | { displayId: string; do: "idle" | "off" }
+  | { displayId: string; do: "power"; on: boolean }
+  | { displayId: string; do: "input"; input: string }
+  | { displayId: string; do: "app"; appId: string; appName?: string }
+  | { displayId: string; do: "channel"; channel: string };
 export interface Scene {
   id: string;
   name: string;
@@ -195,7 +202,7 @@ export interface Display {
   model?: string;
   isTv?: boolean;
   delivery?: string;
-  capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[]; apps?: boolean; text?: boolean; control?: { paired: boolean } };
+  capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[]; apps?: boolean; text?: boolean; tvChannels?: boolean; control?: { paired: boolean } };
   streamSettings?: StreamSettings;
   health?: { online: boolean; powerMode?: string; detail?: string };
   content?: { kind: string; url?: string; title?: string; app?: string; provider?: string };

@@ -69,6 +69,7 @@ export class RokuDriver implements DisplayDriver {
       remoteKeys: [...ROKU_REMOTE_KEYS, ...(device.isTv ? ROKU_TV_KEYS : [])],
       apps: true,
       text: true,
+      tvChannels: Boolean(device.isTv),
     };
   }
 
@@ -153,6 +154,13 @@ export class RokuDriver implements DisplayDriver {
     return this.streams.preview?.(device.id) ?? Promise.resolve(undefined);
   }
 
+  /** Live TV on a Roku TV's tuner: ECP launch tvinput.dtv?ch=7.1. */
+  async tuneChannel(device: DisplayDevice, channel: string): Promise<void> {
+    if (!device.isTv) throw Object.assign(new Error(`${device.name} is a Roku player; it has no TV tuner`), { status: 400 });
+    if (!TV_CHANNEL.test(channel)) throw Object.assign(new Error("channel: like 7 or 7.1"), { status: 400 });
+    await this.ecp(device).launch("tvinput.dtv", { ch: channel });
+  }
+
   async setInput(device: DisplayDevice, input: string): Promise<void> {
     if (!device.isTv) throw new Error(`${device.name} is a Roku player; it has no inputs`);
     await this.ecp(device).setInput(input);
@@ -204,6 +212,9 @@ export class RokuDriver implements DisplayDriver {
     }
   }
 }
+
+/** A tuner channel: "7", "7.1", "1004". */
+export const TV_CHANNEL = /^\d{1,4}(\.\d{1,3})?$/;
 
 /** The Origin our DIAL requests carry (Roku refuses DIAL without one). */
 export const DIAL_ORIGIN = "package:com.bargames.box";

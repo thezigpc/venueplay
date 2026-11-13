@@ -63,6 +63,8 @@ export interface Capabilities {
   apps?: boolean;
   /** typeText works (the remote's typing box). */
   text?: boolean;
+  /** tuneChannel works: antenna/cable channels like "7.1" (Roku TVs). */
+  tvChannels?: boolean;
   /** TV control (power, input, remote) needs a one-time PIN pairing (Vizio, Apple TV). */
   control?: { paired: boolean };
 }
@@ -130,6 +132,8 @@ export interface DisplayDriver {
   appIcon?(device: DisplayDevice, appId: string): Promise<{ type: string; data: Buffer } | undefined>;
   /** Starts an installed app by the id listApps gave. */
   launchChannel?(device: DisplayDevice, appId: string): Promise<void>;
+  /** Tunes the TV's own tuner to a channel ("7", "7.1"). */
+  tuneChannel?(device: DisplayDevice, channel: string): Promise<void>;
   /** Types text into the TV's current text field (search boxes, Wi-Fi passwords). */
   typeText?(device: DisplayDevice, text: string): Promise<void>;
   /** A small JPEG of what the box is rendering for this TV, if it's casting. */

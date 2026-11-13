@@ -1,7 +1,7 @@
 import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_TTL_MS, type Logger } from "@bargames/common";
 import { PasswordLimiter } from "./limiter.js";
 import { HostSampler } from "./systemStats.js";
-import { cleanScene, cleanSchedule, closingTimeScene, dueNow, type Scene, type Schedule } from "./scenes.js";
+import { cleanScene, cleanSchedule, closingTimeScene, dueNow, WAKE_RETRY_MS, WAKE_TRIES, type Scene, type Schedule, type TvCaps } from "./scenes.js";
 import { cleanResult, board, Leaderboards, nightStart } from "./leaderboard.js";
 import { rewardsHook } from "./rewards.js";
 import {
@@ -787,6 +787,19 @@ export function createApp(d: AppDeps) {
 
   const displayIds = async () => (((await brokerCall("GET", "/displays").catch(() => [])) as { id: string }[]) ?? []).map((x) => x.id);
 
+  /** A TV that's just been switched on can take a few seconds to answer: retry server-side failures. */
+  const whileWaking = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        const status = (err as { status?: number }).status ?? 500;
+        if (attempt >= WAKE_TRIES || status < 500) throw err;
+        await new Promise((r) => setTimeout(r, WAKE_RETRY_MS));
+      }
+    }
+  };
+
   /** Applies a scene: end rooms, announcement, countdown, then each TV. Returns what happened per step. */
   const applyScene = async (scene: Scene) => {
     const steps: { step: string; ok: boolean; message?: string }[] = [];
@@ -808,9 +821,25 @@ export function createApp(d: AppDeps) {
       steps.push({ step: "countdown", ok: true });
     }
     const idle = scene.actions.some((a) => a.do === "idle") ? await idleContent() : undefined;
+    /** TVs this scene just switched on: their next step retries while they wake up. */
+    const waking = new Set<string>();
     for (const a of scene.actions) {
+      const tv = `/displays/${encodeURIComponent(a.displayId)}`;
       try {
-        if (a.do === "game") {
+        if (a.do === "power") {
+          await brokerCall("POST", `${tv}/power`, { on: a.on });
+          if (a.on) waking.add(a.displayId);
+          steps.push({ step: `${a.displayId}: power ${a.on ? "on" : "off"}`, ok: true });
+        } else if (a.do === "input" || a.do === "app" || a.do === "channel") {
+          const send = () =>
+            a.do === "input"
+              ? brokerCall("POST", `${tv}/input`, { input: a.input })
+              : a.do === "app"
+                ? brokerCall("POST", `${tv}/apps/${encodeURIComponent(a.appId)}/launch`)
+                : brokerCall("POST", `${tv}/channel`, { channel: a.channel });
+          await (waking.has(a.displayId) ? whileWaking(send) : send());
+          steps.push({ step: `${a.displayId}: ${a.do === "input" ? `input ${a.input}` : a.do === "app" ? `app ${a.appName ?? a.appId}` : `channel ${a.channel}`}`, ok: true });
+        } else if (a.do === "game") {
           const r = await castGame(a.gameId, { displayIds: [a.displayId] }, { firstJoinerHosts: true });
           const res = r.results[a.displayId];
           steps.push({ step: `${a.displayId}: ${a.gameId}`, ok: res?.ok !== false, message: res?.message });
@@ -837,8 +866,9 @@ export function createApp(d: AppDeps) {
   app.put(
     "/api/scenes/:id",
     h(async (req, res) => {
-      const ids = new Set(await displayIds());
-      const scene = cleanScene({ ...(req.body ?? {}), id: req.params.id }, { game: (id) => Boolean(d.games.get(id)), display: (id) => ids.has(id) });
+      const tvs = ((await brokerCall("GET", "/displays").catch(() => [])) as { id: string; capabilities?: TvCaps }[]) ?? [];
+      const byId = new Map(tvs.map((t) => [t.id, t]));
+      const scene = cleanScene({ ...(req.body ?? {}), id: req.params.id }, { game: (id) => Boolean(d.games.get(id)), display: (id) => byId.has(id), caps: (id) => byId.get(id)?.capabilities });
       if (typeof scene === "string") throw new HttpError(400, scene);
       await d.state.scenes.update((s) => {
         s.scenes = [...s.scenes.filter((x) => x.id !== scene.id), scene];

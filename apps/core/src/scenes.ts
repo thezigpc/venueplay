@@ -8,7 +8,26 @@ export type SceneAction =
   | { displayId: string; do: "game"; gameId: string }
   | { displayId: string; do: "media"; gameId: string; itemId: string }
   | { displayId: string; do: "idle" }
-  | { displayId: string; do: "off" };
+  | { displayId: string; do: "off" }
+  /** TV control (needs the TV's remote: Roku, paired Vizio or Apple TV). */
+  | { displayId: string; do: "power"; on: boolean }
+  | { displayId: string; do: "input"; input: string }
+  | { displayId: string; do: "app"; appId: string; appName?: string }
+  | { displayId: string; do: "channel"; channel: string };
+
+/** What a TV can do, as the broker reports it (capabilities). */
+export interface TvCaps {
+  power?: boolean;
+  inputs?: string[];
+  apps?: boolean;
+  tvChannels?: boolean;
+}
+
+export const TV_CHANNEL = /^\d{1,4}(\.\d{1,3})?$/;
+/** After a scene switches a TV on, its next step is retried this often while the TV wakes (about 12 s). */
+export const WAKE_TRIES = 5;
+export const WAKE_RETRY_MS = 3000;
+export const TV_APP_ID = /^[A-Za-z0-9_.-]{1,100}$/;
 
 export interface Scene {
   id: string;
@@ -43,7 +62,7 @@ export interface Schedule {
 const ID = /^[a-z0-9-]{1,40}$/;
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-export function cleanScene(v: unknown, exists: { game: (id: string) => boolean; display: (id: string) => boolean }): Scene | string {
+export function cleanScene(v: unknown, exists: { game: (id: string) => boolean; display: (id: string) => boolean; caps?: (id: string) => TvCaps | undefined }): Scene | string {
   if (typeof v !== "object" || v === null) return "scene: { id, name, actions, endRooms?, announcement?, countdown? }";
   const s = v as Record<string, unknown>;
   const id = typeof s.id === "string" && ID.test(s.id) ? s.id : undefined;
@@ -55,10 +74,27 @@ export function cleanScene(v: unknown, exists: { game: (id: string) => boolean; 
   for (const a of s.actions as Record<string, unknown>[]) {
     const displayId = typeof a?.displayId === "string" ? a.displayId : "";
     if (!displayId || !exists.display(displayId)) return `unknown TV ${displayId}`;
+    const caps = exists.caps?.(displayId) ?? {};
     if (a.do === "idle" || a.do === "off") actions.push({ displayId, do: a.do });
+    else if (a.do === "power") {
+      if (!caps.power) return `${displayId} can't be switched on or off by the box (pair its TV control first?)`;
+      actions.push({ displayId, do: "power", on: a.on === true });
+    } else if (a.do === "input") {
+      if (typeof a.input !== "string" || !(caps.inputs ?? []).includes(a.input)) return `${displayId} has no input ${String(a.input)} the box can switch to`;
+      actions.push({ displayId, do: "input", input: a.input });
+    } else if (a.do === "app") {
+      if (!caps.apps) return `${displayId} can't open apps from the box (pair its TV control first?)`;
+      if (typeof a.appId !== "string" || !TV_APP_ID.test(a.appId)) return `app for ${displayId}: an app id from the TV's app list`;
+      actions.push({ displayId, do: "app", appId: a.appId, ...(typeof a.appName === "string" && a.appName.trim() ? { appName: a.appName.trim().slice(0, 60) } : {}) });
+    } else if (a.do === "channel") {
+      if (!caps.tvChannels) return `${displayId} can't tune TV channels`;
+      const channel = typeof a.channel === "string" ? a.channel.trim() : "";
+      if (!TV_CHANNEL.test(channel)) return "channel: like 7 or 7.1";
+      actions.push({ displayId, do: "channel", channel });
+    }
     else if (a.do === "game" && typeof a.gameId === "string" && exists.game(a.gameId)) actions.push({ displayId, do: "game", gameId: a.gameId });
     else if (a.do === "media" && typeof a.gameId === "string" && exists.game(a.gameId) && typeof a.itemId === "string" && a.itemId) actions.push({ displayId, do: "media", gameId: a.gameId, itemId: a.itemId });
-    else return `action for ${displayId}: do game | media | idle | off, with gameId (and itemId for media)`;
+    else return `action for ${displayId}: do game | media | idle | off | power | input | app | channel`;
   }
   const out: Scene = { id, name, actions };
   if (s.endRooms === true) out.endRooms = true;

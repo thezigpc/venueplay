@@ -1,8 +1,9 @@
 // Scenes ("Game night", "Closing time") and scheduled sessions (SDK 0.9.0 box features).
 
 import { isApp } from "@bargames/sdk";
-import { useState } from "react";
-import { api, type Display, type Game, type Scene, type Schedule } from "../api";
+import { useEffect, useState } from "react";
+import { api, type Display, type Game, type Scene, type SceneAction, type Schedule } from "../api";
+import { inputLabel } from "./Displays";
 import { useLoad } from "../useLoad";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -73,17 +74,44 @@ export function ScenesCard({ games, displays }: { games: Game[]; displays: Displ
   );
 }
 
+/** One TV's part of a scene, in the order the box runs it: power on, what it shows, power off. */
+export function tvActions(displayId: string, show: string, power: string, channel: string, appName?: (id: string) => string | undefined): SceneAction[] {
+  const out: SceneAction[] = [];
+  if (power === "on") out.push({ displayId, do: "power", on: true });
+  if (power !== "off" && show) {
+    if (show === "idle" || show === "off") out.push({ displayId, do: show });
+    else if (show.startsWith("game:")) out.push({ displayId, do: "game", gameId: show.slice(5) });
+    else if (show.startsWith("input:")) out.push({ displayId, do: "input", input: show.slice(6) });
+    else if (show.startsWith("app:")) {
+      const n = appName?.(show.slice(4));
+      out.push({ displayId, do: "app", appId: show.slice(4), ...(n ? { appName: n } : {}) });
+    } else if (show === "channel" && channel.trim()) out.push({ displayId, do: "channel", channel: channel.trim() });
+  }
+  if (power === "off") out.push({ displayId, do: "power", on: false });
+  return out;
+}
+
 function SceneEditor({ games, displays, onDone }: { games: Game[]; displays: Display[]; onDone: () => void }) {
   const [name, setName] = useState("");
   const [pick, setPick] = useState<Record<string, string>>({});
+  const [power, setPower] = useState<Record<string, string>>({});
+  const [channel, setChannel] = useState<Record<string, string>>({});
+  const [apps, setApps] = useState<Record<string, { id: string; name: string }[]>>({});
   const [endRooms, setEndRooms] = useState(false);
   const [text, setText] = useState("");
   const [err, setErr] = useState("");
   const castable = games.filter((g) => g.enabled && g.manifest.routes.table);
+  // The TVs' own apps (Roku channels, Apple TV apps), for "open an app" steps.
+  useEffect(() => {
+    for (const d of displays.filter((x) => x.capabilities?.apps && x.health?.online !== false)) {
+      api.tvApps(d.id).then(
+        (r) => setApps((a) => ({ ...a, [d.id]: r.apps })),
+        () => undefined,
+      );
+    }
+  }, [displays]);
   const save = async () => {
-    const actions = Object.entries(pick)
-      .filter(([, v]) => v)
-      .map(([displayId, v]) => (v === "idle" || v === "off" ? { displayId, do: v } : { displayId, do: "game", gameId: v.slice(5) }));
+    const actions = displays.flatMap((d) => tvActions(d.id, pick[d.id] ?? "", power[d.id] ?? "", channel[d.id] ?? "", (id) => apps[d.id]?.find((a) => a.id === id)?.name));
     try {
       await api.saveScene({ id: slug(name), name, actions, ...(endRooms ? { endRooms: true } : {}), ...(text.trim() ? { announcement: { text: text.trim() } } : {}) } as Scene);
       onDone();
@@ -97,22 +125,71 @@ function SceneEditor({ games, displays, onDone }: { games: Game[]; displays: Dis
         Name
         <input value={name} placeholder="Game night" onChange={(e) => setName(e.target.value)} />
       </label>
-      {displays.map((d) => (
-        <label key={d.id}>
-          {d.label || d.name}
-          <select value={pick[d.id] ?? ""} onChange={(e) => setPick({ ...pick, [d.id]: e.target.value })}>
-            <option value="">Leave alone</option>
-            {castable.map((g) => (
-              <option key={g.id} value={`game:${g.id}`}>
-                {g.context.game.displayName}
-                {isApp(g.manifest) ? "" : " (new room)"}
-              </option>
-            ))}
-            <option value="idle">Idle screen</option>
-            <option value="off">Off</option>
-          </select>
-        </label>
-      ))}
+      {displays.map((d) => {
+        const caps = d.capabilities;
+        const off = power[d.id] === "off";
+        return (
+          <fieldset key={d.id} className="scene-tv">
+            <legend>{d.label || d.name}</legend>
+            {caps?.power && (
+              <label>
+                Power
+                <select value={power[d.id] ?? ""} onChange={(e) => setPower({ ...power, [d.id]: e.target.value })}>
+                  <option value="">Leave as it is</option>
+                  <option value="on">Turn on first</option>
+                  <option value="off">Turn off</option>
+                </select>
+              </label>
+            )}
+            <label>
+              What it shows
+              <select value={off ? "" : (pick[d.id] ?? "")} disabled={off} onChange={(e) => setPick({ ...pick, [d.id]: e.target.value })}>
+                <option value="">Leave alone</option>
+                <optgroup label="From the box">
+                  {castable.map((g) => (
+                    <option key={g.id} value={`game:${g.id}`}>
+                      {g.context.game.displayName}
+                      {isApp(g.manifest) ? "" : " (new room)"}
+                    </option>
+                  ))}
+                  <option value="idle">Idle screen</option>
+                  <option value="off">Stop casting</option>
+                </optgroup>
+                {(caps?.inputs.length ?? 0) > 0 && (
+                  <optgroup label="TV input">
+                    {caps!.inputs.map((i) => (
+                      <option key={i} value={`input:${i}`}>
+                        {inputLabel(i, d.driver)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {caps?.tvChannels && (
+                  <optgroup label="TV channel (antenna)">
+                    <option value="channel">A channel number…</option>
+                  </optgroup>
+                )}
+                {caps?.apps && (apps[d.id]?.length ?? 0) > 0 && (
+                  <optgroup label={d.driver === "roku" ? "Roku channel (app)" : "App on the TV"}>
+                    {apps[d.id]!.map((a) => (
+                      <option key={a.id} value={`app:${a.id}`}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </label>
+            {!off && pick[d.id] === "channel" && (
+              <label>
+                Channel
+                <input inputMode="decimal" placeholder="e.g. 7.1" value={channel[d.id] ?? ""} onChange={(e) => setChannel({ ...channel, [d.id]: e.target.value.replace(/[^\d.]/g, "").slice(0, 8) })} />
+              </label>
+            )}
+            {caps?.control && !caps.control.paired && <p className="muted small-print">Pair its TV control (TV panel &gt; Setup) to add power, inputs or apps here.</p>}
+          </fieldset>
+        );
+      })}
       <label className="inline">
         <input type="checkbox" checked={endRooms} onChange={(e) => setEndRooms(e.target.checked)} style={{ width: "auto" }} /> End every open room first
       </label>

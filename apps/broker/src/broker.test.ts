@@ -49,6 +49,36 @@ test("ecp parsing", () => {
   assert.throws(() => inputKey("hdmi9"));
 });
 
+test("roku tv: input and antenna channel stop the cast and are recorded as what the TV shows", async () => {
+  const calls: string[] = [];
+  const doFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push(`${init?.method ?? "GET"} ${new URL(String(input)).pathname}${new URL(String(input)).search}`);
+    return new Response("");
+  }) as typeof fetch;
+  const stopped: string[] = [];
+  const streams = Object.assign(new PendingStreamService(), { stopFor: async (id: string) => void stopped.push(id), state: () => ({ delivery: "airplay" as const, url: "x", state: "streaming", needsCode: false }) });
+  const roku = new RokuDriver(streams, doFetch);
+  const dir = mkdtempSync(path.join(tmpdir(), "roku-tv-"));
+  const reg = new DisplayRegistry(
+    new JsonStore<{ displays: DisplayRecord[] }>(path.join(dir, "d.json"), {
+      displays: [
+        { id: "roku:TV1", driver: "roku", name: "Bar TV", address: "http://192.0.2.60:8060", isTv: true },
+        { id: "roku:P1", driver: "roku", name: "Stick", address: "http://192.0.2.61:8060", isTv: false },
+      ],
+    }),
+    new Map([["roku", roku]]),
+  );
+  assert.equal((await roku.capabilities(reg.get("roku:TV1")!)).tvChannels, true);
+  assert.equal((await roku.capabilities(reg.get("roku:P1")!)).tvChannels, false);
+  await reg.tuneChannel("roku:TV1", "7.1");
+  await reg.setInput("roku:TV1", "hdmi2");
+  assert.deepEqual(calls, ["POST /launch/tvinput.dtv?ch=7.1", "POST /keypress/InputHDMI2"]);
+  assert.deepEqual(stopped, ["roku:TV1", "roku:TV1"], "the cast stops first");
+  assert.deepEqual(reg.get("roku:TV1")!.content, { kind: "external", provider: "remote", app: "HDMI 2" });
+  await assert.rejects(reg.tuneChannel("roku:P1", "7"), /can't tune/);
+  await assert.rejects(reg.setInput("roku:TV1", "hdmi9"), /no input/);
+});
+
 test("ecp client against a fake Roku", async () => {
   const calls: string[] = [];
   const fake = createServer((req, res) => {
