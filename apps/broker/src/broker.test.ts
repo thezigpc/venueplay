@@ -409,3 +409,20 @@ test("0.9.0: Roku launches YouTube (837), explains a 403, and reads YouTube's DI
     fake.close();
   }
 });
+
+test("broker listen hosts: IPs and interface names; anything unresolved falls back to all", async () => {
+  const { listenHosts } = await import("./listen.js");
+  const ifaces = {
+    lo: [{ address: "127.0.0.1", family: "IPv4" }],
+    docker0: [{ address: "fe80::1", family: "IPv6" }, { address: "172.17.0.1", family: "IPv4" }],
+    tun0: [{ address: "fd00::1", family: "IPv6" }],
+  } as unknown as Parameters<typeof listenHosts>[1];
+  assert.deepEqual(listenHosts("127.0.0.1,docker0", ifaces), { hosts: ["127.0.0.1", "172.17.0.1"] });
+  assert.deepEqual(listenHosts(" 127.0.0.1 , 127.0.0.1 ", ifaces), { hosts: ["127.0.0.1"] });
+  assert.deepEqual(listenHosts(undefined, ifaces), { hosts: ["0.0.0.0"] });
+  assert.deepEqual(listenHosts("127.0.0.1,0.0.0.0", ifaces), { hosts: ["0.0.0.0"] });
+  const missing = listenHosts("127.0.0.1,docker9", ifaces);
+  assert.deepEqual(missing.hosts, ["0.0.0.0"], "never lose the broker: listen everywhere");
+  assert.match(missing.problem!, /docker9/);
+  assert.deepEqual(listenHosts("tun0", ifaces).hosts, ["0.0.0.0"], "IPv6-only interface: not usable");
+});

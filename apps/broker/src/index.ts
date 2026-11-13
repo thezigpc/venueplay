@@ -20,12 +20,15 @@ import { PendingStreamService } from "./streams.js";
 import type { DisplayDriver, StreamService } from "./types.js";
 import { existsSync } from "node:fs";
 import { audioFromEnv } from "./audio/index.js";
+import { listenHosts } from "./listen.js";
 
 const log = createLogger("broker");
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR ?? path.resolve(here, "../../../data/broker");
 const port = envNum("PORT", 7200);
-const host = process.env.HOST ?? "0.0.0.0";
+// Box 0.15.1: "127.0.0.1,docker0" in compose (core only, never the venue LAN); see listen.ts.
+const listen = listenHosts(process.env.HOST);
+if (listen.problem) log.warn("boot", listen.problem);
 // In development core writes the shared token to data/core/broker.token.
 const token =
   process.env.BROKER_TOKEN ?? readFileSync(process.env.BROKER_TOKEN_FILE ?? path.resolve(here, "../../../data/core/broker.token"), "utf8").trim();
@@ -104,14 +107,20 @@ if (venuebox) venuebox.listen(clientPort).on("listening", () => log.info("boot",
 // The box's sound (Settings → Connected devices): its jack/HDMI, Bluetooth speakers, AirPlay TVs.
 const audio = audioFromEnv(registry, dataDir, log, { python: atvPython, script: atvScript });
 
-createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, appletv, venuebox, audio, token, log }).listen(port, host, () => {
-  log.info("boot", "listening", { port, host, drivers: [...drivers.keys()], airplay: Boolean(airplay), audio: Boolean(audio), bluetooth: Boolean(audio?.bluetooth) });
-  if (mockCount) void registry.discover();
-  if (airplay) {
-    airplay.start();
-    void registry.resume();
-  }
-});
+const brokerApp = createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, appletv, venuebox, audio, token, log });
+let started = false;
+for (const host of listen.hosts) {
+  brokerApp.listen(port, host, () => {
+    log.info("boot", "listening", { port, host, drivers: [...drivers.keys()], airplay: Boolean(airplay), audio: Boolean(audio), bluetooth: Boolean(audio?.bluetooth) });
+    if (started) return;
+    started = true;
+    if (mockCount) void registry.discover();
+    if (airplay) {
+      airplay.start();
+      void registry.resume();
+    }
+  });
+}
 
 process.on("SIGTERM", () => {
   audio?.engine.shutdown();
