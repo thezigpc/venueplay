@@ -929,7 +929,7 @@ export function createApp(d: AppDeps) {
   const sampler = new HostSampler({ diskPath: d.config.dataDir });
   const coreStarted = Date.now();
   /** The host helper (deploy/host/install.sh) leaves this marker; without it the box can't reboot itself. */
-  const hostHooks = (): { reboot?: boolean; update?: boolean; installedAt?: string } => {
+  const hostHooks = (): { reboot?: boolean; update?: boolean; wifi?: boolean; installedAt?: string } => {
     if (!d.config.dataDir) return {};
     try {
       return JSON.parse(readFileSync(path.join(d.config.dataDir, "host-hooks.json"), "utf8"));
@@ -1028,6 +1028,96 @@ export function createApp(d: AppDeps) {
       writeFileSync(file, JSON.stringify({ at: new Date().toISOString(), by: clientIpOf(req) }));
       d.log.warn("system", "reboot requested from the admin", { by: clientIpOf(req) });
       res.json({ ok: true, message: "Rebooting. The box is back in a minute or two; this page reconnects by itself." });
+    }),
+  );
+
+  // ------------------------------------------------------------ box Wi-Fi (host helper)
+
+  /** Asks the host helper (deploy/host/bargames-wifi) for "apply", "scan" and/or "status". */
+  const wifiReady = () => {
+    const file = dataFile("wifi.request");
+    if (!file || !hostHooks().wifi) throw new HttpError(409, "This box can't manage Wi-Fi yet: run deploy/host/install.sh on it once (sudo), or update the box from the System page.");
+    return file;
+  };
+  const requestWifi = (...ops: string[]) => {
+    const file = wifiReady();
+    const have = (readText("wifi.request") ?? "").split(/\s+/).filter(Boolean);
+    writeFileSync(file, [...new Set([...have, ...ops])].join(" "));
+  };
+  const wifiView = () => {
+    let status: Record<string, unknown> | undefined;
+    try {
+      status = JSON.parse(readText("wifi-status.json") ?? "");
+    } catch {
+      status = undefined;
+    }
+    return {
+      available: Boolean(hostHooks().wifi),
+      pending: readText("wifi.request") !== undefined,
+      networks: d.state.wifi.get().networks.map((n) => ({ ssid: n.ssid, hidden: Boolean(n.hidden), secured: Boolean(n.password), addedAt: n.addedAt })),
+      status,
+    };
+  };
+  const wifiSsid = (v: unknown) => {
+    if (typeof v !== "string" || !v.length || Buffer.byteLength(v, "utf8") > 32 || /[\x00-\x1f]/.test(v)) throw new HttpError(400, "Network name: 1 to 32 characters");
+    return v;
+  };
+
+  app.get(
+    "/api/wifi",
+    h(async (_req, res) => {
+      const view = wifiView();
+      // Refresh what the host sees when it's older than 20 s (the page polls this).
+      const at = Date.parse(String(view.status?.at ?? ""));
+      if (view.available && !view.pending && !(at > Date.now() - 20_000)) {
+        requestWifi("status");
+        view.pending = true;
+      }
+      res.json(view);
+    }),
+  );
+
+  /** { ssid, password?, hidden? }: save a network (replaces one with the same name) and join it when in range. */
+  app.post(
+    "/api/wifi/networks",
+    h(async (req, res) => {
+      const b = (req.body ?? {}) as { ssid?: unknown; password?: unknown; hidden?: unknown };
+      const ssid = wifiSsid(b.ssid);
+      const password = typeof b.password === "string" ? b.password : "";
+      if (password && !(/^[\x20-\x7e]{8,63}$/.test(password) || /^[0-9a-fA-F]{64}$/.test(password))) {
+        throw new HttpError(400, "Wi-Fi password: 8 to 63 characters (or leave it empty for an open network)");
+      }
+      wifiReady();
+      await d.state.wifi.update((w) => {
+        w.networks = [...w.networks.filter((n) => n.ssid !== ssid), { ssid, ...(password ? { password } : {}), ...(b.hidden === true ? { hidden: true } : {}), addedAt: new Date().toISOString() }];
+      });
+      requestWifi("apply", "status"); // after the save: the host helper reads wifi.json right away
+      d.log.info("wifi", "Wi-Fi network saved", { ssid, by: clientIpOf(req) });
+      res.json(wifiView());
+    }),
+  );
+
+  app.delete(
+    "/api/wifi/networks/:ssid",
+    h(async (req, res) => {
+      const ssid = wifiSsid(req.params.ssid);
+      if (!d.state.wifi.get().networks.some((n) => n.ssid === ssid)) throw new HttpError(404, "No saved network by that name");
+      wifiReady();
+      await d.state.wifi.update((w) => {
+        w.networks = w.networks.filter((n) => n.ssid !== ssid);
+      });
+      requestWifi("apply", "status");
+      d.log.info("wifi", "Wi-Fi network removed", { ssid, by: clientIpOf(req) });
+      res.json(wifiView());
+    }),
+  );
+
+  /** Look for networks in range (results arrive in GET /api/wifi's status.scan a few seconds later). */
+  app.post(
+    "/api/wifi/scan",
+    h(async (_req, res) => {
+      requestWifi("scan", "status");
+      res.json(wifiView());
     }),
   );
 

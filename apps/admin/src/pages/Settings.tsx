@@ -9,11 +9,13 @@ import { InternetPage } from "./Internet";
 import { SchedulesCard } from "./Scenes";
 import { SystemPage } from "./System";
 import { VenuePage } from "./Venue";
+import { WifiPage, wifiSummary } from "./Wifi";
 
 const PAGES: Record<string, string> = {
   venue: "Venue",
   access: "Who can play",
   internet: "Internet address",
+  wifi: "Box Wi-Fi",
   system: "Box and updates",
   schedules: "Schedules",
 };
@@ -31,6 +33,7 @@ export function SettingsPage({ page }: { page?: string }) {
         {page === "venue" && <VenuePage />}
         {page === "access" && <AccessPage />}
         {page === "internet" && <InternetPage />}
+        {page === "wifi" && <WifiPage />}
         {page === "system" && <SystemPage />}
         {page === "schedules" && <SchedulesPage />}
       </div>
@@ -46,6 +49,7 @@ function Hub() {
   const cf = useLoad(api.cloudflare, 30_000);
   const stats = useLoad(api.systemStats, 30_000);
   const schedules = useLoad(api.schedules);
+  const wifi = useLoad(api.wifi, 30_000);
 
   const v = venue.data;
   const a = access.data;
@@ -73,6 +77,12 @@ function Hub() {
           level={cfBad ? "warn" : undefined}
           dot={cf.data ? (cf.data.connected ? (cfBad ? "warn" : "on") : "off") : undefined}
           detail={cf.data ? (cf.data.connected ? `${cfBad ? "Problem syncing" : "Online"} at ${v?.hosts.play ?? cf.data.zone ?? "your domain"}` : "Not online: only this network can reach the games") : cf.error || "…"}
+        />
+        <Row
+          to="wifi"
+          title="Box Wi-Fi"
+          level={wifi.data?.status?.apply && !wifi.data.status.apply.ok ? "warn" : undefined}
+          detail={wifi.error || wifiSummary(wifi.data)}
         />
         <Row
           to="system"

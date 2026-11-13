@@ -57,6 +57,35 @@ export interface Access {
   /** Anyone on the internet may play (the admin stays behind adminRemote). */
   open?: boolean;
 }
+/** The box's own Wi-Fi (Settings > Box Wi-Fi), as the host helper last saw it. */
+export interface WifiAdapter {
+  name: string;
+  state: string;
+  ssid?: string;
+  signal?: number;
+  band?: string;
+  addresses: string[];
+}
+export interface WifiSeen {
+  ssid: string;
+  signal: number;
+  band: string;
+  secure: boolean;
+  enterprise: boolean;
+}
+export interface WifiView {
+  available: boolean;
+  pending: boolean;
+  networks: { ssid: string; hidden: boolean; secured: boolean; addedAt: string }[];
+  status?: {
+    at?: string;
+    adapters?: WifiAdapter[];
+    cables?: { name: string; plugged: boolean; addresses: string[] }[];
+    internetVia?: string | null;
+    apply?: { ok: boolean; at: string; error?: string; changed?: boolean };
+    scan?: { at?: string; error?: string; networks?: WifiSeen[] };
+  };
+}
 export interface Game {
   id: string;
   manifest: GameManifest;
@@ -248,6 +277,10 @@ export const api = {
   saveVenue: (v: Partial<Venue>) => call<VenueView>("PUT", "/venue", v),
   access: () => call<Access>("GET", "/access"),
   saveAccess: (a: Partial<Access>) => call<Access>("PUT", "/access", a),
+  wifi: () => call<WifiView>("GET", "/wifi"),
+  saveWifi: (n: { ssid: string; password?: string; hidden?: boolean }) => call<WifiView>("POST", "/wifi/networks", n),
+  forgetWifi: (ssid: string) => call<WifiView>("DELETE", `/wifi/networks/${encodeURIComponent(ssid)}`),
+  scanWifi: () => call<WifiView>("POST", "/wifi/scan"),
   games: () => call<Game[]>("GET", "/games"),
   venuebox: () => call<{ devices: VenueboxDevice[]; pending: { code: string; name: string; platform: string; screens: number; expiresAt: string }[] }>("GET", "/broker/venuebox"),
   pairVenuebox: (code: string, name?: string) => call<VenueboxDevice>("POST", "/broker/venuebox/pair", { code, name: name || undefined }),

@@ -1,0 +1,10 @@
+# Bar Games: the admin's Box Wi-Fi page (core writes wifi.request in its data folder).
+# Installed by deploy/host/install.sh, which fills in the real paths.
+[Unit]
+Description=Bar Games Wi-Fi request watcher
+
+[Path]
+PathExists=@DATA@/wifi.request
+
+[Install]
+WantedBy=multi-user.target

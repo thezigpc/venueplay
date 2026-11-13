@@ -64,6 +64,21 @@ asks you to choose the admin password; after that it's the admin login.
 - Setup is refused through the Cloudflare tunnel, so nobody outside the venue can claim
   a fresh box.
 
+Host helpers: run `sudo deploy/host/install.sh` once. The admin's Reboot and Update
+buttons and the **Box Wi-Fi** page need it; later updates started from the admin reinstall
+it by themselves. The helpers are systemd path units that watch request files in
+`data/core`. Nothing else is installed on the host.
+
+**Box Wi-Fi** (Settings > Box Wi-Fi):
+- Saved networks go to `/etc/netplan/90-bargames-wifi.yaml` (owner-only), for the first
+  Wi-Fi adapter only. The box joins whichever saved network is in range, including at boot.
+- The cable is always preferred: Wi-Fi routes have metric 600 against the cable's 100.
+  Taking the box to a venue with no cable works by itself.
+- Only the Wi-Fi side is restarted on a change. If the cable's route goes away anyway, the
+  old file is put back.
+- Supported: WPA2/WPA3 passwords, open and hidden networks. Not supported: enterprise
+  (username) networks and captive portals.
+
 Core runs games through `tecnativa/docker-socket-proxy`, never through the raw
 Docker socket. Each game gets:
 - its own `internal` network, with only core and the gateway attached, so it has no internet or LAN access;

@@ -101,6 +101,19 @@ export interface CastSettings {
 }
 export const DEFAULT_CAST: CastSettings = { fromGames: false, pin: "" };
 
+/** A Wi-Fi network the box joins when it's in range (the cable stays preferred). */
+export interface SavedWifi {
+  ssid: string;
+  /** WPA2/WPA3 passphrase (8-63 characters, or 64 hex); empty for an open network. */
+  password?: string;
+  /** The network doesn't broadcast its name. */
+  hidden?: boolean;
+  addedAt: string;
+}
+export interface WifiSettings {
+  networks: SavedWifi[];
+}
+
 export function openState(dataDir: string) {
   return {
     venue: new JsonStore<VenueSettings>(path.join(dataDir, "venue.json"), DEFAULT_VENUE),
@@ -122,6 +135,8 @@ export function openState(dataDir: string) {
     /** What each TV shows when the box boots (display id → rule; absent: what it showed last). */
     tvStartup: new JsonStore<Record<string, StartupRule>>(path.join(dataDir, "tv-startup.json"), {}),
     auth: new JsonStore<{ passwordHash?: string }>(path.join(dataDir, "auth.json"), {}),
+    /** The box's saved Wi-Fi networks, with passwords: owner-only. The host helper reads this file. */
+    wifi: new JsonStore<WifiSettings>(path.join(dataDir, "wifi.json"), { networks: [] }, 0o600),
     // Holds the Cloudflare API token and tunnel token: owner-only.
     cloudflare: new JsonStore<CloudflareSettings>(path.join(dataDir, "cloudflare.json"), {}, 0o600),
   };

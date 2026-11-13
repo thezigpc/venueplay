@@ -295,3 +295,12 @@ button.tv-tile.selected { border-color: var(--primary); }
 .hub-logout { justify-self: start; margin-top: 8px; }
 .rail .brand { line-height: 1.2; overflow-wrap: anywhere; white-space: normal; }
 .sub-head { margin: 14px 0 4px; font-size: 1rem; }
+
+/* Box Wi-Fi */
+.wifi-bars { display: inline-flex; align-items: flex-end; gap: 2px; width: 18px; height: 14px; vertical-align: -2px; }
+.wifi-bars i { flex: 1; background: #3a4170; border-radius: 1px; }
+.wifi-bars i.on { background: var(--ok); }
+.wifi-seen { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.wifi-seen .chip { display: inline-flex; align-items: center; gap: 6px; }
+.wifi-form { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.wifi-form .inline input { min-width: 0; }

@@ -784,3 +784,43 @@ test("box self-update: the admin button only works with the host helper, one at 
     b.close();
   }
 });
+
+test("box Wi-Fi: saved networks go to an owner-only file, the host helper gets a request", async () => {
+  const { writeFileSync, readFileSync, existsSync, rmSync, statSync } = await import("node:fs");
+  const b = await boot();
+  const req = path.join(b.dir, "wifi.request");
+  try {
+    assert.equal((await b.json("POST", "/api/wifi/networks", { ssid: "Kava Guest", password: "letmein123" }, b.authed)).status, 409, "no host helper yet");
+    writeFileSync(path.join(b.dir, "host-hooks.json"), JSON.stringify({ reboot: true, update: true, wifi: true }));
+    assert.equal((await b.json("GET", "/api/wifi")).status, 401, "admin only");
+    assert.equal((await b.json("POST", "/api/wifi/networks", { ssid: "Kava Guest", password: "short" }, b.authed)).status, 400);
+    assert.equal((await b.json("POST", "/api/wifi/networks", { ssid: "x".repeat(33) }, b.authed)).status, 400);
+    const saved = await b.json("POST", "/api/wifi/networks", { ssid: "Kava Guest", password: "letmein123" }, b.authed);
+    assert.equal(saved.status, 200);
+    const view = (await saved.json()) as { networks: { ssid: string; secured: boolean }[] };
+    assert.deepEqual(view.networks.map((n) => [n.ssid, n.secured]), [["Kava Guest", true]]);
+    assert.doesNotMatch(JSON.stringify(view), /letmein123/, "passwords never come back");
+    assert.equal(readFileSync(req, "utf8"), "apply status");
+    const file = path.join(b.dir, "wifi.json");
+    assert.match(readFileSync(file, "utf8"), /letmein123/);
+    if (process.platform !== "win32") assert.equal(statSync(file).mode & 0o777, 0o600);
+    await b.json("POST", "/api/wifi/scan", {}, b.authed);
+    assert.equal(readFileSync(req, "utf8"), "apply status scan", "requests merge until the helper takes them");
+    rmSync(req);
+    // Saving the same name again replaces it; an open network has no password.
+    await b.json("POST", "/api/wifi/networks", { ssid: "Kava Guest", hidden: true }, b.authed);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).networks.map((n: { ssid: string; password?: string; hidden?: boolean }) => [n.ssid, n.password, n.hidden]), [["Kava Guest", undefined, true]]);
+    assert.equal((await b.json("DELETE", "/api/wifi/networks/Nope", undefined, b.authed)).status, 404);
+    assert.equal((await b.json("DELETE", `/api/wifi/networks/${encodeURIComponent("Kava Guest")}`, undefined, b.authed)).status, 200);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).networks, []);
+    // The page's poll asks the helper for a fresh status when the last one is old.
+    rmSync(req);
+    writeFileSync(path.join(b.dir, "wifi-status.json"), JSON.stringify({ at: new Date().toISOString(), internetVia: "eno1" }));
+    const fresh = (await (await b.json("GET", "/api/wifi", undefined, b.authed)).json()) as { status: { internetVia: string }; pending: boolean };
+    assert.equal(fresh.status.internetVia, "eno1");
+    assert.equal(fresh.pending, false);
+    assert.ok(!existsSync(req), "fresh status: no request");
+  } finally {
+    b.close();
+  }
+});

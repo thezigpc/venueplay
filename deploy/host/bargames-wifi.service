@@ -1,0 +1,8 @@
+# Saves Wi-Fi networks to netplan, scans, and reports status (see the script's header).
+[Unit]
+Description=Bar Games Wi-Fi (requested from the admin)
+
+[Service]
+Type=oneshot
+TimeoutStartSec=120
+ExecStart=/usr/bin/python3 /usr/local/lib/bargames/bargames-wifi @DATA@

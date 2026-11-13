@@ -1,0 +1,377 @@
+#!/usr/bin/python3
+"""Bar Games Wi-Fi helper (runs on the host as root, from bargames-wifi.service).
+
+Core can't touch the host's network from its container, so it leaves a request in its
+data folder (wifi.request: "apply", "scan" and/or "status") and this does the work:
+
+  apply   Turns core's saved networks (wifi.json) into /etc/netplan/90-bargames-wifi.yaml
+          for the first Wi-Fi adapter. wpa_supplicant then joins whichever saved network
+          is in range, now and after every reboot. The cable stays the preferred route
+          (Wi-Fi routes get metric 600, the cable's are 100), so Wi-Fi only carries traffic
+          when there's no cable. Only the Wi-Fi adapter is restarted; if the cable's route
+          disappears anyway, the old file is put back.
+  scan    Lists the networks in range.
+  status  Always runs last: what the cable and the Wi-Fi are doing, for the admin page.
+
+The results go to wifi-status.json in the same folder. Passwords never leave wifi.json
+and the netplan file (both owner-only).
+"""
+
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+DATA = sys.argv[1] if len(sys.argv) > 1 else ""
+NETPLAN = "/etc/netplan/90-bargames-wifi.yaml"
+WIFI_METRIC = 600
+SCAN_SOCK = "/run/bargames-wpa"
+
+
+def run(cmd, timeout=30):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(cmd, 1, "", str(e))
+
+
+def read(path, default=""):
+    try:
+        with open(path, encoding="utf8") as f:
+            return f.read()
+    except OSError:
+        return default
+
+
+def write_atomic(path, text, mode=0o644):
+    tmp = f"{path}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w", encoding="utf8", newline="\n") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+# ------------------------------------------------------------------ what's on the box
+
+
+def adapters():
+    return sorted(os.path.basename(os.path.dirname(p)) for p in glob.glob("/sys/class/net/*/wireless"))
+
+
+def cables():
+    """Physical wired interfaces (a device behind them, ARP type ethernet, not Wi-Fi)."""
+    out = []
+    for p in sorted(glob.glob("/sys/class/net/*")):
+        name = os.path.basename(p)
+        if os.path.exists(f"{p}/wireless") or not os.path.exists(f"{p}/device"):
+            continue
+        if read(f"{p}/type").strip() == "1":
+            out.append(name)
+    return out
+
+
+def addresses(dev):
+    r = run(["ip", "-j", "addr", "show", "dev", dev])
+    try:
+        info = json.loads(r.stdout or "[]")
+    except ValueError:
+        return []
+    return [a["local"] for i in info for a in i.get("addr_info", []) if a.get("scope") == "global"]
+
+
+def default_route():
+    """The device the box's internet goes out of (lowest metric IPv4 default route)."""
+    r = run(["ip", "-j", "route", "show", "default"])
+    try:
+        routes = json.loads(r.stdout or "[]")
+    except ValueError:
+        return None
+    routes.sort(key=lambda x: x.get("metric", 0))
+    return routes[0].get("dev") if routes else None
+
+
+def wired_default():
+    """Whether a cable carries a default route."""
+    for dev in cables():
+        r = run(["ip", "-j", "route", "show", "default", "dev", dev])
+        try:
+            if json.loads(r.stdout or "[]"):
+                return True
+        except ValueError:
+            pass
+    return False
+
+
+# ------------------------------------------------------------------ wpa_supplicant
+
+
+def wpa_sock(iface):
+    for d in ("/run/wpa_supplicant", SCAN_SOCK):
+        if os.path.exists(f"{d}/{iface}"):
+            return d
+    return None
+
+
+def wpa(iface, *args, sock=None):
+    d = sock or wpa_sock(iface)
+    if not d:
+        return None
+    r = run(["wpa_cli", "-p", d, "-i", iface, *args], timeout=10)
+    return r.stdout if r.returncode == 0 else None
+
+
+def decode_ssid(s):
+    """wpa_cli prints SSIDs with C-style escapes (\\xNN, \\\\, \\")."""
+    out = bytearray()
+    i = 0
+    raw = s.encode("utf8", "surrogateescape")
+    while i < len(raw):
+        c = raw[i]
+        if c == 0x5C and i + 1 < len(raw):
+            n = raw[i + 1]
+            if n == ord("x") and i + 4 <= len(raw):
+                try:
+                    out.append(int(raw[i + 2 : i + 4], 16))
+                    i += 4
+                    continue
+                except ValueError:
+                    pass
+            out.append({ord("n"): 10, ord("r"): 13, ord("t"): 9, ord("e"): 27}.get(n, n))
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return out.decode("utf8", "replace")
+
+
+def scan(iface):
+    sock = wpa_sock(iface)
+    temp = None
+    if not sock:
+        # No saved networks yet, so nothing runs wpa_supplicant: start one just for the scan.
+        conf = "/run/bargames-wpa.conf"
+        write_atomic(conf, f"ctrl_interface={SCAN_SOCK}\nupdate_config=0\n", 0o600)
+        pid = "/run/bargames-wpa.pid"
+        r = run(["wpa_supplicant", "-B", "-i", iface, "-c", conf, "-P", pid])
+        if r.returncode != 0:
+            return {"error": f"couldn't start a scan: {(r.stderr or r.stdout).strip()[:200]}"}
+        temp = pid
+        sock = SCAN_SOCK
+        for _ in range(20):
+            if os.path.exists(f"{sock}/{iface}"):
+                break
+            time.sleep(0.2)
+    try:
+        wpa(iface, "scan", sock=sock)
+        time.sleep(6)
+        out = wpa(iface, "scan_results", sock=sock) or ""
+    finally:
+        if temp:
+            try:
+                os.kill(int(read(temp).strip()), 15)
+            except (ValueError, OSError):
+                pass
+    best = {}
+    for line in out.splitlines()[1:]:
+        parts = line.split("\t")
+        if len(parts) < 5:
+            continue
+        _bssid, freq, signal, flags, ssid = parts[0], parts[1], parts[2], parts[3], "\t".join(parts[4:])
+        ssid = decode_ssid(ssid)
+        if not ssid or "\x00" in ssid:
+            continue
+        try:
+            sig, mhz = int(signal), int(freq)
+        except ValueError:
+            continue
+        entry = {
+            "ssid": ssid,
+            "signal": sig,
+            "band": "5 GHz" if mhz >= 4900 and mhz < 5900 else "6 GHz" if mhz >= 5900 else "2.4 GHz",
+            "secure": any(k in flags for k in ("WPA", "RSN", "SAE", "WEP")),
+            "enterprise": "EAP" in flags,
+        }
+        if ssid not in best or sig > best[ssid]["signal"]:
+            best[ssid] = entry
+    return {"at": now(), "networks": sorted(best.values(), key=lambda e: -e["signal"])}
+
+
+def wifi_state(iface):
+    st = {"name": iface, "addresses": addresses(iface)}
+    out = wpa(iface, "status")
+    if out is None:
+        st["state"] = "off"
+        return st
+    kv = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    st["state"] = kv.get("wpa_state", "").lower() or "unknown"
+    if kv.get("ssid") and st["state"] == "completed":
+        st["state"] = "connected"
+        st["ssid"] = decode_ssid(kv["ssid"])
+        try:
+            freq = int(kv.get("freq", "0"))
+            st["band"] = "5 GHz" if 4900 <= freq < 5900 else "6 GHz" if freq >= 5900 else "2.4 GHz"
+        except ValueError:
+            pass
+        sig = wpa(iface, "signal_poll") or ""
+        m = re.search(r"^RSSI=(-?\d+)", sig, re.M)
+        if m:
+            st["signal"] = int(m.group(1))
+    return st
+
+
+# ------------------------------------------------------------------ apply
+
+
+def valid(net):
+    ssid = net.get("ssid")
+    pw = net.get("password") or ""
+    if not isinstance(ssid, str) or not 1 <= len(ssid.encode("utf8")) <= 32 or any(ord(c) < 32 for c in ssid):
+        return False
+    if not isinstance(pw, str):
+        return False
+    if pw and not (8 <= len(pw) <= 63 and all(32 <= ord(c) < 127 for c in pw)) and not re.fullmatch(r"[0-9a-fA-F]{64}", pw):
+        return False
+    return True
+
+
+def render(networks, iface):
+    """The netplan file for these networks (None: no file). JSON strings are valid YAML."""
+    nets = [n for n in networks if valid(n)]
+    if not nets or not iface:
+        return None
+    lines = [
+        "# Written by Bar Games (bargames-wifi) from the admin's saved Wi-Fi networks.",
+        "# Edit them in the admin (Settings > Box Wi-Fi), not here: this file is rewritten.",
+        "network:",
+        "  version: 2",
+        "  wifis:",
+        f"    {iface}:",
+        "      optional: true",
+        "      dhcp4: true",
+        "      dhcp6: true",
+        f"      dhcp4-overrides: {{route-metric: {WIFI_METRIC}}}",
+        f"      dhcp6-overrides: {{route-metric: {WIFI_METRIC}}}",
+        "      access-points:",
+    ]
+    for n in nets:
+        opts = []
+        if n.get("password"):
+            opts.append(f"password: {json.dumps(n['password'])}")
+        if n.get("hidden"):
+            opts.append("hidden: true")
+        lines.append(f"        {json.dumps(n['ssid'], ensure_ascii=False)}: {{{', '.join(opts)}}}")
+    return "\n".join(lines) + "\n"
+
+
+def activate(iface, on):
+    unit = f"netplan-wpa-{iface}.service"
+    if not on:
+        run(["systemctl", "stop", unit])
+    r = run(["systemctl", "daemon-reload"], timeout=60)  # runs netplan's generator
+    if r.returncode != 0:
+        return f"systemctl daemon-reload failed: {r.stderr.strip()[:200]}"
+    run(["networkctl", "reload"])
+    if on:
+        run(["ip", "link", "set", iface, "up"])
+        r = run(["systemctl", "restart", unit])
+        if r.returncode != 0:
+            return f"couldn't start Wi-Fi: {r.stderr.strip()[:200]}"
+        run(["networkctl", "reconfigure", iface])
+    else:
+        run(["ip", "addr", "flush", "dev", iface])
+        run(["ip", "link", "set", iface, "down"])
+    return None
+
+
+def apply(conf):
+    ads = adapters()
+    iface = ads[0] if ads else None
+    if not iface:
+        return {"ok": False, "at": now(), "error": "This box has no Wi-Fi adapter."}
+    want = render(conf.get("networks") or [], iface)
+    have = read(NETPLAN, None) if os.path.exists(NETPLAN) else None
+    if want == have:
+        return {"ok": True, "at": now(), "changed": False}
+    cable_before = wired_default()
+    if want is None:
+        os.remove(NETPLAN)
+    else:
+        write_atomic(NETPLAN, want, 0o600)
+    gen = run(["netplan", "generate"], timeout=60)
+    err = None
+    if gen.returncode != 0:
+        err = f"netplan rejected the settings: {(gen.stderr or gen.stdout).strip()[:300]}"
+    else:
+        err = activate(iface, want is not None)
+    if not err and cable_before:
+        # The cable must keep its route; give networkd a moment, then check.
+        for _ in range(10):
+            if wired_default():
+                break
+            time.sleep(1)
+        else:
+            err = "The cable connection dropped after the change, so it was undone."
+    if err:
+        if have is None:
+            if os.path.exists(NETPLAN):
+                os.remove(NETPLAN)
+        else:
+            write_atomic(NETPLAN, have, 0o600)
+        run(["netplan", "generate"], timeout=60)
+        activate(iface, have is not None)
+        return {"ok": False, "at": now(), "error": err}
+    return {"ok": True, "at": now(), "changed": True}
+
+
+# ------------------------------------------------------------------ main
+
+
+def now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def main():
+    if len(sys.argv) > 2 and sys.argv[2] == "--render":
+        # For tests: networks JSON on stdin → the netplan file on stdout.
+        sys.stdout.write(render(json.load(sys.stdin), "wlan0") or "")
+        return
+    if not DATA or not os.path.isdir(DATA):
+        sys.exit("usage: bargames-wifi <core data folder>")
+    req_path = os.path.join(DATA, "wifi.request")
+    ops = set(read(req_path).split())
+    try:
+        os.remove(req_path)
+    except OSError:
+        pass
+    status_path = os.path.join(DATA, "wifi-status.json")
+    try:
+        status = json.loads(read(status_path, "{}"))
+    except ValueError:
+        status = {}
+
+    ads = adapters()
+    if "apply" in ops:
+        try:
+            conf = json.loads(read(os.path.join(DATA, "wifi.json"), "{}"))
+        except ValueError:
+            conf = {}
+        status["apply"] = apply(conf)
+        if status["apply"].get("changed"):
+            time.sleep(8)  # let it associate and get an address before reporting
+    if "scan" in ops and ads:
+        status["scan"] = scan(ads[0])
+
+    status["at"] = now()
+    status["adapters"] = [wifi_state(a) for a in ads]
+    status["cables"] = [{"name": c, "plugged": read(f"/sys/class/net/{c}/carrier", "0").strip() == "1", "addresses": addresses(c)} for c in cables()]
+    status["internetVia"] = default_route()
+    status["saved"] = os.path.exists(NETPLAN)
+    write_atomic(status_path, json.dumps(status, indent=1) + "\n", 0o644)
+
+
+if __name__ == "__main__":
+    main()

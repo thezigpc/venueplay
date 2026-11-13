@@ -8,3 +8,4 @@ deploy/data/
 
 # Machine-local notes (dev box address, logins): never committed.
 CLAUDE.local.md
+__pycache__/
