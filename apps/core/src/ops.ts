@@ -137,7 +137,7 @@ export async function runOps(argv: string[], client: Client, out: (line: string)
         const r = await client.install(url, argv.includes("--enable"));
         if (json) out(JSON.stringify(r, null, 2));
         else {
-          out(`ok   ${r.id}: ${r.upgraded ? "upgraded to" : "installed"} ${r.version}, ${r.enabled ? `on (${r.game.state})` : "off (turn it on in the Games tab, or use --enable)"}`);
+          out(`ok   ${r.id}: ${r.upgraded ? "upgraded to" : "installed"} ${r.version}, ${r.enabled ? `on (${r.game.state})` : r.game.kind === "integration" ? "off (an integration: the venue turns it on under Settings → Smart home, approving what it asks for)" : "off (turn it on under Games & apps, or use --enable)"}`);
           for (const w of r.warnings) out(`     note: ${w}`);
         }
         return 0;
