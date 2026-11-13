@@ -22,7 +22,9 @@ pycparser==3.12
 pydantic==2.14.3
 pydantic_core==2.50.4
 requests==2.34.2
-srptools==2.0.0
+# 2.0.0 (2026-10) made SRPClientSession's key keyword-only; pyatv 0.18.0 passes it
+# positionally, so pairing fails with a TypeError. Stay on 1.0.1 until pyatv catches up.
+srptools==1.0.1
 tabulate==0.10.0
 tinytag==2.3.2
 typing-inspection==0.4.5

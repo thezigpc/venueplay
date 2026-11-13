@@ -122,6 +122,12 @@ class Helper:
         try:
             await handler.finish()
         except exceptions.PairingError as err:
+            # A wrong PIN is an authentication failure from the Apple TV. A bug (a library
+            # mismatch, say) shows up as a Python error underneath: say so, not "wrong PIN".
+            cause = err.__cause__ or err.__context__
+            if isinstance(cause, (TypeError, AttributeError, ValueError, ImportError)):
+                log("pairing failed inside the helper:", type(cause).__name__, cause)
+                raise Fail("error", f"pairing failed inside the box ({type(cause).__name__}: {cause}); this isn't the PIN")
             raise Fail("pin", f"that PIN didn't work ({err})")
         if not handler.has_paired:
             raise Fail("pin", "that PIN didn't work")
