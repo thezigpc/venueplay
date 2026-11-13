@@ -25,7 +25,7 @@ and the game integration guide is in [docs/SDK.md](docs/SDK.md). Connector modul
 | `deploy/` | Dockerfile, compose (core, gateway, broker, docker-socket-proxy); core runs cloudflared itself |
 | `integration/` | **Hand-off for game repos:** the guide, the packaged SDK (`npm run sdk:pack`) and snippets |
 
-Ports: core 7100 · gateway 7080 · broker 7200 (host network) · hello-game 7300.
+Ports: core 7100 · gateway 7080 · broker 7200 (host network; on a box only loopback and `docker0`, for core) · hello-game 7300.
 
 ## Develop
 
@@ -64,6 +64,10 @@ asks you to choose the admin password; after that it's the admin login.
 - Until a password is set, the landing page sends LAN visitors to setup.
 - Setup is refused through the Cloudflare tunnel, so nobody outside the venue can claim
   a fresh box.
+- Change the password under Settings → Sign-in. Changing it (or "Sign out everywhere
+  else") signs out every other device, including staff signed in to games' admin pages.
+- Wrong passwords and wrong venue PINs are limited. Logins from the venue LAN are never
+  locked out by guests' wrong tries.
 
 Host helpers: run `sudo deploy/host/install.sh` once. The admin's Reboot and Update
 buttons and the **Box Wi-Fi** page need it; later updates started from the admin reinstall

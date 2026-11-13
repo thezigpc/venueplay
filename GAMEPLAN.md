@@ -302,7 +302,9 @@ from the earlier plan.
 - [ ] Music Requests app (its own repo, source-agnostic: Spotify for home use, the venue's own files)
 - [ ] Home Assistant module: MQTT discovery, game events, starter automations
 - [ ] Optional WAF list sync; optional split DNS (the router points game hostnames at the box, with a Let's Encrypt certificate obtained through the Cloudflare token) so phones work during internet outages
-- [ ] Health alerts (box → HA → you), tagged releases, a snapshot before every update
+- [x] Box 0.15.1 hardening: admin password change and "sign out everywhere"; wrong-PIN and lockout limits; tests in CI before every release; old images and snapshots cleaned up; owner-only credential files; the broker's API off the venue LAN; crash handlers; updates wait for core, gateway and broker and roll back otherwise
+- [ ] Backup and restore of a box's settings (TV pairings, scenes, games), e.g. to a USB drive at the venue
+- [ ] Health alerts (box → HA → you)
 
 ### Phase 6: On-site install and handoff
 - [ ] Wire both boxes; reserve their IPs; set up the 5 TVs (Permissive control, Fast TV Start, AirPlay on)
