@@ -205,6 +205,9 @@ button.close { width: 44px; height: 44px; padding: 0; font-size: 1.6rem; line-he
 .chip:disabled { border-style: dashed; }
 
 /* Games and apps */
+.update-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; margin-bottom: 12px; }
+.update-bar > span { flex: 1; min-width: 200px; }
+.rail-item { text-align: center; line-height: 1.15; }
 .update-ready { border: 1px solid var(--primary); }
 .game-list { padding: 4px 16px 8px; }
 .list-head { font-size: 0.9rem; color: #c3cae6; font-weight: 600; margin: 14px 0 6px; }

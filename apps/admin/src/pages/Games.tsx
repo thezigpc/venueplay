@@ -33,11 +33,17 @@ export function GamesPage() {
       setUrl("");
       setSub("");
     });
+  const [checked, setChecked] = useState("");
   const check = () => {
     setChecking(true);
+    setChecked("");
     api
       .checkUpdates()
-      .then(() => updates.reload())
+      .then(async (u) => {
+        await updates.reload();
+        const n = u.games.filter((x) => x.available).length;
+        setChecked(n ? `${n} update${n === 1 ? "" : "s"} found.` : "Everything is up to date.");
+      })
       .catch((e: Error) => games.setError(e.message))
       .finally(() => setChecking(false));
   };
@@ -53,9 +59,6 @@ export function GamesPage() {
     <div>
       <div className="page-head">
         <h1>Games and apps</h1>
-        <button type="button" disabled={checking || busy} onClick={check}>
-          {checking ? "Checking…" : "Check for updates"}
-        </button>
         <button type="button" className="primary" aria-expanded={adding} onClick={() => setAdding(!adding)}>
           Add a game or app
         </button>
@@ -81,6 +84,19 @@ export function GamesPage() {
         </p>
       ))}
 
+      <div className="card update-bar">
+        <span>
+          <b>{ready.length ? `${ready.length} update${ready.length === 1 ? "" : "s"} ready` : checked || "Updates"}</b>
+          <span className="muted">
+            {" "}
+            · {updates.data?.lastRun ? `last checked ${new Date(updates.data.lastRun).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}` : "not checked yet"} · the box also checks every 6 hours
+          </span>
+        </span>
+        <button type="button" disabled={checking || busy} onClick={check}>
+          {checking ? "Checking…" : "Check for updates"}
+        </button>
+      </div>
+
       {ready.length > 0 && (
         <section className="card stack-gap update-ready">
           <h2>
@@ -101,9 +117,6 @@ export function GamesPage() {
         {apps.length > 0 && <h2 className="list-head">Apps</h2>}
         {list(apps)}
       </section>
-      <p className="muted small-print">
-        {updates.data?.lastRun ? `Updates last checked ${new Date(updates.data.lastRun).toLocaleString()}.` : "The box checks for updates every 6 hours."}
-      </p>
     </div>
   );
 }
