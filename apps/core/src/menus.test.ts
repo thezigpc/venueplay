@@ -824,3 +824,23 @@ test("box Wi-Fi: saved networks go to an owner-only file, the host helper gets a
     b.close();
   }
 });
+
+test("box shutdown: needs the confirm word and the host helper", async () => {
+  const { writeFileSync, readFileSync, existsSync } = await import("node:fs");
+  const b = await boot();
+  try {
+    writeFileSync(path.join(b.dir, "host-hooks.json"), JSON.stringify({ reboot: true }));
+    assert.equal((await b.json("POST", "/api/system/shutdown", { confirm: "shutdown" }, b.authed)).status, 409, "older helper: no shutdown");
+    writeFileSync(path.join(b.dir, "host-hooks.json"), JSON.stringify({ reboot: true, shutdown: true }));
+    assert.equal((await b.json("POST", "/api/system/shutdown", {}, b.authed)).status, 400);
+    assert.equal((await b.json("POST", "/api/system/shutdown", { confirm: "shutdown" })).status, 401, "admin only");
+    assert.equal((await b.json("POST", "/api/system/shutdown", { confirm: "shutdown" }, b.authed)).status, 200);
+    assert.ok(existsSync(path.join(b.dir, "shutdown.request")));
+    assert.match(readFileSync(path.join(b.dir, "shutdown.request"), "utf8"), /"at":/);
+    assert.ok(!existsSync(path.join(b.dir, "reboot.request")), "not a reboot");
+    const st = (await (await b.json("GET", "/api/system/stats", undefined, b.authed)).json()) as { shutdown: { available: boolean } };
+    assert.equal(st.shutdown.available, true);
+  } finally {
+    b.close();
+  }
+});

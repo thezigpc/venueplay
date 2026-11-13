@@ -184,6 +184,7 @@ export interface SystemStats {
   box: { version: string; latest?: string; coreUptimeSec: number; games: number; openRooms: number };
   update?: { available: boolean; running: boolean; lastExit?: number; logTail?: string[] };
   reboot: { available: boolean; pending: boolean };
+  shutdown?: { available: boolean };
 }
 export interface Display {
   id: string;
@@ -311,6 +312,7 @@ export const api = {
   systemStats: () => call<SystemStats>("GET", "/system/stats"),
   updateBox: (version?: string) => call<{ ok: boolean; message?: string }>("POST", "/system/update", { version }),
   reboot: () => call<{ ok: boolean; message?: string }>("POST", "/system/reboot", { confirm: "reboot" }),
+  shutdown: () => call<{ ok: boolean; message?: string }>("POST", "/system/shutdown", { confirm: "shutdown" }),
   updates: () => call<Updates>("GET", "/games/updates"),
   checkUpdates: () => call<Updates>("POST", "/games/updates/check"),
   updateGame: (id: string) => call<{ game: Game; from: string; warnings: string[] }>("POST", `/games/${encodeURIComponent(id)}/update`),

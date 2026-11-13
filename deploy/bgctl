@@ -62,16 +62,16 @@ rollback() {
 tmp=$(mktemp -d)
 ref="v$target"
 curl -fsS -m 20 -o /dev/null "https://raw.githubusercontent.com/$REPO/$ref/VERSION" 2>/dev/null || ref=main
-for f in docker-compose.yml bgctl host/install.sh host/bargames-reboot.path host/bargames-reboot.service host/bargames-update.path host/bargames-update.service host/bargames-wifi host/bargames-wifi.path host/bargames-wifi.service; do
+for f in docker-compose.yml bgctl host/install.sh host/bargames-reboot.path host/bargames-reboot.service host/bargames-shutdown.path host/bargames-shutdown.service host/bargames-update.path host/bargames-update.service host/bargames-wifi host/bargames-wifi.path host/bargames-wifi.service; do
   mkdir -p "$tmp/$(dirname "$f")"
   if ! curl -fsS -m 30 "https://raw.githubusercontent.com/$REPO/$ref/deploy/$f" -o "$tmp/$f"; then
-    case "$f" in host/bargames-update.* | host/bargames-wifi*) continue ;; esac
+    case "$f" in host/bargames-update.* | host/bargames-wifi* | host/bargames-shutdown.*) continue ;; esac
     rm -rf "$tmp"
     fail "couldn't download deploy/$f at $ref"
   fi
 done
 mkdir -p "$here/host"
-for f in docker-compose.yml bgctl host/install.sh host/bargames-reboot.path host/bargames-reboot.service host/bargames-update.path host/bargames-update.service host/bargames-wifi host/bargames-wifi.path host/bargames-wifi.service; do
+for f in docker-compose.yml bgctl host/install.sh host/bargames-reboot.path host/bargames-reboot.service host/bargames-shutdown.path host/bargames-shutdown.service host/bargames-update.path host/bargames-update.service host/bargames-wifi host/bargames-wifi.path host/bargames-wifi.service; do
   # Replace, don't overwrite: this script is one of them, and sh is still reading it.
   [ -f "$tmp/$f" ] && cp "$tmp/$f" "$here/$f.new" && mv -f "$here/$f.new" "$here/$f"
 done

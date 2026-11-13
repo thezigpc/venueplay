@@ -24,6 +24,7 @@ export function SystemPage() {
   const [s, setS] = useState<SystemStats | undefined>();
   const [error, setError] = useState("");
   const [rebooting, setRebooting] = useState("");
+  const [off, setOff] = useState("");
   const prevNet = useRef<{ at: number; rx: number; tx: number } | undefined>();
   const [rate, setRate] = useState<{ rx: number; tx: number } | undefined>();
 
@@ -80,6 +81,22 @@ export function SystemPage() {
     }
   };
 
+  const shutdown = async () => {
+    const what = [
+      s?.box.openRooms ? `${s.box.openRooms} open room(s) will close` : "",
+      s?.casting?.tvs ? `${s.casting.tvs} TV(s) stop casting` : "",
+    ].filter(Boolean);
+    const note = what.length ? `\n\n${what.join("\n")}` : "";
+    if (!window.confirm(`Shut the box down?${note}\n\nIt stays off until someone presses its power button: you can't switch it back on from here.`)) return;
+    try {
+      const r = await api.shutdown();
+      setOff(r.message ?? "Shutting down…");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  if (off) return <section className="card wide"><h2>Shutting down</h2><p>{off}</p></section>;
   if (rebooting) return <section className="card wide"><h2>Rebooting</h2><p>{rebooting}</p></section>;
   if (!s) return <div className="card">{error || "Loading…"}</div>;
   const h = s.host;
@@ -237,12 +254,21 @@ export function SystemPage() {
       </section>
 
       <section className="card wide">
-        <h2>Reboot</h2>
-        <p className="muted">Restarts the whole box. Open rooms close; TVs come back on their startup choices.</p>
+        <h2>Reboot or shut down</h2>
+        <p className="muted">Reboot restarts the whole box: open rooms close, and TVs come back on their startup choices. Shut down switches it off, for moving it or before unplugging; it stays off until someone presses its power button.</p>
         {s.reboot.available ? (
-          <button className="danger" onClick={() => void reboot()}>
-            Reboot the box
-          </button>
+          <div className="buttons">
+            <button className="danger" onClick={() => void reboot()}>
+              Reboot the box
+            </button>
+            {s.shutdown?.available ? (
+              <button className="danger" onClick={() => void shutdown()}>
+                Shut down
+              </button>
+            ) : (
+              <span className="muted">Shut down arrives with the next box update.</span>
+            )}
+          </div>
         ) : (
           <p className="warn">This box can't reboot itself yet. Once, on the box: sudo ~/bargames/deploy/host/install.sh</p>
         )}

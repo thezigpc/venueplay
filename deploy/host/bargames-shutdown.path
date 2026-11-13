@@ -1,0 +1,10 @@
+# Bar Games: shut the box down when the admin asks (core writes shutdown.request in its data folder).
+# Installed by deploy/host/install.sh, which fills in the real paths.
+[Unit]
+Description=Bar Games shutdown request watcher
+
+[Path]
+PathExists=@DATA@/shutdown.request
+
+[Install]
+WantedBy=multi-user.target

@@ -929,7 +929,7 @@ export function createApp(d: AppDeps) {
   const sampler = new HostSampler({ diskPath: d.config.dataDir });
   const coreStarted = Date.now();
   /** The host helper (deploy/host/install.sh) leaves this marker; without it the box can't reboot itself. */
-  const hostHooks = (): { reboot?: boolean; update?: boolean; wifi?: boolean; installedAt?: string } => {
+  const hostHooks = (): { reboot?: boolean; shutdown?: boolean; update?: boolean; wifi?: boolean; installedAt?: string } => {
     if (!d.config.dataDir) return {};
     try {
       return JSON.parse(readFileSync(path.join(d.config.dataDir, "host-hooks.json"), "utf8"));
@@ -999,6 +999,7 @@ export function createApp(d: AppDeps) {
         box: { version: d.config.boxVersion, latest: await latestVersion(), coreUptimeSec: Math.round((Date.now() - coreStarted) / 1000), games: d.games.list().filter((g) => g.enabled).length, openRooms: rooms },
         update: updateStatus(),
         reboot: { available: Boolean(hostHooks().reboot), pending: Boolean(pending && existsSync(pending)) },
+        shutdown: { available: Boolean(hostHooks().shutdown) },
       });
     }),
   );
@@ -1028,6 +1029,19 @@ export function createApp(d: AppDeps) {
       writeFileSync(file, JSON.stringify({ at: new Date().toISOString(), by: clientIpOf(req) }));
       d.log.warn("system", "reboot requested from the admin", { by: clientIpOf(req) });
       res.json({ ok: true, message: "Rebooting. The box is back in a minute or two; this page reconnects by itself." });
+    }),
+  );
+
+  /** { confirm: "shutdown" }: switches the machine off (host helper required). Someone has to switch it back on. */
+  app.post(
+    "/api/system/shutdown",
+    h(async (req, res) => {
+      if ((req.body ?? {}).confirm !== "shutdown") throw new HttpError(400, 'send { confirm: "shutdown" }');
+      const file = dataFile("shutdown.request");
+      if (!file || !hostHooks().shutdown) throw new HttpError(409, "This box can't shut itself down yet: update it from this page, or run deploy/host/install.sh on it once (sudo).");
+      writeFileSync(file, JSON.stringify({ at: new Date().toISOString(), by: clientIpOf(req) }));
+      d.log.warn("system", "shutdown requested from the admin", { by: clientIpOf(req) });
+      res.json({ ok: true, message: "Shutting down. Wait until the box's power light goes off before you unplug it. To start it again, press its power button." });
     }),
   );
 
