@@ -304,3 +304,5 @@ button.tv-tile.selected { border-color: var(--primary); }
 .wifi-seen .chip { display: inline-flex; align-items: center; gap: 6px; }
 .wifi-form { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
 .wifi-form .inline input { min-width: 0; }
+
+.forget-tv { margin-top: 20px; padding-top: 12px; border-top: 1px solid #252c55; }

@@ -347,6 +347,26 @@ function TvPanel({
           </div>
           <StartupChoice d={d} rule={startup} games={games} run={run} busy={busy} media={media.filter((p) => p.targets.some((t) => t.displayId === d.id))} />
           {canPair && <Pairing d={d} needsCode={Boolean(stream?.needsCode)} reload={reload} />}
+          <div className="forget-tv">
+            <h3 className="sub-head">Forget this TV</h3>
+            <p className="muted small-print">
+              Removes it from the box, with its startup choice. Use it for TVs from another venue. A TV still on this network comes back the next time you scan.
+            </p>
+            <button
+              className="danger"
+              disabled={busy}
+              onClick={() => {
+                const note = stream ? "\n\nThe box stops casting to it." : "";
+                if (!window.confirm(`Forget "${d.label || d.name}"?${note}`)) return;
+                run(async () => {
+                  await api.forgetDisplay(d.id);
+                  go("tvs");
+                });
+              }}
+            >
+              Forget this TV
+            </button>
+          </div>
         </div>
       )}
     </aside>

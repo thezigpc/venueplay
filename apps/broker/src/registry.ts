@@ -203,7 +203,16 @@ export class DisplayRegistry {
     });
   }
 
+  /** Forgets a TV: stops whatever the box sends it (best effort), then drops its record. A later scan finds it again. */
   async remove(id: string): Promise<void> {
+    const d = this.get(id);
+    if (d) {
+      try {
+        await this.driverFor(d).stop(d);
+      } catch {
+        /* offline or unknown driver: forget it anyway */
+      }
+    }
     await this.store.update((s) => {
       s.displays = s.displays.filter((d) => d.id !== id);
     });

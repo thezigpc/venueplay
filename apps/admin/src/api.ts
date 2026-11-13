@@ -322,6 +322,7 @@ export const api = {
   events: () => call<BarGamesEvent[]>("GET", "/events/recent?limit=30"),
   displays: () => call<Display[]>("GET", "/broker/displays?health=1"),
   discover: () => call<{ found: number; errors: string[] }>("POST", "/broker/discover", {}),
+  forgetDisplay: (id: string) => call<{ ok: boolean }>("DELETE", `/broker/displays/${encodeURIComponent(id)}`),
   addRoku: (host: string) => call<Display>("POST", "/broker/displays/roku", { host }),
   addAirplay: (host: string) => call<Display>("POST", "/broker/displays/airplay", { host }),
   patchDisplay: (id: string, patch: { label?: string; group?: string; delivery?: string; streamSettings?: StreamSettings | null }) =>

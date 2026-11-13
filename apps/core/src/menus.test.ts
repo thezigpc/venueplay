@@ -69,6 +69,11 @@ async function boot(extraFetch?: (url: string, init?: RequestInit) => Response |
     const url = String(input);
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     if (url === "http://broker/displays" || url === "http://broker/displays?health=1") return reply(displays.map((x) => ({ ...x, health: { online: x.id !== "tv-offline" } })));
+    if (init?.method === "DELETE" && url.startsWith("http://broker/displays/")) {
+      const i = displays.findIndex((x) => `http://broker/displays/${encodeURIComponent(x.id)}` === url);
+      if (i >= 0) displays.splice(i, 1);
+      return reply({ ok: true });
+    }
     if (url === "http://broker/show") {
       if (opts.showDelayMs) await new Promise((r) => setTimeout(r, opts.showDelayMs));
       shows.push(body);
@@ -355,6 +360,11 @@ test("tv startup: rules are validated, and running them puts the menu on its TV"
     await new Promise((res) => setTimeout(res, 100));
     assert.equal(b.displays[1].content?.url, "http://menu.localhost:7080/tv");
     assert.equal(b.displays[0].content?.kind, "idle", "a TV without a rule is left alone");
+
+    // Forgetting a TV takes its startup rule with it.
+    assert.equal((await b.json("DELETE", "/api/broker/displays/tv2", undefined, b.authed)).status, 200);
+    assert.deepEqual(await (await b.json("GET", "/api/tv-startup", undefined, b.authed)).json(), {});
+    assert.equal((await b.json("DELETE", "/api/broker/displays/tv2")).status, 401, "admin only");
   } finally {
     b.close();
   }

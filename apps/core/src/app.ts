@@ -1856,6 +1856,22 @@ export function createApp(d: AppDeps) {
     }),
   );
 
+  /** Forget a TV: the broker drops it, and its "when the box starts" choice goes with it. */
+  app.delete(
+    "/api/broker/displays/:id",
+    h(async (req, res) => {
+      const id = req.params.id;
+      await brokerCall("DELETE", `/displays/${encodeURIComponent(id)}`);
+      if (d.state.tvStartup.get()[id]) {
+        await d.state.tvStartup.update((s) => {
+          delete s[id];
+        });
+      }
+      d.log.info("displays", "TV forgotten", { id, by: clientIpOf(req) });
+      res.json({ ok: true });
+    }),
+  );
+
   app.all(
     "/api/broker/*",
     h(async (req, res) => {
