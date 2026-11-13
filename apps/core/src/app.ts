@@ -488,9 +488,11 @@ export function createApp(d: AppDeps) {
 
   app.post("/api/auth/login", (req, res) => {
     const ip = clientIpOf(req);
-    if (!passwords.allowed(ip)) return void res.status(429).json({ error: "too many wrong passwords; try again in 15 minutes" });
+    // From the venue LAN: only this IP's own limit, never the box-wide one (box 0.15.1).
+    const scope = { lan: fromLan(req) };
+    if (!passwords.allowed(ip, scope)) return void res.status(429).json({ error: "too many wrong passwords; try again in 15 minutes" });
     if (!d.auth.verify(String(req.body?.password ?? ""))) {
-      passwords.failed(ip);
+      passwords.failed(ip, scope);
       return void res.status(401).json({ error: "wrong password" });
     }
     passwords.succeeded(ip);
@@ -517,10 +519,12 @@ export function createApp(d: AppDeps) {
       const game = gameAuth(req);
       const { password, clientIp } = (req.body ?? {}) as { password?: unknown; clientIp?: unknown };
       const source = `${game.id}:${typeof clientIp === "string" ? clientIp.slice(0, 64) : "?"}`;
-      if (!passwords.allowed(source)) return void res.json({ ok: false, reason: "blocked" });
+      // The client IP is the game's word: the game's own cap backs up the per-source one.
+      const scope = { group: game.id };
+      if (!passwords.allowed(source, scope)) return void res.json({ ok: false, reason: "blocked" });
       const ok = typeof password === "string" && password.length > 0 && password.length <= 256 && d.auth.verify(password);
       if (!ok) {
-        passwords.failed(source);
+        passwords.failed(source, scope);
         return void res.json({ ok: false, reason: "wrong" });
       }
       passwords.succeeded(source);
@@ -544,9 +548,10 @@ export function createApp(d: AppDeps) {
     h(async (req, res) => {
       const ip = clientIpOf(req);
       const { current, next } = (req.body ?? {}) as { current?: unknown; next?: unknown };
-      if (!passwords.allowed(ip)) throw new HttpError(429, "too many wrong passwords; try again in 15 minutes");
+      const scope = { lan: fromLan(req) };
+      if (!passwords.allowed(ip, scope)) throw new HttpError(429, "too many wrong passwords; try again in 15 minutes");
       if (typeof current !== "string" || !d.auth.verify(current)) {
-        passwords.failed(ip);
+        passwords.failed(ip, scope);
         throw new HttpError(403, "The current password is wrong.");
       }
       passwords.succeeded(ip);
