@@ -131,7 +131,8 @@ export function Remote({ d, keys, embedded = false }: { d: Display; keys: string
           {btn("ChannelUp", "CH +")}
         </div>
       )}
-      {!embedded && d.driver === "roku" && <TvApps d={d} online={online} />}
+      {!embedded && d.capabilities?.apps && <TvApps d={d} online={online} />}
+      {d.capabilities?.text && (
       <form
         className="inline"
         onSubmit={(e) => {
@@ -148,7 +149,11 @@ export function Remote({ d, keys, embedded = false }: { d: Display; keys: string
           Send
         </button>
       </form>
-      <p className="muted small-print">Hold arrows or volume to repeat. On a keyboard: arrows, Enter, Backspace. Home or Back leaves what the box is casting.</p>
+      )}
+      <p className="muted small-print">
+        Hold arrows or volume to repeat. On a keyboard: arrows, Enter, Backspace. Home or Back leaves what the box is casting.
+        {d.driver === "appletv" ? " Back is the Apple remote's Back/Menu button; Play is play/pause." : ""}
+      </p>
       {msg && <p className="error">{msg}</p>}
     </div>
   );

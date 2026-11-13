@@ -145,8 +145,8 @@ export function TvTile({ d, media, previews, selected, onClick, children }: { d:
 /** Finding and adding TVs, and the page's own switches. */
 function AddTvCard({ busy, run, setNote, previews, togglePreviews, hasStartup }: { busy: boolean; run: (fn: () => Promise<unknown>) => void; setNote: (s: string) => void; previews: boolean; togglePreviews: (on: boolean) => void; hasStartup: boolean }) {
   const [host, setHost] = useState("");
-  const [kind, setKind] = useState<"roku" | "airplay" | "vizio">("roku");
-  const add = { roku: api.addRoku, airplay: api.addAirplay, vizio: api.addVizio }[kind];
+  const [kind, setKind] = useState<"roku" | "airplay" | "vizio" | "appletv">("roku");
+  const add = { roku: api.addRoku, airplay: api.addAirplay, vizio: api.addVizio, appletv: api.addAppleTv }[kind];
   return (
     <section className="card wide">
       <h2>Add a TV</h2>
@@ -163,10 +163,11 @@ function AddTvCard({ busy, run, setNote, previews, togglePreviews, hasStartup }:
         >
           Find TVs on this network
         </button>
-        <select value={kind} onChange={(e) => setKind(e.target.value as "roku" | "airplay" | "vizio")} aria-label="Kind of TV">
+        <select value={kind} onChange={(e) => setKind(e.target.value as "roku" | "airplay" | "vizio" | "appletv")} aria-label="Kind of TV">
           <option value="roku">Roku</option>
           <option value="vizio">Vizio (SmartCast)</option>
-          <option value="airplay">AirPlay (Apple TV, AirPlay TV)</option>
+          <option value="appletv">Apple TV</option>
+          <option value="airplay">Other AirPlay TV</option>
         </select>
         <input placeholder="Or add by IP address" value={host} onChange={(e) => setHost(e.target.value)} aria-label="IP address" />
         <button disabled={!host || busy} onClick={() => run(() => add(host).then(() => setHost("")))}>
@@ -236,7 +237,8 @@ function TvPanel({
   const stream = d.stream;
   const canPair = d.capabilities?.delivery.includes("airplay");
   const hasRemote = (d.capabilities?.remoteKeys?.length ?? 0) > 0;
-  const tabs = PANEL_TABS.filter((t) => (t.id === "remote" ? hasRemote : t.id === "apps" ? d.driver === "roku" : true));
+  const hasApps = Boolean(d.capabilities?.apps);
+  const tabs = PANEL_TABS.filter((t) => (t.id === "remote" ? hasRemote : t.id === "apps" ? hasApps : true));
   const active = tabs.find((t) => t.id === tab)?.id ?? "now";
   const now = describeTv(d, media);
 
@@ -311,7 +313,7 @@ function TvPanel({
           )}
           {d.capabilities?.control && !d.capabilities.control.paired && (
             <p className="muted small-print">
-              To switch this TV on and off, change its input or use its remote from here, pair it once: <a href={`#tvs/${encodeURIComponent(d.id)}/setup`} onClick={(e) => (e.preventDefault(), go("tvs", d.id, "setup"))}>Setup &gt; Pair TV control</a>.
+              {d.driver === "appletv" ? "To use this Apple TV's remote and apps from here, pair it once:" : "To switch this TV on and off, change its input or use its remote from here, pair it once:"} <a href={`#tvs/${encodeURIComponent(d.id)}/setup`} onClick={(e) => (e.preventDefault(), go("tvs", d.id, "setup"))}>Setup &gt; Pair TV control</a>.
             </p>
           )}
         </div>
@@ -323,7 +325,7 @@ function TvPanel({
         </div>
       )}
 
-      {active === "apps" && d.driver === "roku" && (
+      {active === "apps" && hasApps && (
         <div className="tv-panel-body">
           <TvApps d={d} online={online !== false} />
         </div>
@@ -645,8 +647,18 @@ export function inputLabel(input: string, driver?: string): string {
   return names[input.toLowerCase()] ?? input;
 }
 
+function controlText(driver: string, paired: boolean): string {
+  if (driver === "appletv")
+    return paired
+      ? "Paired: the box can use this Apple TV's remote, open its apps, type into search boxes, and wake it or put it to sleep. Remove the pairing on the Apple TV in Settings > Remotes and Devices."
+      : "Pair once so the box can use this Apple TV's remote, open its apps, type into it, and wake it or put it to sleep. Someone needs to see the TV: the Apple TV shows a 4-digit PIN.";
+  return paired
+    ? "Paired: the box can switch this TV on and off, change its input and use its remote. To switch it on from off, the TV's Power Mode must be Quick Start (Menu > System > Power Mode)."
+    : "Pair once so the box can switch this TV on and off, change its input and use its remote. Someone needs to see the TV: it shows a 4-digit PIN. For switching on from off, set the TV's Power Mode to Quick Start (Menu > System > Power Mode).";
+}
+
 /**
- * Vizio TV control: Pair → the TV shows a 4-digit PIN → enter it here. Needed once per TV;
+ * TV control (Vizio, Apple TV): Pair → the TV shows a 4-digit PIN → enter it here. Needed once per TV;
  * after that the box can switch it on and off, change its input and use its remote.
  */
 function ControlPairing({ d, paired, reload }: { d: Display; paired: boolean; reload: () => unknown }) {
@@ -681,11 +693,7 @@ function ControlPairing({ d, paired, reload }: { d: Display; paired: boolean; re
   return (
     <div className="pairing">
       <h3 className="sub-head">TV control</h3>
-      <p className="muted small-print">
-        {paired
-          ? "Paired: the box can switch this TV on and off, change its input and use its remote. To switch it on from off, the TV's Power Mode must be Quick Start (Menu > System > Power Mode)."
-          : "Pair once so the box can switch this TV on and off, change its input and use its remote. Someone needs to see the TV: it shows a 4-digit PIN. For switching on from off, set the TV's Power Mode to Quick Start (Menu > System > Power Mode)."}
-      </p>
+      <p className="muted small-print">{controlText(d.driver, paired)}</p>
       {phase === "code" || phase === "sending" ? (
         <div className="buttons">
           <input inputMode="numeric" autoComplete="one-time-code" placeholder="PIN on the TV" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))} />

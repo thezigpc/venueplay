@@ -71,7 +71,7 @@ services:
       DATA_DIR: /data
       BROKER_TOKEN: ${BROKER_TOKEN}
       # local = screens plugged into the box (HDMI/DisplayPort).
-      DRIVERS: ${DRIVERS:-roku,airplay,vizio,local}
+      DRIVERS: ${DRIVERS:-roku,airplay,vizio,appletv,local}
       MOCK_DISPLAYS: ${MOCK_DISPLAYS:-0}
       # AirPlay casting: auto picks the QuickSync encoder; vaapi forces it.
       AIRPLAY_HWACCEL: ${AIRPLAY_HWACCEL:-auto}

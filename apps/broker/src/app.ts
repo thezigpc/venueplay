@@ -4,6 +4,7 @@ import express, { type NextFunction, type Request, type RequestHandler, type Res
 import type { AirplayDriver } from "./drivers/airplay/index.js";
 import type { RokuDriver } from "./drivers/roku/index.js";
 import type { VizioDriver } from "./drivers/vizio/index.js";
+import type { AppleTvDriver } from "./drivers/appletv/index.js";
 import type { VenueboxHub } from "./venuebox/hub.js";
 import type { DisplayRegistry } from "./registry.js";
 import { checkStreamSettings, type DeliveryMethod, type DisplayContent, type StreamSettings } from "./types.js";
@@ -14,7 +15,7 @@ const h =
     Promise.resolve(fn(req, res)).catch(next);
 
 /** Broker API. Only core calls it (bearer token); it never faces players. */
-export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; vizio?: VizioDriver; venuebox?: VenueboxHub; token: string; log: Logger }) {
+export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; vizio?: VizioDriver; appletv?: AppleTvDriver; venuebox?: VenueboxHub; token: string; log: Logger }) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "64kb" }));
@@ -85,6 +86,19 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
       const host = String(req.body?.host ?? "");
       if (!/^[\w.-]+$/.test(host)) return void res.status(400).json({ error: "host must be an IP or hostname" });
       const dev = await d.vizio.probe(host);
+      const replaced = await d.registry.merge([dev]);
+      res.json({ ...d.registry.get(dev.id), replaced });
+    }),
+  );
+
+  /** Add an Apple TV by IP when mDNS can't see it. */
+  app.post(
+    "/displays/appletv",
+    h(async (req, res) => {
+      if (!d.appletv) return void res.status(400).json({ error: "Apple TV control isn't available on this box" });
+      const host = String(req.body?.host ?? "");
+      if (!/^[\w.-]+$/.test(host)) return void res.status(400).json({ error: "host must be an IP or hostname" });
+      const dev = await d.appletv.probe(host);
       const replaced = await d.registry.merge([dev]);
       res.json({ ...d.registry.get(dev.id), replaced });
     }),

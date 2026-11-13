@@ -59,7 +59,11 @@ export interface Capabilities {
   inputs: string[];
   /** Remote-control keys keypress() accepts (Roku: Home, Up, Select, …). Empty: no remote. */
   remoteKeys?: string[];
-  /** TV control (power, input, remote) needs a one-time PIN pairing (Vizio). */
+  /** listApps/launchChannel work (the panel's Apps tab). */
+  apps?: boolean;
+  /** typeText works (the remote's typing box). */
+  text?: boolean;
+  /** TV control (power, input, remote) needs a one-time PIN pairing (Vizio, Apple TV). */
   control?: { paired: boolean };
 }
 

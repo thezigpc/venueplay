@@ -1876,9 +1876,9 @@ export function createApp(d: AppDeps) {
     }),
   );
   app.post(
-    "/api/broker/displays/vizio",
+    "/api/broker/displays/:kind(vizio|appletv)",
     h(async (req, res) => {
-      const r = (await brokerCall("POST", "/displays/vizio", req.body ?? {})) as { replaced?: Record<string, string> };
+      const r = (await brokerCall("POST", `/displays/${req.params.kind}`, req.body ?? {})) as { replaced?: Record<string, string> };
       await moveStartup(r.replaced);
       res.json(r);
     }),

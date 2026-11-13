@@ -35,6 +35,13 @@ RUN sed -i "s/Components: main/Components: main contrib non-free non-free-firmwa
 # doubletake v0.5.0 (https://github.com/omarroth/doubletake). Pinned by checksum.
 ADD --checksum=sha256:59027455bb844f15119232600569aded721203271001591a0afc5a0d07c06b5c     https://github.com/omarroth/doubletake/releases/download/v0.5.0/doubletake /usr/local/bin/doubletake
 ADD --checksum=sha256:1cf40195f83ef4c1f885392e1b90d2ce077270b9391a38a717598170cb1aa4eb     https://github.com/omarroth/doubletake/releases/download/v0.5.0/doubletake-ctl /usr/local/bin/doubletake-ctl
+# Apple TV control (Companion protocol): pyatv (MIT) in its own venv, pinned with its
+# dependencies, driven by atv-helper.py. Only the broker image carries Python.
+COPY apps/broker/atv/requirements.txt /tmp/atv-requirements.txt
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv && rm -rf /var/lib/apt/lists/* \
+ && python3 -m venv /opt/pyatv && /opt/pyatv/bin/pip install --no-cache-dir -r /tmp/atv-requirements.txt \
+ && rm /tmp/atv-requirements.txt
+COPY apps/broker/atv/atv-helper.py /usr/local/lib/bargames/atv-helper.py
 # Plugged-in screens: seatd (root) hands the screen to cage; the broker itself runs as node.
 COPY deploy/broker-start /usr/local/bin/broker-start
 RUN chmod 755 /usr/local/bin/doubletake /usr/local/bin/doubletake-ctl /usr/local/bin/broker-start

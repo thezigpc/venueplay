@@ -67,6 +67,8 @@ export class RokuDriver implements DisplayDriver {
       power: Boolean(device.isTv || device.meta?.supportsSuspend),
       inputs: device.isTv ? ["hdmi1", "hdmi2", "hdmi3", "hdmi4", "tuner"] : [],
       remoteKeys: [...ROKU_REMOTE_KEYS, ...(device.isTv ? ROKU_TV_KEYS : [])],
+      apps: true,
+      text: true,
     };
   }
 

@@ -8,6 +8,8 @@ import { AirplayDriver } from "./drivers/airplay/index.js";
 import { RokuDriver } from "./drivers/roku/index.js";
 import { LocalScreenDriver } from "./drivers/local/index.js";
 import { VizioDriver, type VizioAuth } from "./drivers/vizio/index.js";
+import { AppleTvDriver, type AppleTvAuth } from "./drivers/appletv/index.js";
+import { AtvHelper } from "./drivers/appletv/helper.js";
 import { DeviceStore, Pairings, type Device } from "./venuebox/devices.js";
 import { VenueboxHub } from "./venuebox/hub.js";
 import { playable } from "./registry.js";
@@ -45,7 +47,7 @@ const airplay = airplayReady
   : undefined;
 const streams: StreamService = airplay ?? new PendingStreamService();
 const drivers = new Map<string, DisplayDriver>();
-const enabled = (process.env.DRIVERS ?? "roku,airplay,vizio").split(",").map((s) => s.trim());
+const enabled = (process.env.DRIVERS ?? "roku,airplay,vizio,appletv").split(",").map((s) => s.trim());
 const roku = enabled.includes("roku") ? new RokuDriver(streams) : undefined;
 if (roku) drivers.set(roku.id, roku);
 const airplayDriver = enabled.includes("airplay") ? new AirplayDriver(streams) : undefined;
@@ -55,6 +57,14 @@ const vizio = enabled.includes("vizio")
   ? new VizioDriver(streams, new JsonStore<VizioAuth>(path.join(dataDir, "vizio-auth.json"), { clientId: "", tokens: {} }, 0o600), { clientName: () => process.env.BOX_NAME ?? "Bar Games box" })
   : undefined;
 if (vizio) drivers.set(vizio.id, vizio);
+// Apple TVs: AirPlay for content, Companion (pyatv, PIN-paired) for remote, apps, power, typing.
+const atvPython = process.env.ATV_PYTHON ?? "/opt/pyatv/bin/python";
+const atvScript = process.env.ATV_HELPER ?? "/usr/local/lib/bargames/atv-helper.py";
+const atvHelper = enabled.includes("appletv") && existsSync(atvPython) && existsSync(atvScript) ? new AtvHelper({ python: atvPython, script: atvScript, log }) : undefined;
+const appletv = atvHelper
+  ? new AppleTvDriver(streams, new JsonStore<AppleTvAuth>(path.join(dataDir, "appletv-auth.json"), { credentials: {} }, 0o600), { call: atvHelper.call, clientName: () => process.env.BOX_NAME ?? "Bar Games box" })
+  : undefined;
+if (appletv) drivers.set(appletv.id, appletv);
 // Plugged-in screens (HDMI/DisplayPort): cage + Chromium on the real output.
 if (enabled.includes("local")) {
   const localDir = process.env.LOCAL_RUN_DIR ?? "/tmp/bargames-local";
@@ -90,7 +100,7 @@ if (venuebox) drivers.set(venuebox.id, venuebox);
 
 if (venuebox) venuebox.listen(clientPort).on("listening", () => log.info("boot", "venuebox clients", { port: clientPort }));
 
-createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, venuebox, token, log }).listen(port, host, () => {
+createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, appletv, venuebox, token, log }).listen(port, host, () => {
   log.info("boot", "listening", { port, host, drivers: [...drivers.keys()], airplay: Boolean(airplay) });
   if (mockCount) void registry.discover();
   if (airplay) {
@@ -100,5 +110,6 @@ createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, venuebox, token
 });
 
 process.on("SIGTERM", () => {
+  atvHelper?.stop();
   void (airplay?.shutdown() ?? Promise.resolve()).finally(() => process.exit(0));
 });

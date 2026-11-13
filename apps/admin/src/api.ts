@@ -195,7 +195,7 @@ export interface Display {
   model?: string;
   isTv?: boolean;
   delivery?: string;
-  capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[]; control?: { paired: boolean } };
+  capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[]; apps?: boolean; text?: boolean; control?: { paired: boolean } };
   streamSettings?: StreamSettings;
   health?: { online: boolean; powerMode?: string; detail?: string };
   content?: { kind: string; url?: string; title?: string; app?: string; provider?: string };
@@ -326,6 +326,7 @@ export const api = {
   addRoku: (host: string) => call<Display>("POST", "/broker/displays/roku", { host }),
   addAirplay: (host: string) => call<Display>("POST", "/broker/displays/airplay", { host }),
   addVizio: (host: string) => call<Display>("POST", "/broker/displays/vizio", { host }),
+  addAppleTv: (host: string) => call<Display>("POST", "/broker/displays/appletv", { host }),
   /** Vizio TV control: no code → the TV shows a PIN; with the PIN → paired. */
   pairControl: (id: string, code?: string) => call<ShowResult>("POST", `/broker/displays/${encodeURIComponent(id)}/pair-control`, code ? { code } : {}),
   setInput: (id: string, input: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/input`, { input }),
