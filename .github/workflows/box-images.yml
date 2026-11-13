@@ -2,9 +2,11 @@
 # VERSION changes on main (or by hand: Actions > Box images > Run workflow):
 #   ghcr.io/<owner>/bargames:<VERSION>         core + gateway
 #   ghcr.io/<owner>/bargames-broker:<VERSION>  the casting broker
-# Versions are immutable: a published version is skipped, never overwritten. After the
-# images are pushed it tags the commit v<VERSION>, which `bgctl self-update` uses to fetch
-# that release's deploy files (compose file, bgctl, host helpers).
+# Versions are immutable: a published version is skipped, never overwritten. The build and
+# the tests run first, and a failing test stops the release (ci.yml also runs them on every
+# push). After the images are pushed it tags the commit v<VERSION>, which
+# `bgctl self-update` uses to fetch that release's deploy files (compose file, bgctl, host
+# helpers).
 # First publish only: make both packages Public in GitHub (Packages > package settings >
 # Change visibility), so boxes can pull without logging in.
 
@@ -57,6 +59,20 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::${{ steps.v.outputs.version }} is already published. Bump VERSION to publish a new one."
           fi
+
+      # Nothing is published unless the build and every test pass.
+      - uses: actions/setup-node@v7
+        if: steps.exists.outputs.skip != 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build and test
+        if: steps.exists.outputs.skip != 'true'
+        run: |
+          npm ci
+          npm run build
+          npm test
 
       - uses: docker/setup-buildx-action@v4
         if: steps.exists.outputs.skip != 'true'

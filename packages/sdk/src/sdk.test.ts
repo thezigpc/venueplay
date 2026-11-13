@@ -678,23 +678,32 @@ test("audio against the mock box: outputs, play (file fetched with the app's tok
     assert.deepEqual(outs.map((o) => o.kind), ["box", "bluetooth", "tv"]);
     assert.equal(outs.find((o) => o.default)?.id, "box:0-0");
 
+    // Polls instead of fixed sleeps, so a slow CI machine doesn't fail it.
+    const until = async (cond: () => boolean | Promise<boolean>, ms = 5000) => {
+      const end = Date.now() + ms;
+      while (!(await cond())) {
+        if (Date.now() > end) throw new Error("timed out");
+        await new Promise((r) => setTimeout(r, 15));
+      }
+    };
+    const stateOf = async (id: string) => (await audio.sessions()).find((x) => x.id === id)?.state;
     const changes: string[] = [];
     const stopWatch = audio.watch((list) => changes.push(list.map((s) => s.state).join(",")), 20);
     const s = await audio.play({ path: "/tracks/1.mp3", title: "Song", durationMs: 300 });
     assert.equal(s.state, "starting");
-    await new Promise((r) => setTimeout(r, 80));
+    await until(async () => (await stateOf(s.id)) === "playing");
     assert.deepEqual(fetched[0], { path: "/tracks/1.mp3", auth: `Bearer ${DEV_TOKEN}`, marker: "1" });
     assert.equal((await audio.pause(s.id)).state, "paused");
     assert.equal((await audio.setVolume("box:0-0", 25)).volume, 25);
     await assert.rejects(audio.setVolume("tv:fake-bar", 25), /Only the app playing/);
     assert.equal((await audio.resume(s.id)).state, "playing");
-    await new Promise((r) => setTimeout(r, 400));
-    assert.equal((await audio.sessions()).find((x) => x.id === s.id)?.state, "ended");
+    await until(async () => (await stateOf(s.id)) === "ended");
+    await until(() => changes.some((c) => c.includes("ended")));
     stopWatch();
     assert.ok(changes.some((c) => c.includes("ended")), "watch saw the end");
 
     const missing = await audio.play({ path: "/tracks/nope.mp3" });
-    await new Promise((r) => setTimeout(r, 80));
+    await until(async () => (await stateOf(missing.id)) === "error");
     const failed = (await audio.sessions()).find((x) => x.id === missing.id)!;
     assert.equal(failed.state, "error");
     assert.match(failed.message!, /wasn't found/);
@@ -704,7 +713,7 @@ test("audio against the mock box: outputs, play (file fetched with the app's tok
     assert.equal((await bg.audioOutputs()).length, 3);
     const ps = await bg.playSound("/tracks/1.mp3", { outputId: "tv:fake-bar" });
     assert.equal(ps.ok, true);
-    await new Promise((r) => setTimeout(r, 80));
+    await until(async () => (await stateOf(ps.sessionId!)) === "playing"); // settled before the servers close
     assert.equal(bg.fromBox({ headers: { authorization: `Bearer ${DEV_TOKEN}` } } as never), true);
     assert.equal(bg.fromBox({ headers: {} } as never), false);
     const off = createBarGames({ coreUrl: "", token: "", gameId: "music" });
