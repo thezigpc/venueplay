@@ -90,7 +90,7 @@ test("broker api with mock displays", async () => {
     fetch(base + p, { method, headers: { authorization: "Bearer tk", "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   try {
     assert.equal((await fetch(`${base}/displays`)).status, 401);
-    assert.deepEqual(await (await call("POST", "/discover")).json(), { found: 3, errors: [] });
+    assert.deepEqual(await (await call("POST", "/discover")).json(), { found: 3, errors: [], replaced: {} });
     await call("PATCH", "/displays/mock:tv1", { label: "Bar left", group: "main" });
     await call("PATCH", "/displays/mock:tv2", { group: "main" });
     const shown = (await (await call("POST", "/show", { group: "main", content: { kind: "url", url: "http://bingo.localhost:7080/room/AB12?role=table" } })).json()) as Record<string, { ok: boolean }>;

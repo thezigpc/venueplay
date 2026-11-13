@@ -370,6 +370,19 @@ test("tv startup: rules are validated, and running them puts the menu on its TV"
   }
 });
 
+test("tv startup: a TV that moves to a new driver (AirPlay → Vizio) keeps its startup choice", async () => {
+  const b = await boot((url) => (url === "http://broker/discover" ? reply({ found: 1, errors: [], replaced: { tv1: "vizio:abc" } }) : undefined));
+  try {
+    assert.equal((await b.json("PUT", "/api/tv-startup/tv1", { mode: "off" }, b.authed)).status, 200);
+    const r = (await (await b.json("POST", "/api/broker/discover", {}, b.authed)).json()) as { replaced: Record<string, string> };
+    assert.deepEqual(r.replaced, { tv1: "vizio:abc" });
+    assert.deepEqual(await (await b.json("GET", "/api/tv-startup", undefined, b.authed)).json(), { "vizio:abc": { mode: "off" } });
+    assert.equal((await b.json("POST", "/api/broker/discover", {})).status, 401, "admin only");
+  } finally {
+    b.close();
+  }
+});
+
 test("tv startup runner: waits for TVs to come online, retries, gives up", async () => {
   const online = new Set<string>();
   const applied: string[] = [];

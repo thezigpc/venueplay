@@ -7,6 +7,7 @@ import { MockDriver } from "./drivers/mock.js";
 import { AirplayDriver } from "./drivers/airplay/index.js";
 import { RokuDriver } from "./drivers/roku/index.js";
 import { LocalScreenDriver } from "./drivers/local/index.js";
+import { VizioDriver, type VizioAuth } from "./drivers/vizio/index.js";
 import { DeviceStore, Pairings, type Device } from "./venuebox/devices.js";
 import { VenueboxHub } from "./venuebox/hub.js";
 import { playable } from "./registry.js";
@@ -44,11 +45,16 @@ const airplay = airplayReady
   : undefined;
 const streams: StreamService = airplay ?? new PendingStreamService();
 const drivers = new Map<string, DisplayDriver>();
-const enabled = (process.env.DRIVERS ?? "roku,airplay").split(",").map((s) => s.trim());
+const enabled = (process.env.DRIVERS ?? "roku,airplay,vizio").split(",").map((s) => s.trim());
 const roku = enabled.includes("roku") ? new RokuDriver(streams) : undefined;
 if (roku) drivers.set(roku.id, roku);
 const airplayDriver = enabled.includes("airplay") ? new AirplayDriver(streams) : undefined;
 if (airplayDriver) drivers.set(airplayDriver.id, airplayDriver);
+// Vizio SmartCast TVs: AirPlay for content, SmartCast (PIN-paired) for power, input, remote.
+const vizio = enabled.includes("vizio")
+  ? new VizioDriver(streams, new JsonStore<VizioAuth>(path.join(dataDir, "vizio-auth.json"), { clientId: "", tokens: {} }, 0o600), { clientName: () => process.env.BOX_NAME ?? "Bar Games box" })
+  : undefined;
+if (vizio) drivers.set(vizio.id, vizio);
 // Plugged-in screens (HDMI/DisplayPort): cage + Chromium on the real output.
 if (enabled.includes("local")) {
   const localDir = process.env.LOCAL_RUN_DIR ?? "/tmp/bargames-local";
@@ -84,7 +90,7 @@ if (venuebox) drivers.set(venuebox.id, venuebox);
 
 if (venuebox) venuebox.listen(clientPort).on("listening", () => log.info("boot", "venuebox clients", { port: clientPort }));
 
-createBrokerApp({ registry, roku, airplay: airplayDriver, venuebox, token, log }).listen(port, host, () => {
+createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, venuebox, token, log }).listen(port, host, () => {
   log.info("boot", "listening", { port, host, drivers: [...drivers.keys()], airplay: Boolean(airplay) });
   if (mockCount) void registry.discover();
   if (airplay) {

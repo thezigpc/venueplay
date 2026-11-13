@@ -18,7 +18,7 @@ and the game integration guide is in [docs/SDK.md](docs/SDK.md).
 | `packages/common` | Shared Node helpers and the core → gateway config contract |
 | `apps/core` | API, admin auth, game registry, Docker runtime (sandbox), event bus |
 | `apps/gateway` | Routes each hostname; venue-IP/IPv6/whitelist gate; PIN; landing page; theme injection; WebSockets |
-| `apps/broker` | TV drivers (`DisplayDriver`): Roku (SSDP + ECP) and mock. Casting pipeline is stubbed (Phase 3) |
+| `apps/broker` | TV drivers (`DisplayDriver`): Roku (SSDP + ECP), AirPlay receivers (mDNS), Vizio SmartCast (mDNS; AirPlay for content, PIN-paired SmartCast API for power, input and remote), screens plugged into the box, Venuebox apps, mock. Casting renders each page in Chromium and streams it over AirPlay |
 | `apps/admin` | iPad admin UI (React + Vite), served by core |
 | `examples/hello-game` | Reference game at SDK level 3 |
 | `deploy/` | Dockerfile, compose (core, gateway, broker, docker-socket-proxy); core runs cloudflared itself |

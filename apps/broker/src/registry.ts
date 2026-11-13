@@ -63,7 +63,7 @@ export class DisplayRegistry {
   }
 
   /** Runs every driver's discovery and merges results (keeps venue labels/groups). */
-  async discover(timeoutMs = 3000): Promise<{ found: number; errors: string[] }> {
+  async discover(timeoutMs = 3000): Promise<{ found: number; errors: string[]; replaced: Record<string, string> }> {
     const errors: string[] = [];
     const found: DisplayDevice[] = [];
     await Promise.all(
@@ -76,21 +76,47 @@ export class DisplayRegistry {
       }),
     );
     const kept = dropAirplayDuplicates(found, this.list());
-    await this.merge(kept);
-    return { found: kept.length, errors };
+    const replaced = await this.merge(kept);
+    return { found: kept.length, errors, replaced };
   }
 
-  async merge(found: DisplayDevice[]): Promise<void> {
+  /**
+   * Adds or refreshes displays. A TV saved earlier as plain "AirPlay" that a native driver
+   * now finds at the same address (a Vizio) becomes that driver's display: its name, room,
+   * delivery, stream settings and content carry over. Returns old id → new id.
+   */
+  async merge(found: DisplayDevice[]): Promise<Record<string, string>> {
     found = dropAirplayDuplicates(found, this.list());
     const now = new Date().toISOString();
+    const replaced: Record<string, string> = {};
+    const before = this.list();
     await this.store.update((s) => {
       for (const dev of found) {
         const i = s.displays.findIndex((d) => d.id === dev.id);
-        if (i >= 0) s.displays[i] = { ...s.displays[i], ...dev, lastSeen: now };
-        else s.displays.push({ ...dev, lastSeen: now });
+        if (i >= 0) {
+          s.displays[i] = { ...s.displays[i], ...dev, lastSeen: now };
+          continue;
+        }
+        const host = hostOf(dev.address);
+        const old = dev.driver !== "airplay" ? s.displays.find((d) => d.driver === "airplay" && hostOf(d.address) === host) : undefined;
+        const carried: Partial<DisplayRecord> = {};
+        if (old) {
+          for (const k of ["label", "group", "delivery", "streamSettings", "content"] as const) if (old[k] != null) (carried as Record<string, unknown>)[k] = old[k];
+          s.displays = s.displays.filter((d) => d !== old);
+          replaced[old.id] = dev.id;
+        }
+        s.displays.push({ ...carried, ...dev, lastSeen: now });
       }
       s.displays.sort((a, b) => (a.label ?? a.name).localeCompare(b.label ?? b.name));
     });
+    // The old record's AirPlay session is keyed by its old id: end it, then resume under the new one.
+    for (const [oldId, newId] of Object.entries(replaced)) {
+      const old = before.find((d) => d.id === oldId);
+      if (old && this.drivers.get("airplay")) await this.drivers.get("airplay")!.stop(old).catch(() => undefined);
+      const cur = this.get(newId);
+      if (cur?.content && playable(cur.content).kind === "url") await this.show({ displayIds: [newId] }, cur.content).catch(() => undefined);
+    }
+    return replaced;
   }
 
   async patch(id: string, patch: Partial<Pick<DisplayRecord, "label" | "group" | "delivery">> & { streamSettings?: StreamSettings | null }): Promise<DisplayRecord> {
@@ -208,7 +234,9 @@ export class DisplayRegistry {
     const d = this.get(id);
     if (d) {
       try {
-        await this.driverFor(d).stop(d);
+        const drv = this.driverFor(d);
+        await drv.stop(d);
+        await drv.forget?.(d);
       } catch {
         /* offline or unknown driver: forget it anyway */
       }
@@ -259,6 +287,15 @@ export class DisplayRegistry {
       return { ...r, paired: true, message: code ? "Paired." : "Already paired: it connected without a code." };
     }
     return r;
+  }
+
+  /** TV-control pairing (Vizio): {} makes the TV show a PIN, { code } completes it. */
+  async pairControl(id: string, code?: string): Promise<ShowResult> {
+    const d = this.get(id);
+    if (!d) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    const drv = this.driverFor(d);
+    if (!drv.pairControl) return { ok: false, message: `${d.label || d.name} doesn't need pairing for control` };
+    return drv.pairControl(d, code);
   }
 
   private afterPairing(id: string) {

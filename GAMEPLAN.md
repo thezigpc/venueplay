@@ -301,6 +301,7 @@ from the earlier plan.
 ### Later: other TV types
 - [ ] `cast-receiver` driver (register the receiver app, $5 one-time) → Google TVs
 - [ ] `androidtv-adb` fallback; `appletv` if needed
+- [x] `vizio` driver (0.13.9): found by mDNS `_viziocast._tcp`; content over AirPlay; power, input and remote over the SmartCast API (HTTPS :7345) after a one-time PIN pairing (TV panel > Setup > Pair TV control). Power-on from off needs the TV's Power Mode set to Quick Start. A Vizio saved earlier as plain AirPlay moves over with its name, room and startup choice.
 
 ## Main risks
 

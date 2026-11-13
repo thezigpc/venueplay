@@ -59,6 +59,8 @@ export interface Capabilities {
   inputs: string[];
   /** Remote-control keys keypress() accepts (Roku: Home, Up, Select, …). Empty: no remote. */
   remoteKeys?: string[];
+  /** TV control (power, input, remote) needs a one-time PIN pairing (Vizio). */
+  control?: { paired: boolean };
 }
 
 export type DisplayContent =
@@ -109,6 +111,10 @@ export interface DisplayDriver {
    * TV shows its code); with one it completes it.
    */
   pair?(device: DisplayDevice, code?: string): Promise<ShowResult>;
+  /** TV-control pairing (Vizio): without a code the TV shows a PIN; with it, completes. */
+  pairControl?(device: DisplayDevice, code?: string): Promise<ShowResult>;
+  /** The TV is being forgotten: drop anything kept for it (pairing tokens). */
+  forget?(device: DisplayDevice): Promise<void>;
   /** Live stream state for the admin UI. */
   streamState?(device: DisplayDevice): StreamState | undefined;
   /** Presses a remote-control key (one of capabilities.remoteKeys). */

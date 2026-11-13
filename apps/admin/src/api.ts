@@ -195,7 +195,7 @@ export interface Display {
   model?: string;
   isTv?: boolean;
   delivery?: string;
-  capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[] };
+  capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[]; control?: { paired: boolean } };
   streamSettings?: StreamSettings;
   health?: { online: boolean; powerMode?: string; detail?: string };
   content?: { kind: string; url?: string; title?: string; app?: string; provider?: string };
@@ -325,6 +325,10 @@ export const api = {
   forgetDisplay: (id: string) => call<{ ok: boolean }>("DELETE", `/broker/displays/${encodeURIComponent(id)}`),
   addRoku: (host: string) => call<Display>("POST", "/broker/displays/roku", { host }),
   addAirplay: (host: string) => call<Display>("POST", "/broker/displays/airplay", { host }),
+  addVizio: (host: string) => call<Display>("POST", "/broker/displays/vizio", { host }),
+  /** Vizio TV control: no code → the TV shows a PIN; with the PIN → paired. */
+  pairControl: (id: string, code?: string) => call<ShowResult>("POST", `/broker/displays/${encodeURIComponent(id)}/pair-control`, code ? { code } : {}),
+  setInput: (id: string, input: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/input`, { input }),
   patchDisplay: (id: string, patch: { label?: string; group?: string; delivery?: string; streamSettings?: StreamSettings | null }) =>
     call<Display>("PATCH", `/broker/displays/${encodeURIComponent(id)}`, patch),
   tvStartup: () => call<Record<string, StartupRule>>("GET", "/tv-startup"),

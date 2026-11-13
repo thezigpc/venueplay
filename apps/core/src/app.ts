@@ -1856,6 +1856,34 @@ export function createApp(d: AppDeps) {
     }),
   );
 
+  /** A TV saved as plain AirPlay that a native driver now handles (a Vizio) gets a new id: its startup choice follows it. */
+  const moveStartup = async (replaced: unknown) => {
+    const moves = Object.entries((replaced ?? {}) as Record<string, string>).filter(([from, to]) => typeof to === "string" && d.state.tvStartup.get()[from]);
+    if (!moves.length) return;
+    await d.state.tvStartup.update((s) => {
+      for (const [from, to] of moves) {
+        s[to] = s[from]!;
+        delete s[from];
+      }
+    });
+  };
+  app.post(
+    "/api/broker/discover",
+    h(async (req, res) => {
+      const r = (await brokerCall("POST", "/discover", req.body ?? {})) as { replaced?: Record<string, string> };
+      await moveStartup(r.replaced);
+      res.json(r);
+    }),
+  );
+  app.post(
+    "/api/broker/displays/vizio",
+    h(async (req, res) => {
+      const r = (await brokerCall("POST", "/displays/vizio", req.body ?? {})) as { replaced?: Record<string, string> };
+      await moveStartup(r.replaced);
+      res.json(r);
+    }),
+  );
+
   /** Forget a TV: the broker drops it, and its "when the box starts" choice goes with it. */
   app.delete(
     "/api/broker/displays/:id",

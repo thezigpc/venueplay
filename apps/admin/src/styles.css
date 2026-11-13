@@ -307,6 +307,11 @@ button.tv-tile.selected { border-color: var(--primary); }
 
 .forget-tv { margin-top: 20px; padding-top: 12px; border-top: 1px solid #252c55; }
 
+/* TV input picker (Now tab) */
+.tv-inputs { margin-top: 12px; }
+.tv-inputs .buttons { flex-wrap: wrap; margin-top: 4px; }
+.tv-inputs .buttons button { min-width: 72px; }
+
 /* Schedule editor: stacked fields, days as a row of toggles. */
 .schedule-form { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
 .schedule-form > label { margin-bottom: 0; }

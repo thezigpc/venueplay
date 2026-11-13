@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import type { AirplayDriver } from "./drivers/airplay/index.js";
 import type { RokuDriver } from "./drivers/roku/index.js";
+import type { VizioDriver } from "./drivers/vizio/index.js";
 import type { VenueboxHub } from "./venuebox/hub.js";
 import type { DisplayRegistry } from "./registry.js";
 import { checkStreamSettings, type DeliveryMethod, type DisplayContent, type StreamSettings } from "./types.js";
@@ -13,7 +14,7 @@ const h =
     Promise.resolve(fn(req, res)).catch(next);
 
 /** Broker API. Only core calls it (bearer token); it never faces players. */
-export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; venuebox?: VenueboxHub; token: string; log: Logger }) {
+export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; vizio?: VizioDriver; venuebox?: VenueboxHub; token: string; log: Logger }) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "64kb" }));
@@ -76,6 +77,19 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
     }),
   );
 
+  /** Add a Vizio by IP when mDNS can't see it. */
+  app.post(
+    "/displays/vizio",
+    h(async (req, res) => {
+      if (!d.vizio) return void res.status(400).json({ error: "vizio driver disabled" });
+      const host = String(req.body?.host ?? "");
+      if (!/^[\w.-]+$/.test(host)) return void res.status(400).json({ error: "host must be an IP or hostname" });
+      const dev = await d.vizio.probe(host);
+      const replaced = await d.registry.merge([dev]);
+      res.json({ ...d.registry.get(dev.id), replaced });
+    }),
+  );
+
   app.patch(
     "/displays/:id",
     h(async (req, res) => {
@@ -120,6 +134,17 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
       const code = req.body?.code === undefined ? undefined : String(req.body.code).trim();
       if (code !== undefined && !/^[ -~]{1,64}$/.test(code)) return void res.status(400).json({ error: "code: 1-64 printable characters" });
       res.json(await d.registry.pair(req.params.id, code || undefined));
+    }),
+  );
+
+  /** TV control (Vizio): {} makes the TV show a PIN; { code } completes it. The token stays in the broker. */
+  app.post(
+    "/displays/:id/pair-control",
+    h(async (req, res) => {
+      one(req.params.id);
+      const code = req.body?.code === undefined ? undefined : String(req.body.code).trim();
+      if (code !== undefined && code !== "" && !/^\d{4,8}$/.test(code)) return void res.status(400).json({ error: "the PIN is the 4 digits the TV shows" });
+      res.json(await d.registry.pairControl(req.params.id, code || undefined));
     }),
   );
 

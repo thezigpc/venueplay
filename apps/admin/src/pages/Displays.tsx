@@ -145,7 +145,8 @@ export function TvTile({ d, media, previews, selected, onClick, children }: { d:
 /** Finding and adding TVs, and the page's own switches. */
 function AddTvCard({ busy, run, setNote, previews, togglePreviews, hasStartup }: { busy: boolean; run: (fn: () => Promise<unknown>) => void; setNote: (s: string) => void; previews: boolean; togglePreviews: (on: boolean) => void; hasStartup: boolean }) {
   const [host, setHost] = useState("");
-  const [kind, setKind] = useState<"roku" | "airplay">("roku");
+  const [kind, setKind] = useState<"roku" | "airplay" | "vizio">("roku");
+  const add = { roku: api.addRoku, airplay: api.addAirplay, vizio: api.addVizio }[kind];
   return (
     <section className="card wide">
       <h2>Add a TV</h2>
@@ -162,12 +163,13 @@ function AddTvCard({ busy, run, setNote, previews, togglePreviews, hasStartup }:
         >
           Find TVs on this network
         </button>
-        <select value={kind} onChange={(e) => setKind(e.target.value as "roku" | "airplay")} aria-label="Kind of TV">
+        <select value={kind} onChange={(e) => setKind(e.target.value as "roku" | "airplay" | "vizio")} aria-label="Kind of TV">
           <option value="roku">Roku</option>
+          <option value="vizio">Vizio (SmartCast)</option>
           <option value="airplay">AirPlay (Apple TV, AirPlay TV)</option>
         </select>
         <input placeholder="Or add by IP address" value={host} onChange={(e) => setHost(e.target.value)} aria-label="IP address" />
-        <button disabled={!host || busy} onClick={() => run(() => (kind === "roku" ? api.addRoku(host) : api.addAirplay(host)).then(() => setHost("")))}>
+        <button disabled={!host || busy} onClick={() => run(() => add(host).then(() => setHost("")))}>
           Add
         </button>
       </div>
@@ -295,6 +297,23 @@ function TvPanel({
               </button>
             )}
           </div>
+          {(d.capabilities?.inputs.length ?? 0) > 0 && (
+            <div className="tv-inputs">
+              <span className="muted">Input</span>
+              <div className="buttons">
+                {d.capabilities!.inputs.map((i) => (
+                  <button key={i} type="button" disabled={busy || online === false} onClick={() => run(() => api.setInput(d.id, i))}>
+                    {inputLabel(i, d.driver)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {d.capabilities?.control && !d.capabilities.control.paired && (
+            <p className="muted small-print">
+              To switch this TV on and off, change its input or use its remote from here, pair it once: <a href={`#tvs/${encodeURIComponent(d.id)}/setup`} onClick={(e) => (e.preventDefault(), go("tvs", d.id, "setup"))}>Setup &gt; Pair TV control</a>.
+            </p>
+          )}
         </div>
       )}
 
@@ -346,6 +365,7 @@ function TvPanel({
             {saved && <span className="ok">{saved}</span>}
           </div>
           <StartupChoice d={d} rule={startup} games={games} run={run} busy={busy} media={media.filter((p) => p.targets.some((t) => t.displayId === d.id))} />
+          {d.capabilities?.control && <ControlPairing d={d} paired={d.capabilities.control.paired} reload={reload} />}
           {canPair && <Pairing d={d} needsCode={Boolean(stream?.needsCode)} reload={reload} />}
           <div className="forget-tv">
             <h3 className="sub-head">Forget this TV</h3>
@@ -616,6 +636,75 @@ function StreamSettingsFields({ value, onChange }: { value: StreamSettings | nul
   );
 }
 
+
+/** "hdmi2" → "HDMI 2"; a Vizio's "cast" is its SmartCast home screen. */
+export function inputLabel(input: string, driver?: string): string {
+  const m = /^hdmi-?(\d+)$/i.exec(input);
+  if (m) return `HDMI ${m[1]}`;
+  const names: Record<string, string> = { tuner: "Antenna", comp: "Composite", cast: driver === "vizio" ? "SmartCast" : "Cast", av: "AV" };
+  return names[input.toLowerCase()] ?? input;
+}
+
+/**
+ * Vizio TV control: Pair → the TV shows a 4-digit PIN → enter it here. Needed once per TV;
+ * after that the box can switch it on and off, change its input and use its remote.
+ */
+function ControlPairing({ d, paired, reload }: { d: Display; paired: boolean; reload: () => unknown }) {
+  const [phase, setPhase] = useState<"idle" | "starting" | "code" | "sending">("idle");
+  const [code, setCode] = useState("");
+  const [msg, setMsg] = useState("");
+  const start = async () => {
+    setPhase("starting");
+    setMsg("Asking the TV for a PIN…");
+    try {
+      const r = await api.pairControl(d.id);
+      setPhase(r.needsCode ? "code" : "idle");
+      setMsg(r.needsCode ? "Enter the PIN the TV is showing." : (r.message ?? "Pairing failed."));
+    } catch (e) {
+      setPhase("idle");
+      setMsg((e as Error).message);
+    }
+  };
+  const send = async () => {
+    setPhase("sending");
+    try {
+      const r = await api.pairControl(d.id, code);
+      setCode("");
+      setPhase(r.ok ? "idle" : "code");
+      setMsg(r.ok ? (r.message ?? "Paired.") : `${r.message ?? "Pairing failed."} Press "New PIN" for another try.`);
+    } catch (e) {
+      setPhase("code");
+      setMsg((e as Error).message);
+    }
+    void reload();
+  };
+  return (
+    <div className="pairing">
+      <h3 className="sub-head">TV control</h3>
+      <p className="muted small-print">
+        {paired
+          ? "Paired: the box can switch this TV on and off, change its input and use its remote. To switch it on from off, the TV's Power Mode must be Quick Start (Menu > System > Power Mode)."
+          : "Pair once so the box can switch this TV on and off, change its input and use its remote. Someone needs to see the TV: it shows a 4-digit PIN. For switching on from off, set the TV's Power Mode to Quick Start (Menu > System > Power Mode)."}
+      </p>
+      {phase === "code" || phase === "sending" ? (
+        <div className="buttons">
+          <input inputMode="numeric" autoComplete="one-time-code" placeholder="PIN on the TV" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))} />
+          <button className="primary" disabled={code.length < 4 || phase === "sending"} onClick={() => void send()}>
+            Pair
+          </button>
+          <button disabled={phase === "sending"} onClick={() => void start()}>
+            New PIN
+          </button>
+        </div>
+      ) : (
+        <button disabled={phase === "starting"} onClick={() => void start()}>
+          {phase === "starting" ? "Pairing…" : paired ? "Pair TV control again" : "Pair TV control"}
+        </button>
+      )}
+      {msg && <p className="muted">{msg}</p>}
+    </div>
+  );
+}
 
 /** AirPlay pairing: Pair → the TV shows a code → enter it here. Needed once per TV. */
 function Pairing({ d, needsCode, reload }: { d: Display; needsCode: boolean; reload: () => unknown }) {
