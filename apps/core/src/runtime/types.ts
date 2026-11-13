@@ -12,6 +12,13 @@ export interface GameRuntime {
   state(gameId: string): Promise<GameState>;
   /** CPU and memory of the box's containers (System page). Docker only. */
   containerStats?(): Promise<ContainerStat[]>;
+  /** The container's health check: "none" when it has none (Docker only). */
+  health?(gameId: string): Promise<"healthy" | "unhealthy" | "starting" | "none" | "missing" | "unknown">;
+  /**
+   * Removes an image no container uses any more (Docker only). False when it's still in
+   * use or already gone; never forced.
+   */
+  removeImage?(image: string): Promise<boolean>;
 }
 
 /** Runs the Cloudflare Tunnel connector (cloudflared) next to the gateway. */

@@ -141,6 +141,25 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
     return this.containerState(names(id).container);
   }
 
+  async health(id: string): Promise<"healthy" | "unhealthy" | "starting" | "none" | "missing" | "unknown"> {
+    try {
+      const res = await this.call("GET", `/containers/${names(id).container}/json`, undefined, [404]);
+      if (res.status === 404) return "missing";
+      const info = (await res.json()) as { State?: { Running?: boolean; Health?: { Status?: string } } };
+      if (!info.State?.Running) return "unknown";
+      const s = info.State.Health?.Status;
+      return s === "healthy" || s === "unhealthy" || s === "starting" ? s : "none";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  async removeImage(image: string): Promise<boolean> {
+    // No force: Docker refuses (409) while any container, running or stopped, uses it.
+    const res = await this.call("DELETE", `/images/${encodeURIComponent(image)}`, undefined, [404, 409]);
+    return res.ok;
+  }
+
   /** Every container on the box (the stack, the games, cloudflared), with CPU and memory. */
   async containerStats(): Promise<ContainerStat[]> {
     const list = (await (await this.call("GET", "/containers/json?all=1")).json()) as { Id: string; Names?: string[]; State?: string; Status?: string }[];

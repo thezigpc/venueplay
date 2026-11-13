@@ -44,10 +44,19 @@ const menu = {
   network: { internet: true },
 };
 
-/** A runtime that can be told to fail starting a given image. */
+/** A runtime that can be told to fail starting a given image, and records image removals. */
 class SpyRuntime extends NoopRuntime {
   started: string[] = [];
   failImage?: string;
+  healthState: "healthy" | "unhealthy" | "starting" | "none" = "healthy";
+  removed: string[] = [];
+  async health() {
+    return this.healthState;
+  }
+  async removeImage(image: string) {
+    this.removed.push(image);
+    return true;
+  }
   override async ensureRunning(game: InstalledGame) {
     if (game.manifest.image === this.failImage) throw new Error("pull failed: manifest unknown");
     this.started.push(game.manifest.image);
@@ -93,7 +102,7 @@ async function boot(extraFetch?: (url: string, init?: RequestInit) => Response |
     auth: new AdminAuth(state.auth, "secret"),
     cloudflare: new CloudflareService({ store: state.cloudflare, connector: new NoopRuntime(), desiredHosts: () => [], tunnelName: () => "t", origin: "http://gw", log: createLogger("test", "error") }),
     log: createLogger("test", "error"),
-    config: { gatewayToken: "gw", brokerUrl: "http://broker", brokerToken: "b", internalUrl: "http://core:7100", adminDist: path.join(dir, "none"), boxVersion: "0.5.0", opsToken: "ops-secret", castAnswerMs: opts.castAnswerMs, dataDir: dir },
+    config: { gatewayToken: "gw", brokerUrl: "http://broker", brokerToken: "b", internalUrl: "http://core:7100", adminDist: path.join(dir, "none"), boxVersion: "0.5.0", opsToken: "ops-secret", castAnswerMs: opts.castAnswerMs, dataDir: dir, oldImageWaitMs: 300, oldImagePollMs: 10 },
     fetch: fakeFetch,
   });
   const server = app.listen(0);
@@ -234,6 +243,9 @@ test("updates: offered only when newer and published; Update restarts it, a bad 
     assert.equal(game().manifest.version, "1.1.0");
     assert.equal(b.runtime.started.at(-1), "ghcr.io/acme/bingo:1.1.0");
     assert.equal((await b.json("POST", "/api/games/bingo/update", undefined, b.authed)).status, 409, "already current");
+    // Box 0.15.1: once 1.1.0 is healthy, the old image goes.
+    for (let i = 0; i < 50 && !b.runtime.removed.length; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.deepEqual(b.runtime.removed, [bingo.image]);
 
     // A release whose image won't start: back on 1.1.0, still running, and the admin is told.
     served = { ...bingo, version: "1.2.0", image: "ghcr.io/acme/bingo:1.2.0" };
@@ -246,8 +258,13 @@ test("updates: offered only when newer and published; Update restarts it, a bad 
 
     // Re-pasting the URL (the old way to update) now restarts the game too.
     b.runtime.failImage = undefined;
+    b.runtime.healthState = "unhealthy";
     assert.equal((await b.json("POST", "/api/games/install", { url: "https://github.com/acme/bingo" }, b.authed)).status, 200);
     assert.equal(b.runtime.started.at(-1), "ghcr.io/acme/bingo:1.2.0");
+    // Not healthy within the wait: the previous image is kept (a manual rollback needs it).
+    await new Promise((r) => setTimeout(r, 400));
+    assert.deepEqual(b.runtime.removed, [bingo.image], "1.1.0 kept");
+    b.runtime.healthState = "healthy";
   } finally {
     b.close();
   }

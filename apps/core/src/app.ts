@@ -78,6 +78,9 @@ export interface AppDeps {
     integrationPollMs?: number;
     /** Core's loopback address for host-network processes (the broker fetching app audio). */
     hostCoreUrl?: string;
+    /** After a game update: how long to wait for it to be healthy before dropping the old image (tests shorten it). */
+    oldImageWaitMs?: number;
+    oldImagePollMs?: number;
   };
   fetch?: typeof fetch;
 }
@@ -300,6 +303,7 @@ export function createApp(d: AppDeps) {
     if (!prev || !game.enabled) return;
     try {
       await d.runtime.ensureRunning(game);
+      dropOldImage(prev, game);
     } catch (e) {
       const msg = (e as Error).message;
       d.log.error("games", "upgrade failed to start, rolling back", { game: game.id, version: game.manifest.version, err: msg });
@@ -307,6 +311,27 @@ export function createApp(d: AppDeps) {
       await d.runtime.ensureRunning(prev).catch(() => undefined);
       throw new HttpError(502, `${game.manifest.name} ${game.manifest.version} didn't start, so it's back on ${prev.manifest.version}: ${msg}`);
     }
+  };
+
+  /**
+   * Box 0.15.1: once an upgraded game is healthy on its new image, the old image goes, so
+   * updates don't fill the disk. In the background, and never an error: if the new version
+   * isn't healthy within 3 minutes, the old image is kept (a manual rollback needs it).
+   */
+  const dropOldImage = (prev: InstalledGame, game: InstalledGame) => {
+    const old = prev.manifest.image;
+    if (old === game.manifest.image || !d.runtime.removeImage || !d.runtime.health) return;
+    void (async () => {
+      const deadline = Date.now() + (d.config.oldImageWaitMs ?? 180_000);
+      for (;;) {
+        const h = await d.runtime.health!(game.id);
+        if (h === "healthy" || h === "none") break;
+        if (Date.now() > deadline || h === "missing") return d.log.info("games", "kept the previous image: the new version isn't healthy yet", { game: game.id, image: old });
+        await new Promise((r) => setTimeout(r, d.config.oldImagePollMs ?? 5000));
+      }
+      const removed = await d.runtime.removeImage!(old);
+      d.log.info("games", removed ? "removed the previous image" : "previous image still in use; kept", { game: game.id, image: old });
+    })().catch((err) => d.log.warn("games", "couldn't remove the previous image", { game: game.id, image: old, err: String(err) }));
   };
 
   const roomCache = new RoomCache({

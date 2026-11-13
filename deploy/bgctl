@@ -112,4 +112,17 @@ done
 
 # Host helpers may have changed with the release: reinstall them when running as root.
 if [ "$(id -u)" = 0 ] && [ -x "$here/host/install.sh" ]; then "$here/host/install.sh" > /dev/null || say "note: host helpers didn't reinstall; run host/install.sh"; fi
+# Clean up (never fails the update): release images other than this one and the one it
+# replaced (kept for a rollback), dangling layers, and snapshots beyond the newest 10.
+# Only x.y.z release tags are removed; "dev" and other local builds are left alone.
+for img in bargames bargames-broker; do
+  docker images "ghcr.io/$OWNER/$img" --format '{{.Tag}}' 2>/dev/null | while read -r tag; do
+    echo "$tag" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || continue
+    [ "$tag" = "$target" ] || [ "$tag" = "$current" ] && continue
+    docker rmi "ghcr.io/$OWNER/$img:$tag" > /dev/null 2>&1 || true
+  done
+done
+docker image prune -f > /dev/null 2>&1 || true
+ls -1t "$BACKUPS"/bargames-*.tgz 2>/dev/null | tail -n +11 | while read -r f; do rm -f "$f"; done
+
 say "updated $current → $target"
