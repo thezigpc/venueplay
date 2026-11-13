@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.12.0";
+export const SDK_VERSION = "0.13.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -386,12 +386,86 @@ export interface PlayerProfile {
   stats?: Record<string, number>;
 }
 
-/** STUB (planned): where a sound can play when the venue chooses (TV, the box's output, a speaker). */
+// ---------------------------------------------------------------- audio (SDK 0.13.0)
+// Apps and games that declare "audio": { "play": true } can play their own audio on the
+// box's sound outputs, which the venue sets up under Settings → Connected devices: the
+// box's own jack or HDMI, paired Bluetooth speakers, and TVs over AirPlay.
+// Server helper: bg.audio (createBarGames), or createAudio() from "@bargames/sdk/audio".
+
+/**
+ * A place the box can play sound.
+ *   box        the box's own headphone jack, or a screen plugged into its HDMI/DisplayPort
+ *   bluetooth  a Bluetooth speaker the venue paired
+ *   tv         a TV (or AirPlay speaker) over AirPlay; it stops whatever the box casts to that TV
+ */
 export interface AudioOutput {
   id: string;
+  /** The venue's name for it. */
   name: string;
-  kind: "tv" | "analog" | "speaker";
+  kind: "box" | "bluetooth" | "tv";
+  /** False when it can't play now (e.g. no screen plugged into that HDMI port). */
+  available: boolean;
+  /** The venue's default output (used when play() names none). */
+  default: boolean;
+  /** 0-100, set by the venue (and by the app while it plays there). */
+  volume: number;
+  /** Something else (another app) is playing on it now. */
+  busy?: boolean;
+  detail?: string;
 }
+
+export type AudioSessionState = "starting" | "playing" | "paused" | "ended" | "error";
+
+/** One thing playing on one output. Ended sessions stay listed for about a minute. */
+export interface AudioSession {
+  id: string;
+  output: string;
+  /** "app:<your id>" for yours. */
+  owner: string;
+  state: AudioSessionState;
+  /** How far it has played (ms), pauses excluded. */
+  positionMs: number;
+  title?: string;
+  artist?: string;
+  album?: string;
+  durationMs?: number;
+  startedAt: string;
+  endedAt?: string;
+  /** Why it ended early or failed, in plain words (show it to staff). */
+  message?: string;
+}
+
+export interface AudioPlayOptions {
+  /**
+   * The audio, as a path on your own server: "/tracks/12.mp3". The box fetches it from
+   * your container with `Authorization: Bearer <BG_GAME_TOKEN>` and `x-bargames-audio: 1`
+   * (bg.fromBox(req) checks), so you can keep the route off the public internet. MP3,
+   * AAC/M4A, FLAC, Ogg and WAV work; answer Range requests for M4A.
+   */
+  path: string;
+  /** An output id from outputs(); absent: the venue's default. */
+  output?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  durationMs?: number;
+  /** Take the output over when another app is playing on it (it gets "Replaced…"). */
+  replace?: boolean;
+}
+
+/** The box's audio API for apps, on BG_CORE_URL (game token). */
+export const AUDIO_PATHS = {
+  /** GET: AudioOutput[]. */
+  outputs: "/internal/audio/outputs",
+  /** POST AudioPlayOptions → AudioSession. */
+  play: "/internal/audio/play",
+  /** GET: your sessions (AudioSession[]). */
+  sessions: "/internal/audio/sessions",
+  /** POST: pause, resume or stop one of your sessions. */
+  control: (id: string, action: "pause" | "resume" | "stop") => `/internal/audio/sessions/${encodeURIComponent(id)}/${action}`,
+  /** PUT { volume }: while you play on that output. */
+  volume: (outputId: string) => `/internal/audio/outputs/${encodeURIComponent(outputId)}/volume`,
+} as const;
 
 // Media providers (apps such as YouTube that put their own content on TVs).
 

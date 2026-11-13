@@ -119,6 +119,11 @@ export interface GameManifest {
    * health may be left out (port 0 = no web server; the box then skips the health check).
    */
   integration?: IntegrationSpec;
+  /**
+   * SDK 0.13.0: plays its own audio on the box's sound outputs (the box's jack/HDMI,
+   * Bluetooth speakers, AirPlay TVs) through bg.audio. Apps and games; not integrations.
+   */
+  audio?: { play: boolean };
   /** Static, non-secret environment. Keys starting with BG_ are reserved. */
   env: Record<string, string>;
   minBoxVersion?: string;
@@ -248,6 +253,14 @@ export function validateManifest(input: unknown): ManifestResult {
     if (level < 3) warnings.push("media: media providers need sdk.level 3 (media_list / media_play / media_stop commands and a status provider)");
   }
 
+  let audio: { play: boolean } | undefined;
+  if (m.audio !== undefined) {
+    const play = isObj(m.audio) ? m.audio.play : undefined;
+    if (typeof play !== "boolean") errors.push('audio: { "play": true }');
+    else if (integration) warnings.push("audio: integrations can't play sound (yet); ignored");
+    else audio = { play };
+  }
+
   if (errors.length) return { ok: false, errors, warnings };
 
   const sdk = m.sdk as { version: string };
@@ -282,6 +295,7 @@ export function validateManifest(input: unknown): ManifestResult {
     ...(media ? { media } : {}),
     ...(routing ? { routing } : {}),
     ...(spec ? { integration: spec } : {}),
+    ...(audio?.play ? { audio } : {}),
   };
   return { ok: true, manifest, warnings };
 }

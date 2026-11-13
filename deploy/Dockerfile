@@ -42,6 +42,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
  && python3 -m venv /opt/pyatv && /opt/pyatv/bin/pip install --no-cache-dir -r /tmp/atv-requirements.txt \
  && rm /tmp/atv-requirements.txt
 COPY apps/broker/atv/atv-helper.py /usr/local/lib/bargames/atv-helper.py
+COPY apps/broker/atv/atv-stream.py /usr/local/lib/bargames/atv-stream.py
+# Sound (Settings > Connected devices): ALSA for the box's jack/HDMI, BlueZ + BlueALSA for
+# Bluetooth speakers. bluetoothd and bluealsa run as root on the container's own D-Bus
+# (deploy/broker-start); the broker (node) drives them with bluetoothctl and aplay.
+RUN apt-get update && apt-get install -y --no-install-recommends dbus bluez bluez-alsa-utils libasound2-plugin-bluez alsa-utils \
+ && rm -rf /var/lib/apt/lists/*
+COPY deploy/bargames-dbus.conf /etc/dbus-1/system.d/bargames.conf
 # Plugged-in screens: seatd (root) hands the screen to cage; the broker itself runs as node.
 COPY deploy/broker-start /usr/local/bin/broker-start
 RUN chmod 755 /usr/local/bin/doubletake /usr/local/bin/doubletake-ctl /usr/local/bin/broker-start

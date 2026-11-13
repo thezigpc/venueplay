@@ -454,7 +454,7 @@ test("0.9.0: off a box the new calls do nothing; on the mock box they work; mani
   assert.equal((await off.launchApp("tv", "youtube")).ok, false);
   assert.equal(await off.profile({} as import("node:http").IncomingMessage), undefined);
   assert.deepEqual(await off.audioOutputs(), []);
-  assert.deepEqual(await off.playSound("ding"), { ok: false, reason: "not-built" });
+  assert.deepEqual(await off.playSound("ding"), { ok: false, reason: "standalone" });
 
   // Manifest: media needs level 3 (warning), launch names are checked.
   const m = validateManifest({ ...base, kind: "app", sdk: { version: "0.9.0", level: 3 }, routes: { player: "/" }, commands: ["media_list", "media_play", "media_stop"], media: { launch: ["youtube"] } });
@@ -651,5 +651,70 @@ test("integration helper against the mock box: catalog, permissions, scenes, TV 
     console.log = log;
     box.core.close();
     box.gateway.close();
+  }
+});
+
+test("audio against the mock box: outputs, play (file fetched with the app's token), pause, volume, end; playSound off a box", async () => {
+  const { createAudio } = await import("./audio.js");
+  const { mockBox, DEV_TOKEN } = await import("./devbox.js");
+  const { createBarGames } = await import("./server.js");
+  const fetched: { path: string; auth?: string; marker?: string }[] = [];
+  const game = createServer((req, res) => {
+    fetched.push({ path: req.url ?? "", auth: req.headers.authorization, marker: String(req.headers["x-bargames-audio"] ?? "") });
+    if (req.url === "/tracks/1.mp3") return void res.writeHead(200, { "content-type": "audio/mpeg" }).end("ID3");
+    res.writeHead(404).end();
+  }).listen(0);
+  await new Promise((r) => game.once("listening", r));
+  const m = validateManifest({ id: "music", name: "Music", kind: "app", version: "0.1.0", image: "x/music:0.1.0", port: 3009, sdk: { version: "0.13.0", level: 1 }, routes: { player: "/" }, audio: { play: true } });
+  assert.ok(m.ok);
+  const box = mockBox({ gameId: "music", displayName: "Music (mock)", gameUrl: `http://127.0.0.1:${(game.address() as AddressInfo).port}`, corePort: 0, gatewayPort: 0, manifest: m.ok ? m.manifest : undefined });
+  await new Promise((r) => box.core.once("listening", r));
+  const log = console.log;
+  console.log = () => undefined;
+  try {
+    const coreUrl = `http://127.0.0.1:${(box.core.address() as AddressInfo).port}`;
+    const audio = createAudio({ coreUrl, token: DEV_TOKEN });
+    const outs = await audio.outputs();
+    assert.deepEqual(outs.map((o) => o.kind), ["box", "bluetooth", "tv"]);
+    assert.equal(outs.find((o) => o.default)?.id, "box:0-0");
+
+    const changes: string[] = [];
+    const stopWatch = audio.watch((list) => changes.push(list.map((s) => s.state).join(",")), 20);
+    const s = await audio.play({ path: "/tracks/1.mp3", title: "Song", durationMs: 300 });
+    assert.equal(s.state, "starting");
+    await new Promise((r) => setTimeout(r, 80));
+    assert.deepEqual(fetched[0], { path: "/tracks/1.mp3", auth: `Bearer ${DEV_TOKEN}`, marker: "1" });
+    assert.equal((await audio.pause(s.id)).state, "paused");
+    assert.equal((await audio.setVolume("box:0-0", 25)).volume, 25);
+    await assert.rejects(audio.setVolume("tv:fake-bar", 25), /Only the app playing/);
+    assert.equal((await audio.resume(s.id)).state, "playing");
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal((await audio.sessions()).find((x) => x.id === s.id)?.state, "ended");
+    stopWatch();
+    assert.ok(changes.some((c) => c.includes("ended")), "watch saw the end");
+
+    const missing = await audio.play({ path: "/tracks/nope.mp3" });
+    await new Promise((r) => setTimeout(r, 80));
+    const failed = (await audio.sessions()).find((x) => x.id === missing.id)!;
+    assert.equal(failed.state, "error");
+    assert.match(failed.message!, /wasn't found/);
+
+    // bg.audio / playSound / fromBox
+    const bg = createBarGames({ coreUrl, token: DEV_TOKEN, gameId: "music" });
+    assert.equal((await bg.audioOutputs()).length, 3);
+    const ps = await bg.playSound("/tracks/1.mp3", { outputId: "tv:fake-bar" });
+    assert.equal(ps.ok, true);
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(bg.fromBox({ headers: { authorization: `Bearer ${DEV_TOKEN}` } } as never), true);
+    assert.equal(bg.fromBox({ headers: {} } as never), false);
+    const off = createBarGames({ coreUrl: "", token: "", gameId: "music" });
+    assert.deepEqual(await off.playSound("/x.mp3"), { ok: false, reason: "standalone" });
+    assert.deepEqual(await off.audioOutputs(), []);
+    await assert.rejects(createAudio({ coreUrl: "", token: "" }).outputs(), /not running on a Bar Games box/);
+  } finally {
+    console.log = log;
+    box.core.close();
+    box.gateway.close();
+    game.close();
   }
 });

@@ -298,6 +298,8 @@ from the earlier plan.
 ### Phase 5: Home Assistant link and hardening
 - [x] Integration foundation (box 0.14.0, SDK 0.12.0): kind "integration", permissions approved by the venue, settings, the integration API and stream, Settings → Smart home, the mock box
 - [ ] Matter module (scenes as switches, TV power) for Alexa, Google Home and Apple Home
+- [x] Sound (box 0.15.0, SDK 0.13.0): Settings → Connected devices (Bluetooth pairing, the box's jack/HDMI, AirPlay TVs, default and volumes); apps play through `bg.audio` (docs/AUDIO.md)
+- [ ] Music Requests app (its own repo, source-agnostic: Spotify for home use, the venue's own files)
 - [ ] Home Assistant module: MQTT discovery, game events, starter automations
 - [ ] Optional WAF list sync; optional split DNS (the router points game hostnames at the box, with a Let's Encrypt certificate obtained through the Cloudflare token) so phones work during internet outages
 - [ ] Health alerts (box → HA → you), tagged releases, a snapshot before every update

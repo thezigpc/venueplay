@@ -21,6 +21,20 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.13.0 (sound on the venue's speakers)
+
+- **Games and apps that don't play sound: nothing to change.** `bg.playSound()` and
+  `bg.audioOutputs()` were stubs; off a box `playSound` now answers
+  `{ ok: false, reason: "standalone" }` instead of `"not-built"`.
+- **To play sound** (music, game sound effects) on the box's speakers:
+  - add `"audio": { "play": true }` to `bargames.json`;
+  - serve the audio from your own server, for the box only (`bg.fromBox(req)`);
+  - play it with `bg.audio.play({ path })`.
+
+  The venue picks the speakers (box jack or HDMI, Bluetooth, AirPlay TVs) under Settings →
+  Connected devices on box 0.15.0. Guide: [docs/AUDIO.md](../docs/AUDIO.md).
+  `bargames mock-box` pretends to play.
+
 ## What's new in SDK 0.12.0 (integrations)
 
 - **Games and apps: nothing to change.** 0.12.0 adds a third kind of module, `"integration"`:

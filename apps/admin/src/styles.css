@@ -340,3 +340,12 @@ button.tv-tile.selected { border-color: var(--primary); }
 .details div { display: flex; gap: 8px; flex-wrap: wrap; }
 .details dt { color: var(--muted); min-width: 120px; }
 .details dd { margin: 0; }
+
+/* Connected devices */
+.output-row { border-top: 1px solid #2c3566; padding-top: 8px; display: grid; gap: 8px; }
+.output-row:first-of-type { border-top: 0; }
+.output-row.off .game-main { opacity: 0.7; }
+.volume { display: flex; align-items: center; gap: 10px; flex: 1; margin: 0; }
+.volume input[type="range"] { flex: 1; min-width: 120px; min-height: 44px; accent-color: var(--primary); }
+.volume-value { width: 3ch; text-align: right; font-variant-numeric: tabular-nums; }
+.plain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }

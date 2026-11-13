@@ -7,6 +7,15 @@ if [ "$(id -u)" = 0 ]; then
   case ",${DRIVERS:-}," in
     *,local,*) SEATD_VTBOUND=0 seatd -u node -g node > /tmp/seatd.log 2>&1 & ;;
   esac
+  # Bluetooth speakers: a private system bus, bluetoothd and BlueALSA, restarted if they
+  # stop. bluetoothd needs NET_ADMIN (compose cap_add); without it Bluetooth stays off and
+  # the box's jack/HDMI still play. Pairings live in /var/lib/bluetooth (a volume).
+  if [ "${AUDIO:-on}" != off ] && [ -x /usr/libexec/bluetooth/bluetoothd ]; then
+    mkdir -p /run/dbus
+    dbus-daemon --system --fork --nopidfile
+    ( while :; do /usr/libexec/bluetooth/bluetoothd -n > /tmp/bluetoothd.log 2>&1; sleep 15; done ) &
+    ( sleep 2; while :; do bluealsa -p a2dp-source > /tmp/bluealsa.log 2>&1; sleep 15; done ) &
+  fi
   groups=$(id -G | tr ' ' ',')
   exec setpriv --reuid=1000 --regid=1000 --groups="$groups" --inh-caps=-all --bounding-set=-all env HOME=/home/node USER=node "$@"
 fi

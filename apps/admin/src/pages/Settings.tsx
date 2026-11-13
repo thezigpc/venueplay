@@ -5,6 +5,7 @@ import { api } from "../api";
 import { go } from "../nav";
 import { useLoad } from "../useLoad";
 import { AccessPage } from "./Access";
+import { DevicesPage } from "./Devices";
 import { InternetPage } from "./Internet";
 import { SchedulesCard } from "./Scenes";
 import { SmartHomePage } from "./SmartHome";
@@ -20,6 +21,7 @@ const PAGES: Record<string, string> = {
   system: "Box and updates",
   schedules: "Schedules",
   "smart-home": "Smart home",
+  devices: "Connected devices",
 };
 
 export function SettingsPage({ page }: { page?: string }) {
@@ -39,6 +41,7 @@ export function SettingsPage({ page }: { page?: string }) {
         {page === "system" && <SystemPage />}
         {page === "schedules" && <SchedulesPage />}
         {page === "smart-home" && <SmartHomePage />}
+        {page === "devices" && <DevicesPage />}
       </div>
     );
   }
@@ -54,6 +57,7 @@ function Hub() {
   const schedules = useLoad(api.schedules);
   const wifi = useLoad(api.wifi, 30_000);
   const integrations = useLoad(api.integrations, 30_000);
+  const audio = useLoad(api.audio, 30_000);
 
   const v = venue.data;
   const a = access.data;
@@ -65,6 +69,11 @@ function Hub() {
   const ints = integrations.data?.integrations ?? [];
   const intsOn = ints.filter((x) => x.enabled);
   const smartWarn = intsOn.some((x) => x.needsApproval.length || x.report?.state === "error" || x.report?.state === "warn");
+  const au = audio.data;
+  const defaultOut = au?.outputs.find((o) => o.default);
+  const speakers = au?.outputs.filter((o) => o.kind === "bluetooth").length ?? 0;
+  const playing = au?.outputs.filter((o) => o.session && ["starting", "playing", "paused"].includes(o.session.state)).length ?? 0;
+  const devicesSummary = !au ? audio.error || "…" : !au.available ? "No sound outputs on this box" : [defaultOut ? `Sound to ${defaultOut.label || defaultOut.name}` : "No default output", au.bluetooth ? (speakers ? `${speakers} Bluetooth speaker${speakers === 1 ? "" : "s"}` : "no Bluetooth speakers yet") : "", playing ? `playing on ${playing}` : ""].filter(Boolean).join(" · ");
   const smartSummary = !ints.length ? "Alexa, Google Home, Apple Home, Home Assistant: not connected" : intsOn.length ? intsOn.map((x) => `${x.name}${x.report?.state === "setup" ? " (waiting for setup)" : x.report?.state === "error" ? " (not working)" : ""}`).join(" · ") : `${ints.length} added, all off`;
 
   return (
@@ -110,6 +119,7 @@ function Hub() {
           level={smartWarn ? "warn" : undefined}
           detail={integrations.data ? smartSummary : integrations.error || "…"}
         />
+        <Row to="devices" title="Connected devices" level={au?.bluetooth && !au.bluetooth.available ? "warn" : undefined} detail={devicesSummary} />
         <button type="button" className="hub-logout" onClick={() => void api.logout().then(() => window.location.reload())}>
           Log out
         </button>

@@ -35,6 +35,7 @@ import {
   type PlayerProfile,
 } from "./protocol.js";
 import { themeToCss } from "./theme.js";
+import { AudioError, createAudio, type Audio } from "./audio.js";
 
 export type CommandHandler = (req: CommandRequest) => CommandResult | Promise<CommandResult>;
 type Next = (err?: unknown) => void;
@@ -136,10 +137,25 @@ export interface BarGames {
   reportResults(r: GameResult): Promise<void>;
   /** STUB (planned): the venue profile of the player behind this request. Always undefined for now. */
   profile(req: IncomingMessage): Promise<PlayerProfile | undefined>;
-  /** STUB (planned): where sounds can play on this box. Always [] for now; standalone, play locally. */
+  /**
+   * SDK 0.13.0: the box's sound outputs (needs "audio": { "play": true } in bargames.json).
+   * [] off a box or without it. Same as bg.audio.outputs(), without the errors.
+   */
   audioOutputs(): Promise<AudioOutput[]>;
-  /** STUB (planned): play a short sound on a venue output. Not built: standalone/on a box, play it locally. */
-  playSound(sound: string, opts?: { outputId?: string }): Promise<{ ok: boolean; reason?: string }>;
+  /**
+   * SDK 0.13.0: plays a sound from your own server (`sound` is its path, "/sounds/ding.mp3")
+   * on an output (default: the venue's default). Never throws: { ok: false, reason } off a
+   * box ("standalone"), without the manifest's audio.play ("not-allowed"), or when the box
+   * can't ("busy", "error"). For music and anything you need to follow, use bg.audio.
+   */
+  playSound(sound: string, opts?: { outputId?: string }): Promise<{ ok: boolean; reason?: string; message?: string; sessionId?: string }>;
+  /** SDK 0.13.0: play, pause and follow audio on the box's outputs (see "@bargames/sdk/audio"). */
+  audio: Audio;
+  /**
+   * SDK 0.13.0: true when this request comes from the box itself (it carries your
+   * BG_GAME_TOKEN), e.g. the box fetching the audio you asked it to play. Always false off a box.
+   */
+  fromBox(req: IncomingMessage): boolean;
   /** Media providers: every venue TV (not gated by "casting from games"). [] off a box or without manifest media. */
   tvs(): Promise<BoxTv[]>;
   /** Media providers: start a TV app (one of manifest media.launch) on one of your target displays. Returns once accepted. */
@@ -170,6 +186,7 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
   let inflight: Promise<VenueContext> | undefined;
 
   const auth = { authorization: `Bearer ${token}` };
+  const audio = createAudio({ coreUrl, token, fetch: doFetch });
   const basePath = basePathFromEnv();
   const rawBase = process.env[ENV.basePath] || process.env.BASE_PATH;
   // Git Bash turns "/bingo" into "C:/Program Files/Git/bingo"; say so instead of running at the root.
@@ -394,8 +411,19 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
       await core("POST", "/internal/results", r).catch(() => undefined);
     },
     profile: async () => undefined,
-    audioOutputs: async () => [],
-    playSound: async () => ({ ok: false, reason: "not-built" }),
+    audio,
+    fromBox: (req) => authorized(req),
+    audioOutputs: async () => (connected ? audio.outputs().catch(() => []) : []),
+    async playSound(sound, o) {
+      if (!connected) return { ok: false, reason: "standalone" };
+      try {
+        const s = await audio.play({ path: sound, output: o?.outputId });
+        return { ok: true, sessionId: s.id };
+      } catch (err) {
+        const status = err instanceof AudioError ? err.status : 0;
+        return { ok: false, reason: status === 403 ? "not-allowed" : status === 409 ? "busy" : "error", message: (err as Error).message };
+      }
+    },
     async tvs() {
       if (!connected) return [];
       const r = await core("GET", "/internal/tvs").catch(() => undefined);
@@ -456,6 +484,10 @@ export type {
   RoomSummary,
   VenueContext,
 } from "./protocol.js";
+
+// SDK 0.13.0: audio on the box's outputs.
+export { AudioError, AudioUnavailable, createAudio, type Audio } from "./audio.js";
+export type { AudioPlayOptions, AudioSession, AudioSessionState } from "./protocol.js";
 
 // SDK 0.10.0: running under a path prefix (see base.ts).
 export { BASE_META, basePathFromEnv, injectBasePath, joinUrl, normalizeBasePath } from "./base.js";

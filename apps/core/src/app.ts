@@ -42,6 +42,7 @@ import { certificateWarning, checkPattern, hostFor } from "./hostnames.js";
 import { idleScreenUrl } from "./idleScreen.js";
 import { imageState, UpdateChecker } from "./updates.js";
 import { IntegrationHub, type HubDisplay } from "./integrations.js";
+import { AppAudio } from "./audio.js";
 import { checkStartupRule, StartupRunner, type StartupRule } from "./startup.js";
 import { fetchManifest } from "./manifestSource.js";
 import { RoomCache } from "./roomCache.js";
@@ -75,6 +76,8 @@ export interface AppDeps {
     integrationBoxId?: string;
     trustedOwners?: string[];
     integrationPollMs?: number;
+    /** Core's loopback address for host-network processes (the broker fetching app audio). */
+    hostCoreUrl?: string;
   };
   fetch?: typeof fetch;
 }
@@ -138,6 +141,20 @@ export function createApp(d: AppDeps) {
   });
   app.locals.integrations = hub;
   hub.mountInternal(app);
+
+  // ---- audio (SDK 0.13.0): apps play on the box's outputs (see audio.ts)
+  new AppAudio({
+    games: d.games,
+    brokerCall: (method, sub, body) => brokerCall(method, sub, body),
+    sourceBase: d.config.hostCoreUrl ?? "http://127.0.0.1:7100",
+    target: gameTarget,
+    fetch: doFetch,
+    log: d.log,
+  }).mount(app, (req) => {
+    const game = d.games.byToken(bearer(req.headers.authorization));
+    if (!game) throw new HttpError(401, "bad game token");
+    return game;
+  });
 
   app.post(
     "/internal/events",

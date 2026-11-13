@@ -1,6 +1,6 @@
 {
   "name": "@bargames/sdk",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Game SDK for the Bar Games platform: venue branding, events, commands and the bargames.json manifest.",
   "type": "module",
   "license": "MIT",
@@ -11,6 +11,7 @@
     "./server": { "types": "./dist/server.d.ts", "default": "./dist/server.js" },
     "./client": { "types": "./dist/client.d.ts", "default": "./dist/client.js" },
     "./integration": { "types": "./dist/integration.d.ts", "default": "./dist/integration.js" },
+    "./audio": { "types": "./dist/audio.d.ts", "default": "./dist/audio.js" },
     "./package.json": "./package.json"
   },
   "bin": { "bargames": "./dist/cli.js" },

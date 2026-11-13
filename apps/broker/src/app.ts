@@ -6,6 +6,7 @@ import type { RokuDriver } from "./drivers/roku/index.js";
 import type { VizioDriver } from "./drivers/vizio/index.js";
 import type { AppleTvDriver } from "./drivers/appletv/index.js";
 import type { VenueboxHub } from "./venuebox/hub.js";
+import { mountAudio, type BoxAudio } from "./audio/index.js";
 import type { DisplayRegistry } from "./registry.js";
 import { checkStreamSettings, type DeliveryMethod, type DisplayContent, type StreamSettings } from "./types.js";
 
@@ -15,7 +16,7 @@ const h =
     Promise.resolve(fn(req, res)).catch(next);
 
 /** Broker API. Only core calls it (bearer token); it never faces players. */
-export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; vizio?: VizioDriver; appletv?: AppleTvDriver; venuebox?: VenueboxHub; token: string; log: Logger }) {
+export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; vizio?: VizioDriver; appletv?: AppleTvDriver; venuebox?: VenueboxHub; audio?: BoxAudio; token: string; log: Logger }) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "64kb" }));
@@ -336,6 +337,9 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
       res.json(await d.registry.show({ displayIds: req.body.displayIds, group: req.body.group }, content));
     }),
   );
+
+  // Sound outputs, Bluetooth speakers and playback (Settings → Connected devices; apps' bg.audio).
+  mountAudio(app, d.audio);
 
   app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status ?? 500;

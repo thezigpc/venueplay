@@ -9,7 +9,7 @@
 import { createServer, request, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { connect } from "node:net";
 import { isApp, isIntegration, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
-import { HEADERS, INTEGRATION_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
+import { AUDIO_PATHS, HEADERS, INTEGRATION_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type AudioOutput, type AudioPlayOptions, type AudioSession, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
 import { DEFAULT_THEME } from "./theme.js";
 import { joinUrl, normalizeBasePath } from "./base.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -135,6 +135,130 @@ export function mockCatalog(perms: Set<string>): IntegrationCatalog {
   return cat;
 }
 
+/** SDK 0.13.0: the mock box's pretend sound outputs. */
+export const MOCK_OUTPUTS: readonly AudioOutput[] = [
+  { id: "box:0-0", name: "Box headphone jack (fake)", kind: "box", available: true, default: true, volume: 60 },
+  { id: "bt:00:11:22:33:44:55", name: "Patio speaker (fake Bluetooth)", kind: "bluetooth", available: true, default: false, volume: 60 },
+  { id: "tv:fake-bar", name: "Bar (fake TV, AirPlay)", kind: "tv", available: true, default: false, volume: 60, detail: "Over AirPlay. Stops anything the box is casting to this TV while it plays" },
+];
+
+/** Pretend playback with the real box's rules: one session per output, the app's file fetched with its token. */
+class MockAudio {
+  private sessions: (AudioSession & { playedMs: number; resumedAt?: number })[] = [];
+  private volumes = new Map<string, number>();
+  constructor(private readonly gameUrl: string) {}
+
+  private pos(s: (typeof this.sessions)[number]): number {
+    return s.playedMs + (s.resumedAt ? Date.now() - s.resumedAt : 0);
+  }
+  private view(s: (typeof this.sessions)[number]): AudioSession {
+    const { playedMs: _p, resumedAt: _r, ...v } = s;
+    return { ...v, positionMs: Math.round(s.state === "ended" || s.state === "error" ? s.positionMs : this.pos(s)) };
+  }
+  private tick() {
+    const now = Date.now();
+    for (const s of this.sessions) {
+      if ((s.state === "playing" || s.state === "starting") && this.pos(s) >= (s.durationMs ?? 30_000)) {
+        s.positionMs = s.durationMs ?? 30_000;
+        s.state = "ended";
+        s.endedAt = new Date().toISOString();
+        s.resumedAt = undefined;
+        console.log(`${c.ok("audio")} ended: ${s.title ?? s.id}`);
+      }
+    }
+    this.sessions = this.sessions.filter((s) => !s.endedAt || now - Date.parse(s.endedAt) < 60_000);
+  }
+  private live(id: string) {
+    return this.sessions.find((s) => s.id === id && s.state !== "ended" && s.state !== "error");
+  }
+  private end(s: (typeof this.sessions)[number], state: "ended" | "error", message: string) {
+    s.positionMs = Math.round(this.pos(s));
+    s.state = state;
+    s.message = message;
+    s.endedAt = new Date().toISOString();
+    s.resumedAt = undefined;
+  }
+
+  async handle(req: IncomingMessage, json: (status: number, body: unknown) => void): Promise<void> {
+    this.tick();
+    const url = (req.url ?? "").split("?")[0];
+    const outputs = () => MOCK_OUTPUTS.map((x) => ({ ...x, volume: this.volumes.get(x.id) ?? x.volume }));
+    if (url === AUDIO_PATHS.outputs && req.method === "GET") return json(200, outputs());
+    if (url === AUDIO_PATHS.sessions && req.method === "GET") return json(200, this.sessions.map((s) => this.view(s)));
+    if (url === AUDIO_PATHS.play && req.method === "POST") {
+      const b = JSON.parse((await readBody(req)) || "{}") as Partial<AudioPlayOptions>;
+      if (typeof b.path !== "string" || !b.path.startsWith("/") || b.path.startsWith("//")) return json(400, { error: "path: a path on your own server, like /tracks/12.mp3" });
+      const out = b.output ? MOCK_OUTPUTS.find((x) => x.id === b.output) : MOCK_OUTPUTS[0];
+      if (!out) return json(404, { error: "no such output" });
+      const old = this.sessions.find((s) => s.output === out.id && this.live(s.id));
+      if (old) this.end(old, "ended", `Replaced by something else on ${out.name}.`);
+      const s: (typeof this.sessions)[number] = {
+        id: Math.random().toString(16).slice(2, 18),
+        output: out.id,
+        owner: "app:dev",
+        state: "starting",
+        positionMs: 0,
+        startedAt: new Date().toISOString(),
+        playedMs: 0,
+        ...(b.title ? { title: String(b.title).slice(0, 120) } : {}),
+        ...(b.artist ? { artist: String(b.artist).slice(0, 120) } : {}),
+        ...(b.album ? { album: String(b.album).slice(0, 120) } : {}),
+        ...(typeof b.durationMs === "number" && b.durationMs > 0 ? { durationMs: Math.round(b.durationMs) } : {}),
+      };
+      this.sessions.push(s);
+      // Like the box: fetch the file from the app, with its token, and fail the session if it can't.
+      const ctrl = new AbortController();
+      fetch(new URL(b.path, this.gameUrl), { headers: { authorization: `Bearer ${DEV_TOKEN}`, "x-bargames-audio": "1", range: "bytes=0-" }, signal: ctrl.signal })
+        .then((r) => {
+          ctrl.abort();
+          if (!r.ok) {
+            console.log(c.bad(`✗ audio: GET ${b.path} answered ${r.status}; the box couldn't play it`));
+            return this.end(s, "error", r.status === 404 ? "Couldn't play that audio: the app's audio file wasn't found." : "Couldn't play that audio: the app refused the box's request for its audio.");
+          }
+          if (s.state === "starting") {
+            s.state = "playing";
+            s.resumedAt = Date.now();
+          }
+          console.log(`${c.ok("audio")} playing ${s.title ?? b.path} on ${out.name} (${r.headers.get("content-type") ?? "no content-type"}, pretend ${Math.round((s.durationMs ?? 30_000) / 1000)} s)`);
+        })
+        .catch(() => {
+          console.log(c.bad(`✗ audio: couldn't reach ${b.path} on your app (${this.gameUrl})`));
+          this.end(s, "error", "Couldn't play that audio: the app didn't answer.");
+        });
+      return json(200, this.view(s));
+    }
+    const m = /^\/internal\/audio\/sessions\/([^/]+)\/(pause|resume|stop)$/.exec(url);
+    if (m && req.method === "POST") {
+      const s = this.sessions.find((x) => x.id === decodeURIComponent(m[1]));
+      if (!s) return json(404, { error: "no such session" });
+      if (!this.live(s.id)) return json(409, { error: "That has finished playing." });
+      if (m[2] === "pause" && s.state !== "paused") {
+        s.playedMs = this.pos(s);
+        s.resumedAt = undefined;
+        s.state = "paused";
+      } else if (m[2] === "resume" && s.state === "paused") {
+        s.resumedAt = Date.now();
+        s.state = "playing";
+      } else if (m[2] === "stop") this.end(s, "ended", "Stopped.");
+      console.log(`${c.ok("audio")} ${m[2]}: ${s.title ?? s.id}`);
+      return json(200, this.view(s));
+    }
+    const v = /^\/internal\/audio\/outputs\/([^/]+)\/volume$/.exec(url);
+    if (v && req.method === "PUT") {
+      const id = decodeURIComponent(v[1]);
+      const out = MOCK_OUTPUTS.find((x) => x.id === id);
+      if (!out) return json(404, { error: "no such output" });
+      if (!this.sessions.some((s) => s.output === id && this.live(s.id))) return json(403, { error: "Only the app playing on an output can change its volume." });
+      const volume = Number(JSON.parse((await readBody(req)) || "{}").volume);
+      if (!Number.isFinite(volume) || volume < 0 || volume > 100) return json(400, { error: "volume: 0-100" });
+      this.volumes.set(id, Math.round(volume));
+      console.log(`${c.ok("audio")} volume ${Math.round(volume)} on ${out.name}`);
+      return json(200, outputs().find((x) => x.id === id));
+    }
+    return json(404, { error: `mock box: no ${req.method} ${url}` });
+  }
+}
+
 export function mockBox(o: MockBoxOptions) {
   let countdown: Countdown | undefined;
   /** What the fake Roku (fake-bar) shows: "home" until a launch. */
@@ -167,6 +291,7 @@ export function mockBox(o: MockBoxOptions) {
   };
   const pinReset = setInterval(() => (pinFailures = 0), 60_000);
   pinReset.unref();
+  const mockAudio = new MockAudio(o.gameUrl);
 
   // Fake core: what the SDK inside the game talks to (BG_CORE_URL).
   const core = createServer(async (req, res) => {
@@ -234,6 +359,14 @@ export function mockBox(o: MockBoxOptions) {
       console.log(`${c.ok("launch")} ${b.app} on ${b.displayId} (pretend)`);
       fakeRokuApp = String(b.app);
       return json(200, { ok: true });
+    }
+    // SDK 0.13.0: audio. Pretend outputs; "playing" runs in real time (durationMs, else 30 s).
+    if (req.url?.startsWith("/internal/audio/")) {
+      if (!o.manifest?.audio?.play) {
+        console.log(c.bad(`✗ ${req.method} ${req.url}: add "audio": { "play": true } to bargames.json`));
+        return json(403, { error: 'This app didn\'t ask to play sound: add "audio": { "play": true } to bargames.json.' });
+      }
+      return mockAudio.handle(req, json);
     }
     // SDK 0.12.0: integrations. Everything they declare counts as approved here.
     if (req.url?.startsWith("/internal/integration/")) {

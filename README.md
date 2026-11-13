@@ -99,6 +99,7 @@ Docker socket. Each game gets:
 - the Cloudflare setup wizard (Internet tab: tunnel, routes, DNS, connector), described in [docs/CLOUDFLARE.md](docs/CLOUDFLARE.md)
 - the game integration hand-off in `integration/`, with the SDK's mock box and conformance check
 - integrations (box 0.14.0, SDK 0.12.0): connector modules such as Matter and Home Assistant, installed and updated on their own, limited to what the venue approves (Settings → Smart home). Guide: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)
+- sound (box 0.15.0, SDK 0.13.0): the venue pairs Bluetooth speakers and picks the box's sound outputs (its jack or HDMI, Bluetooth, AirPlay TVs) under Settings → Connected devices. Apps that declare `audio.play`, such as music requests, play on them. Guide: [docs/AUDIO.md](docs/AUDIO.md)
 
 **Not built yet:**
 - the casting pipeline (Chromium → QuickSync → AirPlay/HLS)

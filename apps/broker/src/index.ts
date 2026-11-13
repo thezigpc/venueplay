@@ -19,6 +19,7 @@ import { NodeProcRunner } from "./procs.js";
 import { PendingStreamService } from "./streams.js";
 import type { DisplayDriver, StreamService } from "./types.js";
 import { existsSync } from "node:fs";
+import { audioFromEnv } from "./audio/index.js";
 
 const log = createLogger("broker");
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -100,8 +101,11 @@ if (venuebox) drivers.set(venuebox.id, venuebox);
 
 if (venuebox) venuebox.listen(clientPort).on("listening", () => log.info("boot", "venuebox clients", { port: clientPort }));
 
-createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, appletv, venuebox, token, log }).listen(port, host, () => {
-  log.info("boot", "listening", { port, host, drivers: [...drivers.keys()], airplay: Boolean(airplay) });
+// The box's sound (Settings → Connected devices): its jack/HDMI, Bluetooth speakers, AirPlay TVs.
+const audio = audioFromEnv(registry, dataDir, log, { python: atvPython, script: atvScript });
+
+createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, appletv, venuebox, audio, token, log }).listen(port, host, () => {
+  log.info("boot", "listening", { port, host, drivers: [...drivers.keys()], airplay: Boolean(airplay), audio: Boolean(audio), bluetooth: Boolean(audio?.bluetooth) });
   if (mockCount) void registry.discover();
   if (airplay) {
     airplay.start();
@@ -110,6 +114,7 @@ createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, appletv, venueb
 });
 
 process.on("SIGTERM", () => {
+  audio?.engine.shutdown();
   atvHelper?.stop();
   void (airplay?.shutdown() ?? Promise.resolve()).finally(() => process.exit(0));
 });

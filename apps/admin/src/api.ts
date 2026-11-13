@@ -365,6 +365,15 @@ export const api = {
   approveIntegration: (id: string) => call<Integration>("POST", `/integrations/${encodeURIComponent(id)}/approve`, {}),
   integrationSettings: (id: string, values: Record<string, string | null>) => call<Integration>("PUT", `/integrations/${encodeURIComponent(id)}/settings`, { values }),
   integrationQrUrl: (id: string, at?: string) => bgUrl(`/api/integrations/${encodeURIComponent(id)}/pairing.svg${at ? `?at=${encodeURIComponent(at)}` : ""}`),
+  // Connected devices (box 0.15.0): sound outputs and Bluetooth speakers, kept by the broker.
+  audio: () => call<AudioState>("GET", "/broker/audio"),
+  audioOutput: (id: string, patch: { label?: string | null; volume?: number; default?: true }) => call<AudioOutputView>("PATCH", `/broker/audio/outputs/${encodeURIComponent(id)}`, patch),
+  audioTest: (id: string) => call<AudioSessionView>("POST", `/broker/audio/outputs/${encodeURIComponent(id)}/test`, {}),
+  audioStop: (sessionId: string) => call<AudioSessionView>("POST", `/broker/audio/sessions/${encodeURIComponent(sessionId)}/stop`, { by: "admin" }),
+  bluetooth: () => call<{ status: BluetoothStatus; devices: BluetoothDevice[] }>("GET", "/broker/audio/bluetooth"),
+  bluetoothScan: () => call<{ ok: boolean; seconds: number }>("POST", "/broker/audio/bluetooth/scan", { seconds: 20 }),
+  bluetoothAction: (address: string, action: "pair" | "connect" | "disconnect") => call<{ ok: boolean }>("POST", `/broker/audio/bluetooth/${encodeURIComponent(address)}/${action}`, {}),
+  bluetoothForget: (address: string) => call<{ ok: boolean }>("DELETE", `/broker/audio/bluetooth/${encodeURIComponent(address)}`),
   secrets: (gameId: string) => call<{ secrets: { name: string; length: number }[] }>("GET", `/games/${encodeURIComponent(gameId)}/secrets`),
   setSecret: (gameId: string, name: string, value: string | null) =>
     call("PUT", `/games/${encodeURIComponent(gameId)}/secrets/${encodeURIComponent(name)}`, { value }),
@@ -385,6 +394,51 @@ export const api = {
 };
 
 /** SDK 0.12.0: an integration (Matter, Home Assistant…), as Settings → Smart home shows it. */
+export interface AudioSessionView {
+  id: string;
+  output: string;
+  /** "app:<id>" or "admin" (a test sound). */
+  owner: string;
+  state: "starting" | "playing" | "paused" | "ended" | "error";
+  positionMs: number;
+  title?: string;
+  artist?: string;
+  durationMs?: number;
+  message?: string;
+}
+export interface AudioOutputView {
+  id: string;
+  kind: "box" | "bluetooth" | "tv";
+  name: string;
+  label?: string;
+  available: boolean;
+  detail?: string;
+  volume: number;
+  default: boolean;
+  session?: AudioSessionView;
+}
+export interface BluetoothStatus {
+  available: boolean;
+  message?: string;
+  powered: boolean;
+  scanning: boolean;
+}
+export interface BluetoothDevice {
+  address: string;
+  name: string;
+  paired: boolean;
+  connected: boolean;
+  audio: boolean;
+  rssi?: number;
+  job?: { state: "pairing" | "connecting" | "failed" | "done"; message?: string };
+}
+export interface AudioState {
+  available: boolean;
+  outputs: AudioOutputView[];
+  sessions: AudioSessionView[];
+  bluetooth: BluetoothStatus | null;
+}
+
 export interface Integration {
   id: string;
   name: string;

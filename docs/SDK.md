@@ -54,6 +54,11 @@ from the games (`ctx.venue.apps`). `kind` defaults to `"game"`. SDK 0.5.0's
 `"kind": "display"` is read as `"app"`; boxes older than 0.5.0 ignore `kind`.
 Helpers: `isApp(manifest)` (`isDisplayModule` is its 0.5.0 alias).
 
+**Sound (SDK 0.13.0, box 0.15.0):** `"audio": { "play": true }` lets an app or game play
+its own audio on the box's speakers. These are the box's jack or HDMI, Bluetooth speakers
+and AirPlay TVs, which the venue sets up under Settings → Connected devices. Use
+`bg.audio` (or `@bargames/sdk/audio`) and `bg.fromBox(req)`. Guide: [AUDIO.md](AUDIO.md).
+
 ## 2. What the box gives your container
 
 | Env var | Meaning |

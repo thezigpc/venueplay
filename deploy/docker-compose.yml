@@ -80,9 +80,15 @@ services:
       AIRPLAY_HWACCEL: ${AIRPLAY_HWACCEL:-auto}
       CAST_FPS: ${CAST_FPS:-30}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-    volumes: ["./data/broker:/data"]
+    # Sound (Settings > Connected devices): the box's jack/HDMI through /dev/snd (bound with a
+    # device rule, so a box without sound hardware still starts), Bluetooth pairings kept in
+    # data/bluetooth. NET_ADMIN is for bluetoothd (root, in this container); the broker
+    # process itself still drops every capability (broker-start).
+    volumes: ["./data/broker:/data", "./data/bluetooth:/var/lib/bluetooth", "/dev/snd:/dev/snd"]
     devices: ["/dev/dri:/dev/dri"]
-    group_add: ["${RENDER_GID:-991}", "${VIDEO_GID:-44}"]
+    device_cgroup_rules: ["c 116:* rmw"]
+    cap_add: [NET_ADMIN]
+    group_add: ["${RENDER_GID:-991}", "${VIDEO_GID:-44}", "${AUDIO_GID:-29}"]
     shm_size: 2gb
 
   docker-proxy:

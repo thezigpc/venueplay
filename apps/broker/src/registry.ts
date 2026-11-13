@@ -352,7 +352,7 @@ export function inputName(input: string): string {
   return ({ tuner: "Antenna", comp: "Composite", cast: "TV home", av: "AV", av1: "AV" } as Record<string, string>)[input.toLowerCase()] ?? input;
 }
 
-const hostOf = (address: string): string | undefined => {
+export const hostOf = (address: string): string | undefined => {
   try {
     return new URL(address).hostname;
   } catch {

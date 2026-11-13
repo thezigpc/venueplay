@@ -8,8 +8,14 @@ Repo: https://github.com/thezigpc/venueplay (public, branch `main`). Commits use
 - npm workspaces, TypeScript (NodeNext), Express 4, React 18 + Vite 5, Node 22 images. These match the user's other games (Bingo, CAH, Pool).
 - Tests use `node:test` through tsx (`npm test`). Every package has `src/*.test.ts`.
 - Use `npm run build` before running anything compiled. `tsc -b` builds the referenced projects in order.
-- The game SDK (`packages/sdk`) must stay dependency-free and browser-safe, except the Node-only `server.ts`, `cli.ts`, `devbox.ts` and `integration.ts`.
+- The game SDK (`packages/sdk`) must stay dependency-free and browser-safe, except the Node-only `server.ts`, `cli.ts`, `devbox.ts`, `integration.ts` and `audio.ts`.
 - Integrations (kind "integration", box 0.14.0) are connector modules (Matter, Home Assistant) in their own repos. They get no routes, DNS or casting. `GameRegistry.list()` leaves them out (use `all()` / `integrations()`); they talk only to `/internal/integration/*` with the permissions the venue approved. Guide: docs/INTEGRATIONS.md.
+- Sound (box 0.15.0, SDK 0.13.0) belongs to the box, not the apps:
+  - **The broker plays it**, in `apps/broker/src/audio/`: the box's jack/HDMI via aplay, Bluetooth speakers via BlueZ + BlueALSA (bluetoothctl, no D-Bus library), and AirPlay TVs via pyatv (`atv-stream.py`).
+  - **Apps with `audio.play`** call `/internal/audio/*` on core. Core hands the broker a one-time source URL on its loopback port and fetches the file from the app.
+  - **Admin:** Settings → Connected devices, through `/api/broker/audio/*`.
+  - **Container:** Docker hides `/proc/asound`, so outputs come from `aplay -l`, and screen detection from `/sys/class/drm`.
+  - Guide: docs/AUDIO.md.
 - Game repos consume the SDK as a vendored tarball from `integration/` (built with `npm run sdk:pack`). **Bump the SDK version for every re-pack.** A changed tarball with the same name breaks `npm ci` in the games (lockfile integrity). Keep `integration/README.md` in step with SDK changes.
 - Off a box, the SDK must change nothing in a game (no theme, no events, gateway headers ignored). Games rely on this.
 - Cloudflare: the box only touches DNS records that are CNAMEs to its own tunnel. Core runs `cloudflared` (`bargames-tunnel`) through the socket proxy.
