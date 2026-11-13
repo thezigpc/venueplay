@@ -97,6 +97,8 @@ export const STAFF_COOKIE = "bg_staff";
 export const ADMIN_COOKIE = "bg_admin";
 /** Staff cookies last as long as a box admin login. */
 export const STAFF_TTL_MS = 12 * 3600e3;
+/** One-time staff sign-in links (box admin → a game's admin) last this long. */
+export const STAFF_LINK_TTL_MS = 2 * 60_000;
 
 /** "Bearer xyz" → "xyz" */
 export function bearer(header: string | string[] | undefined): string {
@@ -227,6 +229,11 @@ export interface GatewayConfig {
   setupRequired: boolean;
   /** The admin UI's public URL (for redirects to setup). */
   adminUrl: string;
+  /**
+   * Box 0.15.1: staff cookies and sign-in links issued before this (ms) are refused. Set
+   * when the admin password changes or staff "sign out everywhere". Absent or 0: never.
+   */
+  staffNotBefore?: number;
 }
 
 /**

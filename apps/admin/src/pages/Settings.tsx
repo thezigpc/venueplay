@@ -8,6 +8,7 @@ import { AccessPage } from "./Access";
 import { DevicesPage } from "./Devices";
 import { InternetPage } from "./Internet";
 import { SchedulesCard } from "./Scenes";
+import { SigninPage } from "./Signin";
 import { SmartHomePage } from "./SmartHome";
 import { SystemPage } from "./System";
 import { VenuePage } from "./Venue";
@@ -22,6 +23,7 @@ const PAGES: Record<string, string> = {
   schedules: "Schedules",
   "smart-home": "Smart home",
   devices: "Connected devices",
+  signin: "Sign-in",
 };
 
 export function SettingsPage({ page }: { page?: string }) {
@@ -42,6 +44,7 @@ export function SettingsPage({ page }: { page?: string }) {
         {page === "schedules" && <SchedulesPage />}
         {page === "smart-home" && <SmartHomePage />}
         {page === "devices" && <DevicesPage />}
+        {page === "signin" && <SigninPage />}
       </div>
     );
   }
@@ -120,6 +123,7 @@ function Hub() {
           detail={integrations.data ? smartSummary : integrations.error || "…"}
         />
         <Row to="devices" title="Connected devices" level={au?.bluetooth && !au.bluetooth.available ? "warn" : undefined} detail={devicesSummary} />
+        <Row to="signin" title="Sign-in" detail="Change the admin password · sign out other devices" />
         <button type="button" className="hub-logout" onClick={() => void api.logout().then(() => window.location.reload())}>
           Log out
         </button>

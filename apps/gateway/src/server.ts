@@ -1,4 +1,4 @@
-import { ADMIN_COOKIE, GATEWAY_PROOF_HEADER, signToken, STAFF_COOKIE, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
+import { ADMIN_COOKIE, GATEWAY_PROOF_HEADER, signToken, STAFF_COOKIE, STAFF_LINK_TTL_MS, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
 import { GAMES_LINK_CSS, gamesLinkHtml, HEADERS, PATHS, themeToCss, type VenueContext } from "@bargames/sdk";
 import httpProxy from "http-proxy";
 import { createHash, createHmac, randomBytes } from "node:crypto";
@@ -77,8 +77,14 @@ export function createGateway(d: GatewayDeps) {
     return decision;
   }
 
-  /** Valid staff cookie (signed by this gateway, not expired). */
-  const isStaff = (req: IncomingMessage) => Boolean(verifyToken(d.coreToken, "staff", readCookie(req.headers.cookie, STAFF_COOKIE)));
+  /**
+   * Valid staff cookie: signed by this box, not expired, and issued after the last "sign
+   * everyone out" (a password change). Tokens carry their expiry, so issued = expiry - TTL.
+   */
+  const isStaff = (req: IncomingMessage) => {
+    const t = verifyToken(d.coreToken, "staff", readCookie(req.headers.cookie, STAFF_COOKIE));
+    return Boolean(t && t.expiresAt - STAFF_TTL_MS >= (d.config()?.staffNotBefore ?? 0));
+  };
   /** One-time sign-in links already used (nonce → expiry). */
   const usedLinks = new Map<string, number>();
 
@@ -90,7 +96,7 @@ export function createGateway(d: GatewayDeps) {
     const now = Date.now();
     for (const [n, exp] of usedLinks) if (exp < now) usedLinks.delete(n);
     const link = verifyToken(d.coreToken, "staff-link", url.searchParams.get("t") ?? undefined, now);
-    if (!link || !link.nonce || usedLinks.has(link.nonce)) {
+    if (!link || !link.nonce || usedLinks.has(link.nonce) || link.expiresAt - STAFF_LINK_TTL_MS < (cfg.staffNotBefore ?? 0)) {
       return send(res, 403, simplePage(cfg.venue, "Link expired", "This sign-in link has expired or was already used. Open it again from the box admin."));
     }
     usedLinks.set(link.nonce, link.expiresAt);
@@ -131,6 +137,9 @@ export function createGateway(d: GatewayDeps) {
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const cfg = d.config();
+    // The container's own health check (compose; bgctl self-update waits on it). Loopback
+    // only, so it's never a public path and never shadows a game's.
+    if (req.url === GATEWAY_HEALTH_PATH && isLoopback(req.socket.remoteAddress)) return send(res, cfg ? 200 : 503, JSON.stringify({ ok: Boolean(cfg) }), "application/json");
     if (!cfg) return send(res, 503, simplePage(undefined, "Starting up", "The game box is starting. Try again in a moment."));
     const route = findRoute(cfg, req) ?? consoleRoute(cfg, req);
     if (!route) return send(res, 404, simplePage(cfg.venue, "Not found", "There's nothing at this address."));
@@ -272,6 +281,10 @@ export function injectTheme(html: string, landingCtx?: VenueContext): string {
 }
 
 type PrefixedRequest = IncomingMessage & { bgPrefix?: string };
+
+/** Answered only to the gateway's own container: 200 once it has its routes from core. */
+export const GATEWAY_HEALTH_PATH = "/__bargames/gateway-health";
+const isLoopback = (ip: string | undefined) => ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
 
 /** A short tag of a JSON body, ignoring generatedAt (it changes on every config refresh). */
 export function contentTag(body: unknown): string {

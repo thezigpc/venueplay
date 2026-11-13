@@ -1,11 +1,11 @@
-import { createLogger, type GatewayConfig } from "@bargames/common";
+import { createLogger, STAFF_TTL_MS, type GatewayConfig } from "@bargames/common";
 import { DEFAULT_THEME } from "@bargames/sdk";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { checkAccess, inCidr, isPrivate, parseCidr, parseIp, prefixCidr } from "./ipgate.js";
-import { createGateway, injectTheme } from "./server.js";
+import { createGateway, GATEWAY_HEALTH_PATH, injectTheme } from "./server.js";
 
 test("ip parsing: v4, v6, mapped, compressed", () => {
   assert.deepEqual(Array.from(parseIp("192.168.1.5")!.bytes), [192, 168, 1, 5]);
@@ -254,6 +254,19 @@ test("staff sign-in: a box-signed link sets the staff cookie; games get the head
     const forged = await get("/admin", { cookie: "bg_staff=staff.9999999999999.x.forged" });
     assert.equal(forged.status, 401, "a forged cookie isn't staff: the venue PIN is still asked");
     assert.equal(seen.length, 0);
+
+    // Box 0.15.1: a password change ("sign everyone out") ends staff sign-ins from before it.
+    const early = signToken("core-tok", "staff-link", Date.now() + 60_000, "before-revoke");
+    (cfg as { staffNotBefore?: number }).staffNotBefore = Date.now() + 1;
+    assert.equal((await get("/admin", { cookie })).status, 401, "the old staff cookie is refused");
+    assert.equal(seen.length, 0);
+    assert.equal((await get(`/__bargames/staff?t=${encodeURIComponent(early)}&next=/admin`)).status, 403, "so is a link made before it");
+    const fresh = signToken("core-tok", "staff", Date.now() + 5 + STAFF_TTL_MS, "after");
+    assert.equal((await get("/admin", { cookie: `bg_staff=${fresh}` })).status, 200, "a sign-in after it works");
+
+    // The container health check: answered on loopback only, and not as a game path.
+    const health = await new Promise<number>((resolve, reject) => request(`${base}${GATEWAY_HEALTH_PATH}`, (res) => (res.resume(), resolve(res.statusCode!))).on("error", reject).end());
+    assert.equal(health, 200);
   } finally {
     gw.close();
     upstream.close();

@@ -1,3 +1,4 @@
+import type { AuthRecord } from "./auth.js";
 import { JsonStore, type GatewayAccess } from "@bargames/common";
 import { DEFAULT_THEME, type Announcement, type Countdown, type GameBranding, type GameManifest, type IntegrationPermission, type VenueLocation, type VenueTheme, type WifiInfo } from "@bargames/sdk";
 import path from "node:path";
@@ -139,7 +140,7 @@ export function openState(dataDir: string) {
     appSecrets: new JsonStore<Record<string, Record<string, string>>>(path.join(dataDir, "app-secrets.json"), {}, 0o600),
     /** What each TV shows when the box boots (display id → rule; absent: what it showed last). */
     tvStartup: new JsonStore<Record<string, StartupRule>>(path.join(dataDir, "tv-startup.json"), {}),
-    auth: new JsonStore<{ passwordHash?: string }>(path.join(dataDir, "auth.json"), {}),
+    auth: new JsonStore<AuthRecord>(path.join(dataDir, "auth.json"), {}, 0o600),
     /** The box's saved Wi-Fi networks, with passwords: owner-only. The host helper reads this file. */
     wifi: new JsonStore<WifiSettings>(path.join(dataDir, "wifi.json"), { networks: [] }, 0o600),
     // Holds the Cloudflare API token and tunnel token: owner-only.

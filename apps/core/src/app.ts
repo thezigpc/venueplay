@@ -1,4 +1,4 @@
-import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_TTL_MS, type Logger } from "@bargames/common";
+import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_LINK_TTL_MS, STAFF_TTL_MS, type Logger } from "@bargames/common";
 import { PasswordLimiter } from "./limiter.js";
 import { HostSampler } from "./systemStats.js";
 import { cleanScene, cleanSchedule, closingTimeScene, dueNow, WAKE_RETRY_MS, WAKE_TRIES, type Scene, type Schedule, type TvCaps } from "./scenes.js";
@@ -410,6 +410,7 @@ export function createApp(d: AppDeps) {
           coreUrl: d.config.internalUrl,
           boxVersion: d.config.boxVersion,
           setupRequired: !d.auth.isSetup(),
+          staffNotBefore: d.auth.staffNotBefore(),
           announcement: d.state.announcement.get(),
           countdown: d.state.countdown.get(),
           leaderboards: venueExtras().leaderboards,
@@ -532,6 +533,44 @@ export function createApp(d: AppDeps) {
     if (!d.auth.check(readCookie(req.headers.cookie, ADMIN_COOKIE))) return next(new HttpError(401, "login required"));
     next();
   });
+
+  /**
+   * Change the admin password: { current, next }. Every session ends, here and in games
+   * (staff sign-ins), except this browser's, which is signed back in. Wrong "current"
+   * passwords count against the same limits as the login.
+   */
+  app.post(
+    "/api/auth/password",
+    h(async (req, res) => {
+      const ip = clientIpOf(req);
+      const { current, next } = (req.body ?? {}) as { current?: unknown; next?: unknown };
+      if (!passwords.allowed(ip)) throw new HttpError(429, "too many wrong passwords; try again in 15 minutes");
+      if (typeof current !== "string" || !d.auth.verify(current)) {
+        passwords.failed(ip);
+        throw new HttpError(403, "The current password is wrong.");
+      }
+      passwords.succeeded(ip);
+      if (typeof next !== "string") throw new HttpError(400, "next: the new password");
+      if (next === current) throw new HttpError(400, "The new password is the same as the current one.");
+      await d.auth.setPassword(next).catch((e: Error) => {
+        throw new HttpError(400, e.message);
+      });
+      login(req, res);
+      d.log.info("auth", "admin password changed; all other sessions ended", { by: ip });
+      res.json({ ok: true });
+    }),
+  );
+
+  /** Ends every session but this one: other browsers, and staff sign-ins in games. */
+  app.post(
+    "/api/auth/logout-everywhere",
+    h(async (req, res) => {
+      await d.auth.revokeAll();
+      login(req, res);
+      d.log.info("auth", "all other sessions ended", { by: clientIpOf(req) });
+      res.json({ ok: true });
+    }),
+  );
 
   // A change to TVs, scenes or games: integrations re-sync (only those whose view changed).
   app.use("/api", (req, res, next) => {
@@ -1796,7 +1835,7 @@ export function createApp(d: AppDeps) {
       const raw = typeof req.query.path === "string" ? req.query.path : (adminPath(game.manifest) ?? "/");
       const next = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
       const base = buildContext(d.state.venue.get(), game).game.publicUrl!;
-      const t = signToken(d.config.gatewayToken, "staff-link", Date.now() + 2 * 60_000, randomBytes(9).toString("base64url"));
+      const t = signToken(d.config.gatewayToken, "staff-link", Date.now() + STAFF_LINK_TTL_MS, randomBytes(9).toString("base64url"));
       const url = new URL(joinUrl(base, PATHS.staff));
       url.searchParams.set("t", t);
       url.searchParams.set("next", next);

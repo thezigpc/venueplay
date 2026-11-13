@@ -44,11 +44,14 @@ for img in bargames bargames-broker; do
 done
 
 # Snapshot the whole deploy folder (compose, .env, bgctl, host helpers, core/broker data).
-# Game data lives in Docker volumes and isn't touched by an update.
+# Game data lives in Docker volumes and isn't touched by an update. Bluetooth pairings
+# (data/bluetooth) are left out: they're root-only, so reading them would fail without
+# sudo, and neither an update nor a rollback changes them.
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 mkdir -p "$BACKUPS"
 snap="$BACKUPS/bargames-$current-to-$target-$stamp.tgz"
-tar -czf "$snap" -C "$here" .
+tar -czf "$snap" -C "$here" --exclude=./data/bluetooth . || fail "couldn't snapshot $here (nothing was changed)"
+chmod 600 "$snap"
 say "snapshot: $snap"
 
 rollback() {
@@ -89,15 +92,23 @@ say "pulling $target…"
 docker compose --project-directory "$here" -f "$here/docker-compose.yml" pull core gateway broker || rollback "pull failed"
 docker compose --project-directory "$here" -f "$here/docker-compose.yml" up -d --remove-orphans || rollback "start failed"
 
-say "waiting for core to come up healthy…"
+# Every service must come up, not only core: a release whose gateway or broker won't start
+# is rolled back too. (Up to 3 minutes: the gateway starts after core is healthy.)
+say "waiting for core, the gateway and the broker to come up healthy…"
+state_of() { docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || echo missing; }
 i=0
-while [ "$i" -lt 60 ]; do
-  state=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' bargames-core 2>/dev/null || echo missing)
-  [ "$state" = "healthy" ] && break
+bad=""
+while [ "$i" -lt 90 ]; do
+  bad=""
+  for c in bargames-core bargames-gateway bargames-broker; do
+    s=$(state_of "$c")
+    [ "$s" = "healthy" ] || bad="$bad $c($s)"
+  done
+  [ -z "$bad" ] && break
   i=$((i + 1))
   sleep 2
 done
-[ "$state" = "healthy" ] || rollback "core didn't become healthy (state: $state)"
+[ -z "$bad" ] || rollback "not healthy after 3 minutes:$bad"
 
 # Host helpers may have changed with the release: reinstall them when running as root.
 if [ "$(id -u)" = 0 ] && [ -x "$here/host/install.sh" ]; then "$here/host/install.sh" > /dev/null || say "note: host helpers didn't reinstall; run host/install.sh"; fi

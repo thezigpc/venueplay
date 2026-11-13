@@ -9,3 +9,6 @@ deploy/data/
 # Machine-local notes (dev box address, logins): never committed.
 CLAUDE.local.md
 __pycache__/
+
+# Handoff plans and other machine-local notes: never committed.
+*.local.md

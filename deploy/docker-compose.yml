@@ -56,6 +56,12 @@ services:
     networks: [bargames]
     depends_on:
       core: { condition: service_healthy }
+    # Healthy once it has its routes from core. bgctl self-update waits for this.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7080/__bargames/gateway-health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
 
   broker:
     build: { context: .., dockerfile: deploy/Dockerfile, target: broker, args: { BOX_VERSION: "${BARGAMES_VERSION:-dev}" } }
@@ -90,6 +96,12 @@ services:
     cap_add: [NET_ADMIN]
     group_add: ["${RENDER_GID:-991}", "${VIDEO_GID:-44}", "${AUDIO_GID:-29}"]
     shm_size: 2gb
+    # bgctl self-update waits for this, so a release whose broker won't start is rolled back.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7200/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
 
   docker-proxy:
     # Only the Docker API calls core needs. Core never sees the raw socket.

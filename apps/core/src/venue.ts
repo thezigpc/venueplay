@@ -100,6 +100,8 @@ export function buildGatewayConfig(input: {
   coreUrl: string;
   boxVersion: string;
   setupRequired: boolean;
+  /** Staff sign-ins from before this (ms) are no longer good (AdminAuth.staffNotBefore). */
+  staffNotBefore?: number;
   announcement?: Partial<Announcement>;
   countdown?: Partial<Countdown>;
   leaderboards?: LeaderboardSummary[];
@@ -150,6 +152,7 @@ export function buildGatewayConfig(input: {
     hub: { games: hub },
     setupRequired: input.setupRequired,
     adminUrl: adminUrl(venue),
+    ...(input.staffNotBefore ? { staffNotBefore: input.staffNotBefore } : {}),
   };
 }
 

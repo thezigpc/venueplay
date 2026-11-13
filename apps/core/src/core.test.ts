@@ -113,6 +113,32 @@ test("api: setup, install, brand, events, gateway config", async () => {
     assert.equal(underAdmin.status, 200);
     assert.match(underAdmin.headers.get("set-cookie")!, /bg_admin=[^;]+;.*Path=\/admin\/;/);
 
+    // Box 0.15.1: changing the password ends every other session, here and (through the
+    // gateway's staffNotBefore) staff sign-ins in games; the browser that changed it stays in.
+    const other = (await json("POST", "/api/auth/login", { password: "correct horse" })).headers.get("set-cookie")!.split(";")[0];
+    assert.equal((await json("POST", "/api/auth/password", { current: "correct horse", next: "battery staple" })).status, 401, "needs a session");
+    assert.equal((await json("POST", "/api/auth/password", { current: "nope", next: "battery staple" }, authed)).status, 403);
+    assert.equal((await json("POST", "/api/auth/password", { current: "correct horse", next: "short" }, authed)).status, 400);
+    assert.equal((await json("POST", "/api/auth/password", { current: "correct horse", next: "correct horse" }, authed)).status, 400);
+    assert.equal(((await (await json("GET", "/internal/gateway-config", undefined, { authorization: "Bearer gw" })).json()) as { staffNotBefore?: number }).staffNotBefore, undefined, "nothing revoked yet");
+    const changedAt = Date.now();
+    const changed = await json("POST", "/api/auth/password", { current: "correct horse", next: "battery staple" }, authed);
+    assert.equal(changed.status, 200);
+    assert.equal((await json("GET", "/api/games", undefined, authed)).status, 401, "the old session is over");
+    assert.equal((await json("GET", "/api/games", undefined, { cookie: other })).status, 401, "and every other one");
+    authed.cookie = changed.headers.get("set-cookie")!.split(";")[0];
+    assert.equal((await json("GET", "/api/games", undefined, authed)).status, 200, "the browser that changed it is signed back in");
+    assert.equal((await json("POST", "/api/auth/login", { password: "correct horse" })).status, 401);
+    const notBefore = ((await (await json("GET", "/internal/gateway-config", undefined, { authorization: "Bearer gw" })).json()) as { staffNotBefore?: number }).staffNotBefore!;
+    assert.ok(notBefore >= changedAt && notBefore <= Date.now(), "the gateway hears when");
+    // "Sign out everywhere": the same, without a new password.
+    const second = (await json("POST", "/api/auth/login", { password: "battery staple" })).headers.get("set-cookie")!.split(";")[0];
+    const out = await json("POST", "/api/auth/logout-everywhere", undefined, authed);
+    assert.equal(out.status, 200);
+    assert.equal((await json("GET", "/api/games", undefined, { cookie: second })).status, 401);
+    authed.cookie = out.headers.get("set-cookie")!.split(";")[0];
+    assert.equal((await json("GET", "/api/games", undefined, authed)).status, 200);
+
     const inst = await json("POST", "/api/games/install", { manifest, devTarget: "http://127.0.0.1:7300" }, authed);
     assert.equal(inst.status, 200);
     const installed = (await inst.json()) as { game: { token?: string; host: string } };
