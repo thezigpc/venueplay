@@ -2,8 +2,12 @@
 // logins that fall back to it (SDK 0.8.0).
 //   - Per source (an IP, or game + IP): 10 wrong in 15 minutes locks that source.
 //   - Box-wide: 50 wrong in 15 minutes from remote sources locks remote sources out. Logins
-//     from the venue LAN (`lan: true`) neither count toward it nor are blocked by it, so a
-//     guest can't lock staff out of their own box (box 0.15.1).
+//     from the venue LAN (`lan: true`) neither count toward it nor are blocked by it, so
+//     wrong tries from the internet or through a game's login form can't lock staff out of
+//     their own box (box 0.15.1).
+//   - Venue LAN: 100 wrong in 15 minutes across all LAN sources locks LAN logins. Without
+//     it, someone on the venue Wi-Fi could change address after every 10 tries and guess
+//     without bound. Locking staff out this way takes 100 tries from 10 or more addresses.
 //   - Per group (a game id): 30 wrong in 15 minutes through one game's login form locks that
 //     game's checks. The client IP a game reports is only the game's word, so the per-source
 //     key alone could be dodged by varying it.
@@ -15,13 +19,15 @@ export interface LimiterOptions {
   global?: number;
   /** Failures within one group (a game's login form) before that group is locked out. */
   perGroup?: number;
+  /** Failures across all venue-LAN sources before LAN logins are locked out. */
+  lanTotal?: number;
   windowMs?: number;
   lockMs?: number;
 }
 
 /** Where an attempt comes from, beyond its source key. */
 export interface AttemptScope {
-  /** From the venue LAN (the gateway's proven "local" decision): only the per-source limit applies. */
+  /** From the venue LAN (the gateway's proven "local" decision): its own limit and the LAN-wide one, never the box-wide one. */
   lan?: boolean;
   /** A game's login form: its id. */
   group?: string;
@@ -34,13 +40,14 @@ interface Bucket {
 }
 
 const GLOBAL = "*";
+const LAN = "*lan";
 
 export class PasswordLimiter {
   private readonly buckets = new Map<string, Bucket>();
   private readonly o: Required<LimiterOptions>;
 
   constructor(o: LimiterOptions = {}) {
-    this.o = { perSource: 10, global: 50, perGroup: 30, windowMs: 15 * 60_000, lockMs: 15 * 60_000, ...o };
+    this.o = { perSource: 10, global: 50, perGroup: 30, lanTotal: 100, windowMs: 15 * 60_000, lockMs: 15 * 60_000, ...o };
   }
 
   private bucket(key: string, now: number): Bucket {
@@ -55,7 +62,7 @@ export class PasswordLimiter {
   /** The buckets an attempt counts against, with their limits. */
   private keys(source: string, scope: AttemptScope): [string, number][] {
     const out: [string, number][] = [[`src:${source}`, this.o.perSource]];
-    if (!scope.lan) out.push([GLOBAL, this.o.global]);
+    out.push(scope.lan ? [LAN, this.o.lanTotal] : [GLOBAL, this.o.global]);
     if (scope.group) out.push([`grp:${scope.group}`, this.o.perGroup]);
     return out;
   }
@@ -70,7 +77,7 @@ export class PasswordLimiter {
       const b = this.bucket(key, now);
       if (++b.fails >= max) b.lockedUntil = now + this.o.lockMs;
     }
-    if (this.buckets.size > 5000) for (const [k, b] of this.buckets) if (k !== GLOBAL && b.lockedUntil < now && now - b.since > this.o.windowMs) this.buckets.delete(k);
+    if (this.buckets.size > 5000) for (const [k, b] of this.buckets) if (k !== GLOBAL && k !== LAN && b.lockedUntil < now && now - b.since > this.o.windowMs) this.buckets.delete(k);
   }
 
   succeeded(source: string): void {

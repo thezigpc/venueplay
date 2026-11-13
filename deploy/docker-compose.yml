@@ -77,7 +77,7 @@ services:
     environment:
       PORT: "7200"
       # Only core calls the broker's API: it reaches it at host.docker.internal (docker0).
-      # Not the venue LAN. (A name that isn't found falls back to 0.0.0.0.)
+      # Not the venue LAN. (A name that can't be resolved falls back to 0.0.0.0.)
       HOST: ${BROKER_HOST:-127.0.0.1,docker0}
       DATA_DIR: /data
       BROKER_TOKEN: ${BROKER_TOKEN}

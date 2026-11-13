@@ -417,12 +417,47 @@ test("broker listen hosts: IPs and interface names; anything unresolved falls ba
     docker0: [{ address: "fe80::1", family: "IPv6" }, { address: "172.17.0.1", family: "IPv4" }],
     tun0: [{ address: "fd00::1", family: "IPv6" }],
   } as unknown as Parameters<typeof listenHosts>[1];
-  assert.deepEqual(listenHosts("127.0.0.1,docker0", ifaces), { hosts: ["127.0.0.1", "172.17.0.1"] });
-  assert.deepEqual(listenHosts(" 127.0.0.1 , 127.0.0.1 ", ifaces), { hosts: ["127.0.0.1"] });
-  assert.deepEqual(listenHosts(undefined, ifaces), { hosts: ["0.0.0.0"] });
-  assert.deepEqual(listenHosts("127.0.0.1,0.0.0.0", ifaces), { hosts: ["0.0.0.0"] });
-  const missing = listenHosts("127.0.0.1,docker9", ifaces);
+  const none = () => ({});
+  assert.deepEqual(listenHosts("127.0.0.1,docker0", ifaces, none), { hosts: ["127.0.0.1", "172.17.0.1"] });
+  assert.deepEqual(listenHosts(" 127.0.0.1 , 127.0.0.1 ", ifaces, none), { hosts: ["127.0.0.1"] });
+  assert.deepEqual(listenHosts(undefined, ifaces, none), { hosts: ["0.0.0.0"] });
+  assert.deepEqual(listenHosts("127.0.0.1,0.0.0.0", ifaces, none), { hosts: ["0.0.0.0"] });
+  const missing = listenHosts("127.0.0.1,docker9", ifaces, none);
   assert.deepEqual(missing.hosts, ["0.0.0.0"], "never lose the broker: listen everywhere");
   assert.match(missing.problem!, /docker9/);
-  assert.deepEqual(listenHosts("tun0", ifaces).hosts, ["0.0.0.0"], "IPv6-only interface: not usable");
+  assert.deepEqual(listenHosts("tun0", ifaces, none).hosts, ["0.0.0.0"], "IPv6-only interface: not usable");
+
+  // The real case: docker0 has no carrier (no container on the default bridge), so Node
+  // doesn't list it. Its address comes from the kernel's tables (as read on the bench box).
+  const { addressFromProc } = await import("./listen.js");
+  const proc = {
+    route: `Iface	Destination	Gateway 	Flags	RefCnt	Use	Metric	Mask		MTU	Window	IRTT
+eno1	00000000	010200C0	0003	0	0	100	00000000	0	0	0
+eno1	000200C0	00000000	0001	0	0	100	00FFFFFF	0	0	0
+docker0	000011AC	00000000	0001	0	0	0	0000FFFF	0	0	0
+`,
+    fibTrie: `Main:
+  +-- 0.0.0.0/0 3 0 5
+     |-- 0.0.0.0
+        /0 universe UNICAST
+Local:
+  +-- 0.0.0.0/0 2 0 2
+     +-- 127.0.0.0/8 2 0 2
+        |-- 127.0.0.1
+           /32 host LOCAL
+     +-- 172.17.0.0/16 2 0 2
+        |-- 172.17.0.1
+           /32 host LOCAL
+        |-- 172.17.255.255
+           /32 link BROADCAST
+     |-- 192.0.2.13
+        /32 host LOCAL
+`,
+  };
+  const noDocker0 = { lo: ifaces!.lo } as typeof ifaces;
+  assert.equal(addressFromProc("docker0", proc), "172.17.0.1");
+  assert.equal(addressFromProc("eno1", proc), "192.0.2.13", "the default route's line is skipped");
+  assert.equal(addressFromProc("wlan9", proc), undefined);
+  assert.equal(addressFromProc("docker0", {}), undefined, "off Linux: no tables");
+  assert.deepEqual(listenHosts("127.0.0.1,docker0", noDocker0, () => proc), { hosts: ["127.0.0.1", "172.17.0.1"] });
 });

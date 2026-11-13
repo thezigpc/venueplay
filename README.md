@@ -66,8 +66,8 @@ asks you to choose the admin password; after that it's the admin login.
   a fresh box.
 - Change the password under Settings → Sign-in. Changing it (or "Sign out everywhere
   else") signs out every other device, including staff signed in to games' admin pages.
-- Wrong passwords and wrong venue PINs are limited. Logins from the venue LAN are never
-  locked out by guests' wrong tries.
+- Wrong passwords and wrong venue PINs are limited. Wrong tries from the internet or
+  through a game's login form never lock out logins from the venue LAN.
 
 Host helpers: run `sudo deploy/host/install.sh` once. The admin's Reboot and Update
 buttons and the **Box Wi-Fi** page need it; later updates started from the admin reinstall
