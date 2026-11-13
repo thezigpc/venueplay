@@ -24,6 +24,7 @@ import {
   compareVersions,
   PATHS,
   isApp,
+  isIntegration,
   joinUrl,
   injectBasePath,
   normalizeBasePath,
@@ -40,6 +41,7 @@ import { GameRegistry, HttpError } from "./games.js";
 import { certificateWarning, checkPattern, hostFor } from "./hostnames.js";
 import { idleScreenUrl } from "./idleScreen.js";
 import { imageState, UpdateChecker } from "./updates.js";
+import { IntegrationHub, type HubDisplay } from "./integrations.js";
 import { checkStartupRule, StartupRunner, type StartupRule } from "./startup.js";
 import { fetchManifest } from "./manifestSource.js";
 import { RoomCache } from "./roomCache.js";
@@ -69,6 +71,10 @@ export interface AppDeps {
     castAnswerMs?: number;
     /** bgctl's token (ops endpoints). Absent: they're off. */
     opsToken?: string;
+    /** Integrations: this box's stable id, who may run on the host network, catalog poll. */
+    integrationBoxId?: string;
+    trustedOwners?: string[];
+    integrationPollMs?: number;
   };
   fetch?: typeof fetch;
 }
@@ -103,9 +109,35 @@ export function createApp(d: AppDeps) {
 
   const gameAuth = (req: Request): InstalledGame => {
     const game = d.games.byToken(bearer(req.headers.authorization));
-    if (!game) throw new HttpError(401, "bad game token");
+    // Integrations have their own API (integrations.ts), never the games'.
+    if (!game || isIntegration(game.manifest)) throw new HttpError(401, "bad game token");
     return game;
   };
+
+  // ---- integrations (SDK 0.12.0): Matter, Home Assistant… (see integrations.ts)
+  const hub = new IntegrationHub({
+    games: d.games,
+    state: d.state,
+    runtime: d.runtime,
+    bus: d.bus,
+    log: d.log,
+    box: { id: d.config.integrationBoxId ?? "dev", version: d.config.boxVersion },
+    trustedOwners: d.config.trustedOwners ?? ["thezigpc"],
+    displays: async () => ((await brokerCall("GET", "/displays?health=1")) as HubDisplay[]) ?? [],
+    gameRows: () => {
+      const rooms = roomCache.snapshot();
+      const venue = d.state.venue.get();
+      return d.games
+        .list()
+        .filter((g) => g.enabled)
+        .map((g) => ({ id: g.id, name: buildContext(venue, g).game.displayName, kind: isApp(g.manifest) ? ("app" as const) : ("game" as const), rooms: rooms[g.id]?.length ?? 0 }));
+    },
+    runScene: (scene, by) => applyScene(scene, by),
+    tvPower: async (id, on) => void (await brokerCall("POST", `/displays/${encodeURIComponent(id)}/power`, { on })),
+    pollMs: d.config.integrationPollMs,
+  });
+  app.locals.integrations = hub;
+  hub.mountInternal(app);
 
   app.post(
     "/internal/events",
@@ -235,7 +267,7 @@ export function createApp(d: AppDeps) {
     }
   };
   const updates = new UpdateChecker({
-    games: () => d.games.list(),
+    games: () => d.games.all(),
     fetchManifest: (ref) => fetchManifest(ref, doFetch),
     imageState: (image) => imageState(image, doFetch),
     boxVersion: d.config.boxVersion,
@@ -482,6 +514,20 @@ export function createApp(d: AppDeps) {
   app.use("/api", (req, _res, next) => {
     if (!d.auth.check(readCookie(req.headers.cookie, ADMIN_COOKIE))) return next(new HttpError(401, "login required"));
     next();
+  });
+
+  // A change to TVs, scenes or games: integrations re-sync (only those whose view changed).
+  app.use("/api", (req, res, next) => {
+    if (req.method !== "GET" && /^\/(broker|scenes|games|integrations)\//.test(req.path)) {
+      res.on("finish", () => {
+        if (res.statusCode < 400) hub.changed();
+      });
+    }
+    next();
+  });
+  hub.mountAdmin(app, {
+    updateOf: (id) => updates.get(id),
+    afterChange: async () => undefined,
   });
 
   // ------------------------------------------------------------ system
@@ -801,7 +847,13 @@ export function createApp(d: AppDeps) {
   };
 
   /** Applies a scene: end rooms, announcement, countdown, then each TV. Returns what happened per step. */
-  const applyScene = async (scene: Scene) => {
+  const applyScene = async (scene: Scene, by = "admin") => {
+    const steps = await runSceneSteps(scene);
+    hub.sceneRan(scene.id, steps.every((s) => s.ok), by);
+    d.log.info("scenes", "applied", { scene: scene.id, by, steps: steps.length, failed: steps.filter((s) => !s.ok).length });
+    return steps;
+  };
+  const runSceneSteps = async (scene: Scene) => {
     const steps: { step: string; ok: boolean; message?: string }[] = [];
     if (scene.endRooms) {
       for (const g of d.games.list().filter((x) => x.enabled && x.manifest.sdk.level >= 3 && x.manifest.commands.includes("end"))) {
@@ -855,7 +907,6 @@ export function createApp(d: AppDeps) {
         steps.push({ step: `${a.displayId}: ${a.do}`, ok: false, message: (err as Error).message });
       }
     }
-    d.log.info("scenes", "applied", { scene: scene.id, steps: steps.length, failed: steps.filter((s) => !s.ok).length });
     return steps;
   };
 
@@ -936,7 +987,7 @@ export function createApp(d: AppDeps) {
       try {
         if (s.kind === "scene") {
           const scene = d.state.scenes.get().scenes.find((x) => x.id === s.sceneId);
-          if (scene) await applyScene(scene);
+          if (scene) await applyScene(scene, "schedule");
         } else if (s.gameId) {
           const target = s.displayIds?.length ? { displayIds: s.displayIds } : { group: s.group };
           await castGame(s.gameId, target, { title: s.title, firstJoinerHosts: true });
@@ -1493,7 +1544,7 @@ export function createApp(d: AppDeps) {
     id: g.id,
     name: buildContext(d.state.venue.get(), g).game.displayName,
     version: g.manifest.version,
-    kind: isApp(g.manifest) ? "app" : "game",
+    kind: isIntegration(g.manifest) ? "integration" : isApp(g.manifest) ? "app" : "game",
     enabled: g.enabled,
     state: await d.runtime.state(g.id).catch(() => "unknown"),
     source: g.source.kind === "url" ? g.source.ref : g.source.kind,
@@ -1502,7 +1553,7 @@ export function createApp(d: AppDeps) {
   app.get(
     "/internal/ops/games",
     opsAuth,
-    h(async (_req, res) => res.json({ box: d.config.boxVersion, lastCheck: updates.lastRun, games: await Promise.all(d.games.list().map(opsRow)) })),
+    h(async (_req, res) => res.json({ box: d.config.boxVersion, lastCheck: updates.lastRun, games: await Promise.all(d.games.all().map(opsRow)) })),
   );
   /** { gameId? }: re-check now (one game, or all). */
   app.post(
@@ -1515,7 +1566,7 @@ export function createApp(d: AppDeps) {
         if (!g) throw new HttpError(404, `no game "${id}" on this box`);
         await updates.check(g);
       } else await updates.checkAll();
-      res.json({ box: d.config.boxVersion, lastCheck: updates.lastRun, games: await Promise.all(d.games.list().map(opsRow)) });
+      res.json({ box: d.config.boxVersion, lastCheck: updates.lastRun, games: await Promise.all(d.games.all().map(opsRow)) });
     }),
   );
   /**
@@ -1540,7 +1591,8 @@ export function createApp(d: AppDeps) {
       const installed = await d.games.install({ manifest: m, source: { kind: "url", ref: fetched.url }, verified: false });
       await restartUpgraded(prev, installed.game);
       let game = installed.game;
-      if (enable === true && !game.enabled) {
+      // An integration is turned on in the admin, where the venue approves what it asks for.
+      if (enable === true && !game.enabled && !isIntegration(game.manifest)) {
         game = await d.games.patch(game.id, { enabled: true });
         await d.runtime.ensureRunning(game);
       }
@@ -1573,6 +1625,8 @@ export function createApp(d: AppDeps) {
   app.patch(
     "/api/games/:id",
     h(async (req, res) => {
+      const before = d.games.get(req.params.id);
+      if (before && isIntegration(before.manifest) && req.body?.enabled !== undefined) throw new HttpError(400, "turn integrations on and off under Settings → Smart home");
       const game = await d.games.patch(req.params.id, req.body ?? {});
       if (req.body?.enabled === true) await d.runtime.ensureRunning(game);
       if (req.body?.enabled === false) {
@@ -1589,6 +1643,7 @@ export function createApp(d: AppDeps) {
     h(async (req, res) => {
       const keepData = req.query.keepData !== "false";
       const origin = originOf(d.games.get(req.params.id));
+      hub.disconnect(req.params.id);
       await tvWatch.gameGone(req.params.id).catch(() => undefined);
       await d.runtime.remove(req.params.id, { keepData });
       const removed = await d.games.remove(req.params.id);

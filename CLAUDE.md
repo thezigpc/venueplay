@@ -8,7 +8,8 @@ Repo: https://github.com/thezigpc/venueplay (public, branch `main`). Commits use
 - npm workspaces, TypeScript (NodeNext), Express 4, React 18 + Vite 5, Node 22 images. These match the user's other games (Bingo, CAH, Pool).
 - Tests use `node:test` through tsx (`npm test`). Every package has `src/*.test.ts`.
 - Use `npm run build` before running anything compiled. `tsc -b` builds the referenced projects in order.
-- The game SDK (`packages/sdk`) must stay dependency-free and browser-safe, except the Node-only `server.ts`, `cli.ts` and `devbox.ts`.
+- The game SDK (`packages/sdk`) must stay dependency-free and browser-safe, except the Node-only `server.ts`, `cli.ts`, `devbox.ts` and `integration.ts`.
+- Integrations (kind "integration", box 0.14.0) are connector modules (Matter, Home Assistant) in their own repos. They get no routes, DNS or casting. `GameRegistry.list()` leaves them out (use `all()` / `integrations()`); they talk only to `/internal/integration/*` with the permissions the venue approved. Guide: docs/INTEGRATIONS.md.
 - Game repos consume the SDK as a vendored tarball from `integration/` (built with `npm run sdk:pack`). **Bump the SDK version for every re-pack.** A changed tarball with the same name breaks `npm ci` in the games (lockfile integrity). Keep `integration/README.md` in step with SDK changes.
 - Off a box, the SDK must change nothing in a game (no theme, no events, gateway headers ignored). Games rely on this.
 - Cloudflare: the box only touches DNS records that are CNAMEs to its own tunnel. Core runs `cloudflared` (`bargames-tunnel`) through the socket proxy.

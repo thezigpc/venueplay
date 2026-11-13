@@ -8,8 +8,8 @@
 
 import { createServer, request, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { connect } from "node:net";
-import { isApp, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
-import { HEADERS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
+import { isApp, isIntegration, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
+import { HEADERS, INTEGRATION_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
 import { DEFAULT_THEME } from "./theme.js";
 import { joinUrl, normalizeBasePath } from "./base.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -117,6 +117,24 @@ export const FAKE_TVS: readonly { id: string; name: string; group: string; unpai
   { id: "fake-unpaired", name: "Lounge (fake TV, not paired)", group: "Main room", unpaired: true },
 ];
 
+/** SDK 0.12.0: the mock box's pretend scenes, for integrations. */
+export const MOCK_SCENES: readonly { id: string; name: string }[] = [
+  { id: "bingo-night", name: "Bingo night" },
+  { id: "last-call", name: "Last call" },
+  { id: "all-tvs-off", name: "All TVs off" },
+];
+let fakePatioOnline = true;
+
+/** What an integration sees on the mock box (permissions from its manifest). */
+export function mockCatalog(perms: Set<string>): IntegrationCatalog {
+  const cat: IntegrationCatalog = { box: { id: "mock0000box00001", version: "dev", venue: "Test Venue" }, permissions: [...perms].sort() };
+  if (perms.has("scenes")) cat.scenes = MOCK_SCENES.map((s) => ({ ...s }));
+  if (perms.has("tvs") || perms.has("status"))
+    cat.tvs = FAKE_TVS.map((t) => ({ id: t.id, name: t.name, group: t.group, online: t.id === "fake-patio" ? fakePatioOnline : !t.unpaired, power: !t.unpaired, ...(perms.has("status") && t.id === "fake-bar" ? { showing: "Bingo · TEST" } : {}) }));
+  if (perms.has("status")) cat.games = [{ id: "bingo", name: "Bingo", kind: "game", rooms: 1 }, { id: "menu", name: "Menu", kind: "app", rooms: 0 }];
+  return cat;
+}
+
 export function mockBox(o: MockBoxOptions) {
   let countdown: Countdown | undefined;
   /** What the fake Roku (fake-bar) shows: "home" until a launch. */
@@ -216,6 +234,63 @@ export function mockBox(o: MockBoxOptions) {
       console.log(`${c.ok("launch")} ${b.app} on ${b.displayId} (pretend)`);
       fakeRokuApp = String(b.app);
       return json(200, { ok: true });
+    }
+    // SDK 0.12.0: integrations. Everything they declare counts as approved here.
+    if (req.url?.startsWith("/internal/integration/")) {
+      if (!o.manifest || !isIntegration(o.manifest)) return json(401, { error: 'not an integration (kind "integration" in bargames.json)' });
+      const perms = new Set<string>(o.manifest.integration?.permissions ?? []);
+      const need = (p: string) => {
+        if (perms.has(p)) return false;
+        console.log(c.bad(`✗ ${req.method} ${req.url}: needs the "${p}" permission in integration.permissions`));
+        json(403, { error: `the venue hasn't allowed "${p}" for this integration` });
+        return true;
+      };
+      const url = req.url.split("?")[0];
+      if (url === INTEGRATION_PATHS.catalog && req.method === "GET") return json(200, mockCatalog(perms));
+      if (url === INTEGRATION_PATHS.stream && req.method === "GET") {
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+        const send = (m: IntegrationMessage) => res.write(`data: ${JSON.stringify(m)}\n\n`);
+        send({ type: "hello", catalog: mockCatalog(perms) });
+        console.log(`${c.ok("stream")} connected; a pretend game event every 30 s, a TV going on/offline every 60 s`);
+        let n = 0;
+        const t = setInterval(() => {
+          n++;
+          if (perms.has("events")) send({ type: "event", event: { type: n % 2 ? "round_started" : "winner", gameId: "bingo", roomCode: "TEST", data: n % 2 ? { round: n } : { name: "Sam" }, at: new Date().toISOString() } });
+          if (n % 2 === 0) {
+            fakePatioOnline = !fakePatioOnline;
+            send({ type: "catalog", catalog: mockCatalog(perms) });
+          }
+        }, 30_000);
+        req.on("close", () => clearInterval(t));
+        return;
+      }
+      if (url === INTEGRATION_PATHS.report && req.method === "PUT") {
+        const r = JSON.parse((await readBody(req)) || "{}") as IntegrationReport;
+        if (!["setup", "ok", "warn", "error"].includes(r.state)) return json(400, { error: "state: setup, ok, warn or error" });
+        console.log(`${c.ok("report")} [${r.state}] ${r.message ?? ""}${r.pairing ? `\n    pairing: ${[r.pairing.qr, r.pairing.code].filter(Boolean).join(" · ")}` : ""}${(r.details ?? []).map((d) => `\n    ${d.label}: ${d.value}`).join("")}`);
+        return json(200, { ok: true });
+      }
+      const scene = /^\/internal\/integration\/scenes\/([^/]+)\/run$/.exec(url);
+      if (scene && req.method === "POST") {
+        if (need("scenes")) return;
+        const id = decodeURIComponent(scene[1]);
+        if (!MOCK_SCENES.some((s) => s.id === id)) return json(404, { error: `no scene ${id}` });
+        console.log(`${c.ok("scene")} ${id} ran (pretend)`);
+        return json(200, { ok: true, steps: [{ step: `pretend scene ${id}`, ok: true }] });
+      }
+      const power = /^\/internal\/integration\/tvs\/([^/]+)\/power$/.exec(url);
+      if (power && req.method === "POST") {
+        if (need("tvs")) return;
+        const id = decodeURIComponent(power[1]);
+        const { on } = JSON.parse((await readBody(req)) || "{}") as { on?: unknown };
+        if (typeof on !== "boolean") return json(400, { error: "on: true or false" });
+        const tv = FAKE_TVS.find((t) => t.id === id);
+        if (!tv) return json(404, { error: `no TV ${id}` });
+        if (tv.unpaired) return json(400, { error: `${tv.name} can't be switched on or off by the box` });
+        console.log(`${c.ok("TV power")} ${id} ${on ? "on" : "off"} (pretend)`);
+        return json(200, { ok: true });
+      }
+      return json(404, { error: "not found" });
     }
     if (req.url?.startsWith("/internal/profiles")) return json(501, { error: "player profiles aren't built yet" });
     if (req.url === "/internal/venue") {

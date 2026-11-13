@@ -216,7 +216,13 @@ because the TVs are on the venue's network.
 
 ## Home Assistant link
 
-The box announces itself to HA over MQTT (HA's MQTT discovery), so HA creates the
+**Box 0.14.0:** this is a separate integration module, not part of the box. It runs on the
+box's integration API (see [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)), and the venue
+turns it on, configures it and updates it under Settings → Smart home. A Matter module (Alexa,
+Google Home, Apple Home: scenes as switches, TVs on and off) works the same way, for venues
+without Home Assistant.
+
+The module announces the box to HA over MQTT (HA's MQTT discovery), so HA creates the
 entities automatically:
 
 | HA entity | Examples |
@@ -290,7 +296,9 @@ from the earlier plan.
 - [ ] Settings: domain and hostnames, whitelist, Cloudflare status, pairing, updates
 
 ### Phase 5: Home Assistant link and hardening
-- [ ] MQTT discovery, game events, starter automations
+- [x] Integration foundation (box 0.14.0, SDK 0.12.0): kind "integration", permissions approved by the venue, settings, the integration API and stream, Settings → Smart home, the mock box
+- [ ] Matter module (scenes as switches, TV power) for Alexa, Google Home and Apple Home
+- [ ] Home Assistant module: MQTT discovery, game events, starter automations
 - [ ] Optional WAF list sync; optional split DNS (the router points game hostnames at the box, with a Let's Encrypt certificate obtained through the Cloudflare token) so phones work during internet outages
 - [ ] Health alerts (box → HA → you), tagged releases, a snapshot before every update
 

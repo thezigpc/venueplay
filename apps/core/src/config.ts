@@ -29,6 +29,18 @@ export const config = {
   adminDist: process.env.ADMIN_DIST ?? path.resolve(here, "../../admin/dist"),
   /** Stable per-box id (tunnel names, so two boxes on one Cloudflare account never collide). */
   boxId: createHash("sha256").update(persistentSecret(dataDir, "box.id")).digest("hex").slice(0, 6),
+  /** Integrations' box id (a Matter serial number, Home Assistant unique ids): longer, same source. */
+  integrationBoxId: createHash("sha256").update(`integration:${persistentSecret(dataDir, "box.id")}`).digest("hex").slice(0, 16),
+  /**
+   * Core as an integration on the host network ("lan") reaches it: compose publishes core's
+   * port on the host's loopback only (never the LAN).
+   */
+  hostCoreUrl: process.env.CORE_HOST_URL ?? "http://127.0.0.1:7100",
+  /**
+   * GitHub owners whose integrations may be given the "lan" permission (the host's network).
+   * Comma-separated; "*" trusts any (development only).
+   */
+  trustedOwners: (process.env.TRUSTED_OWNERS ?? "thezigpc").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
   tunnel: {
     image: process.env.CLOUDFLARED_IMAGE ?? "cloudflare/cloudflared:2026.10.4",
     /** The stack's network: cloudflared must reach the gateway there. */

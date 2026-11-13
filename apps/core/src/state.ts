@@ -1,5 +1,5 @@
 import { JsonStore, type GatewayAccess } from "@bargames/common";
-import { DEFAULT_THEME, type Announcement, type Countdown, type GameBranding, type GameManifest, type VenueLocation, type VenueTheme, type WifiInfo } from "@bargames/sdk";
+import { DEFAULT_THEME, type Announcement, type Countdown, type GameBranding, type GameManifest, type IntegrationPermission, type VenueLocation, type VenueTheme, type WifiInfo } from "@bargames/sdk";
 import path from "node:path";
 import type { CloudflareSettings } from "./cloudflare/service.js";
 import type { StartupRule } from "./startup.js";
@@ -69,6 +69,11 @@ export interface InstalledGame {
   token: string;
   /** Development only: reach the game here instead of its container. */
   devTarget?: string;
+  /**
+   * Integrations (SDK 0.12.0): the permissions the venue approved. An update that asks for
+   * more keeps running with these until the venue approves the new ones.
+   */
+  granted?: IntegrationPermission[];
 }
 
 export const DEFAULT_VENUE: VenueSettings = {

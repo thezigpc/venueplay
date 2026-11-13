@@ -1,6 +1,6 @@
 import { randomToken, type JsonStore } from "@bargames/common";
-import type { GameBranding, GameManifest } from "@bargames/sdk";
-import { isHexColor } from "@bargames/sdk";
+import type { GameBranding, GameManifest, IntegrationPermission } from "@bargames/sdk";
+import { isHexColor, isIntegration } from "@bargames/sdk";
 import { isLabel } from "./hostnames.js";
 import type { InstalledGame } from "./state.js";
 
@@ -17,16 +17,38 @@ export interface GamePatch {
 export class GameRegistry {
   constructor(private readonly store: JsonStore<{ games: InstalledGame[] }>) {}
 
+  /** Games and apps: everything players, TVs, hostnames and the gateway deal with. */
   list(): InstalledGame[] {
+    return this.store.get().games.filter((g) => !isIntegration(g.manifest));
+  }
+
+  /** Integrations (SDK 0.12.0): connectors with no pages (Settings → Smart home). */
+  integrations(): InstalledGame[] {
+    return this.store.get().games.filter((g) => isIntegration(g.manifest));
+  }
+
+  /** Everything installed: what runs in a container and gets update checks. */
+  all(): InstalledGame[] {
     return this.store.get().games;
   }
 
   get(id: string): InstalledGame | undefined {
-    return this.list().find((g) => g.id === id);
+    return this.all().find((g) => g.id === id);
   }
 
   byToken(token: string): InstalledGame | undefined {
-    return token ? this.list().find((g) => g.token === token) : undefined;
+    return token ? this.all().find((g) => g.token === token) : undefined;
+  }
+
+  /** Approves an integration's permissions (all it declares now). */
+  async grant(id: string, permissions: IntegrationPermission[]): Promise<InstalledGame> {
+    const game = this.get(id);
+    if (!game) throw new HttpError(404, `no integration ${id}`);
+    const next: InstalledGame = { ...game, granted: [...new Set(permissions)].sort() as IntegrationPermission[], updatedAt: new Date().toISOString() };
+    await this.store.update((d) => {
+      d.games = d.games.map((g) => (g.id === id ? next : g));
+    });
+    return next;
   }
 
   /** Installs or upgrades. Upgrades keep the venue's settings, branding and token. */
@@ -69,7 +91,7 @@ export class GameRegistry {
       const alias = patch.hostnameAlias?.trim().toLowerCase() || undefined;
       if (alias && !isLabel(alias)) throw new HttpError(400, "hostnameAlias must be a single DNS label (a-z, 0-9, -)");
       if (alias && RESERVED_PATHS.includes(alias)) throw new HttpError(400, `"${alias}" is reserved by the box`);
-      const clash = alias && this.list().find((g) => g.id !== id && (g.hostnameAlias ?? g.id) === alias);
+      const clash = alias && this.all().find((g) => g.id !== id && (g.hostnameAlias ?? g.id) === alias);
       if (clash) throw new HttpError(409, `hostname "${alias}" is used by ${clash.id}`);
       next.hostnameAlias = alias;
     }
@@ -80,11 +102,11 @@ export class GameRegistry {
   }
 
   async remove(id: string): Promise<boolean> {
-    const before = this.list().length;
+    const before = this.all().length;
     await this.store.update((d) => {
       d.games = d.games.filter((g) => g.id !== id);
     });
-    return this.list().length < before;
+    return this.all().length < before;
   }
 }
 

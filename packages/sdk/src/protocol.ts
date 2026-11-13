@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.11.4";
+export const SDK_VERSION = "0.12.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -453,3 +453,93 @@ export interface BoxTv {
 }
 
 export type LaunchResult = { ok: true } | { ok: false; reason: "not-allowed" | "unsupported" | "offline" | "ecp-blocked" | "error"; message: string };
+
+// ---------------------------------------------------------------- integrations (SDK 0.12.0)
+// Connectors to other systems (Matter, Home Assistant, a POS). Node helper:
+// "@bargames/sdk/integration". Each call carries the integration's BG_GAME_TOKEN and is
+// limited to the permissions the venue approved (403 otherwise).
+
+/** The box's integration API, on BG_CORE_URL. */
+export const INTEGRATION_PATHS = {
+  /** GET: what the integration may see (IntegrationCatalog). */
+  catalog: "/internal/integration/catalog",
+  /** GET: server-sent events, one IntegrationMessage per "data:" line. */
+  stream: "/internal/integration/stream",
+  /** PUT: the integration's own state for the box admin (IntegrationReport). */
+  report: "/internal/integration/report",
+  /** POST: run a scene. Permission "scenes". */
+  scene: (id: string) => `/internal/integration/scenes/${encodeURIComponent(id)}/run`,
+  /** POST { on: boolean }: switch a TV on or off. Permission "tvs". */
+  tvPower: (id: string) => `/internal/integration/tvs/${encodeURIComponent(id)}/power`,
+} as const;
+
+export interface IntegrationScene {
+  id: string;
+  name: string;
+}
+
+export interface IntegrationTv {
+  id: string;
+  name: string;
+  group?: string;
+  online: boolean;
+  /** The box can switch it on and off (paired for control where the TV needs it). */
+  power: boolean;
+  /** "Status" permission: what it shows now (a game's name, "Idle", an input). */
+  showing?: string;
+}
+
+export interface IntegrationGame {
+  id: string;
+  name: string;
+  kind: "game" | "app";
+  rooms: number;
+}
+
+/** What an integration may see. Lists it has no permission for are left out. */
+export interface IntegrationCatalog {
+  box: {
+    /** Stable for this box (a serial number for Matter, a unique id for Home Assistant). */
+    id: string;
+    version: string;
+    venue: string;
+  };
+  /** What the venue approved. */
+  permissions: string[];
+  scenes?: IntegrationScene[];
+  tvs?: IntegrationTv[];
+  games?: IntegrationGame[];
+}
+
+/** One message on the integration stream. The first is always "hello". */
+export type IntegrationMessage =
+  | { type: "hello"; catalog: IntegrationCatalog }
+  /** Scenes, TVs or games changed (renamed, added, removed, switched on or off). */
+  | { type: "catalog"; catalog: IntegrationCatalog }
+  /** A game event (permission "events"). */
+  | { type: "event"; event: BarGamesEvent }
+  /** A scene ran, from anywhere (the admin, a schedule, an integration). Permission "scenes". */
+  | { type: "scene"; sceneId: string; ok: boolean; by: string; at: string }
+  /** Staff pressed one of the buttons from your report's `actions` on the Smart home page. */
+  | { type: "action"; action: string; at: string };
+
+/** The integration's own state, shown on the box admin's Smart home page. */
+export interface IntegrationReport {
+  /** "setup": waiting for the venue (settings, pairing); "ok"; "warn"; "error". */
+  state: "setup" | "ok" | "warn" | "error";
+  /** One short sentence, e.g. "Connected to Home Assistant" or "Not paired yet". */
+  message?: string;
+  /**
+   * A pairing code for the venue: the box shows `qr` (e.g. Matter's "MT:…" payload) as a
+   * QR code and `code` (e.g. the 11-digit manual code) as text.
+   */
+  pairing?: { qr?: string; code?: string; note?: string };
+  /** A few label/value lines (e.g. "Paired with: Alexa"). At most 12. */
+  details?: { label: string; value: string }[];
+  /**
+   * Buttons for the Smart home page (at most 4), e.g. { id: "reset", label: "Forget all
+   * pairings", confirm: "Alexa and Google will lose the box." }. A press arrives on the
+   * stream as { type: "action", action: id }. Ids: lowercase letters, digits and dashes.
+   */
+  actions?: { id: string; label: string; confirm?: string }[];
+}

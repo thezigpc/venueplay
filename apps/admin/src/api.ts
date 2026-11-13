@@ -1,5 +1,5 @@
 import { bgUrl } from "@bargames/sdk";
-import type { BarGamesEvent, GameBranding, GameManifest, VenueContext, VenueLocation, VenueTheme, WifiInfo } from "@bargames/sdk";
+import type { BarGamesEvent, GameBranding, IntegrationReport, GameManifest, VenueContext, VenueLocation, VenueTheme, WifiInfo } from "@bargames/sdk";
 
 export class ApiError extends Error {
   constructor(
@@ -359,6 +359,12 @@ export const api = {
   clearAnnouncement: () => call<null>("DELETE", "/announcement"),
   idleTvs: (target: { displayIds?: string[]; group?: string } = {}) => call<Record<string, ShowResult>>("POST", "/tvs/idle", target),
   gameStatus: (id: string) => call<{ rooms: RoomSummary[] }>("GET", `/games/${encodeURIComponent(id)}/status`),
+  integrations: () => call<{ integrations: Integration[] }>("GET", "/integrations"),
+  enableIntegration: (id: string, on: boolean, approve = false) => call<Integration>("POST", `/integrations/${encodeURIComponent(id)}/enable`, { on, approve }),
+  integrationAction: (id: string, action: string) => call<{ ok: boolean }>("POST", `/integrations/${encodeURIComponent(id)}/actions/${encodeURIComponent(action)}`, {}),
+  approveIntegration: (id: string) => call<Integration>("POST", `/integrations/${encodeURIComponent(id)}/approve`, {}),
+  integrationSettings: (id: string, values: Record<string, string | null>) => call<Integration>("PUT", `/integrations/${encodeURIComponent(id)}/settings`, { values }),
+  integrationQrUrl: (id: string, at?: string) => bgUrl(`/api/integrations/${encodeURIComponent(id)}/pairing.svg${at ? `?at=${encodeURIComponent(at)}` : ""}`),
   secrets: (gameId: string) => call<{ secrets: { name: string; length: number }[] }>("GET", `/games/${encodeURIComponent(gameId)}/secrets`),
   setSecret: (gameId: string, name: string, value: string | null) =>
     call("PUT", `/games/${encodeURIComponent(gameId)}/secrets/${encodeURIComponent(name)}`, { value }),
@@ -377,3 +383,24 @@ export const api = {
   cloudflareDisconnect: () => call("DELETE", "/cloudflare"),
   show: (target: { displayIds?: string[]; group?: string }, content: { kind: string; url?: string }) => call<Record<string, ShowResult>>("POST", "/broker/show", { ...target, content }),
 };
+
+/** SDK 0.12.0: an integration (Matter, Home Assistant…), as Settings → Smart home shows it. */
+export interface Integration {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  homepage?: string;
+  source: string;
+  trusted: boolean;
+  enabled: boolean;
+  state: string;
+  permissions: { id: string; text: string; granted: boolean }[];
+  needsApproval: string[];
+  blocked: string[];
+  settings: { name: string; label: string; secret?: boolean; required?: boolean; placeholder?: string; help?: string; set: boolean; value?: string }[];
+  report?: IntegrationReport;
+  reportAt?: string;
+  connected: boolean;
+  update?: UpdateInfo;
+}

@@ -29,7 +29,8 @@ export function GamesPage() {
   const install = () =>
     run(async () => {
       const r = await api.install(url, sub.trim().toLowerCase());
-      setNotes([`${r.upgraded ? "Updated" : "Installed"} ${r.game.manifest.name} ${r.game.manifest.version}${r.game.verified ? "" : " (unverified source)"}. Turn it on in the list below.`, ...r.warnings]);
+      const where = r.game.manifest.kind === "integration" ? "It's a smart-home connection: turn it on under Settings → Smart home." : "Turn it on in the list below.";
+      setNotes([`${r.upgraded ? "Updated" : "Installed"} ${r.game.manifest.name} ${r.game.manifest.version}${r.game.verified ? "" : " (unverified source)"}. ${where}`, ...r.warnings]);
       setUrl("");
       setSub("");
     });

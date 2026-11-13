@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 // The sandbox every game runs in. Pure function so it can be unit-tested and reviewed.
 
-import { ENV } from "@bargames/sdk";
+import { ENV, isIntegration } from "@bargames/sdk";
 import type { InstalledGame } from "../state.js";
 
 export const names = (id: string) => ({
@@ -25,42 +25,56 @@ export interface ContainerSpec {
   body: Record<string, unknown>;
 }
 
-export function containerSpec(game: InstalledGame, opts: { coreUrl: string; publicUrl: string; basePath?: string; secrets?: Record<string, string> }): ContainerSpec {
+/**
+ * True when this integration runs on the host's network (permission "lan", approved).
+ * It then reaches core at hostCoreUrl (core's port on the host's loopback only).
+ */
+export const onHostNetwork = (game: InstalledGame): boolean => isIntegration(game.manifest) && Boolean(game.granted?.includes("lan")) && Boolean(game.manifest.integration?.permissions.includes("lan"));
+
+export function containerSpec(game: InstalledGame, opts: { coreUrl: string; hostCoreUrl?: string; publicUrl: string; basePath?: string; secrets?: Record<string, string> }): ContainerSpec {
   const m = game.manifest;
   const n = names(game.id);
+  const integration = isIntegration(m);
+  const host = onHostNetwork(game);
+  const web = m.port > 0;
   const env: Record<string, string> = {
     ...m.env,
     // Per-app secret settings from the box admin (never in the manifest). BG_* below win.
     ...opts.secrets,
-    PORT: String(m.port),
+    ...(web ? { PORT: String(m.port) } : {}),
     [ENV.gameId]: game.id,
-    [ENV.coreUrl]: opts.coreUrl,
+    [ENV.coreUrl]: host ? (opts.hostCoreUrl ?? opts.coreUrl) : opts.coreUrl,
     [ENV.token]: game.token,
-    [ENV.publicUrl]: opts.publicUrl,
+    ...(integration ? { BG_PERMISSIONS: (game.granted ?? []).join(",") } : { [ENV.publicUrl]: opts.publicUrl }),
     [ENV.dataDir]: "/data",
     // Path routing (SDK 0.10.0): only set when the game is served under a prefix.
-    ...(opts.basePath ? { [ENV.basePath]: opts.basePath } : {}),
+    ...(opts.basePath && !integration ? { [ENV.basePath]: opts.basePath } : {}),
   };
   return {
     name: n.container,
     // internal: no route to the internet or the LAN; only core and the gateway are attached.
-    network: { name: n.network, internal: !m.network.internet },
+    // An integration on the host network has none of its own.
+    network: { name: host ? "host" : n.network, internal: !m.network.internet },
     volume: n.volume,
     body: {
       Image: m.image,
       Env: Object.entries(env).map(([k, v]) => `${k}=${v}`),
-      ExposedPorts: { [`${m.port}/tcp`]: {} },
+      ...(web && !host ? { ExposedPorts: { [`${m.port}/tcp`]: {} } } : {}),
       // envhash: the whole env, so a changed *or removed* setting recreates the container.
-      Labels: { "bargames.game": game.id, "bargames.version": m.version, "bargames.managed": "true", "bargames.envhash": envHash(env) },
-      Healthcheck: {
-        Test: ["CMD-SHELL", `node -e "fetch('http://127.0.0.1:${m.port}${m.health}').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" || wget -qO- http://127.0.0.1:${m.port}${m.health} >/dev/null`],
-        Interval: 30e9,
-        Timeout: 5e9,
-        StartPeriod: 20e9,
-        Retries: 3,
-      },
+      Labels: { "bargames.game": game.id, "bargames.version": m.version, "bargames.managed": "true", "bargames.envhash": envHash(integration ? { ...env, __network: host ? "host" : "own" } : env) },
+      ...(web
+        ? {
+            Healthcheck: {
+              Test: ["CMD-SHELL", `node -e "fetch('http://127.0.0.1:${m.port}${m.health}').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" || wget -qO- http://127.0.0.1:${m.port}${m.health} >/dev/null`],
+              Interval: 30e9,
+              Timeout: 5e9,
+              StartPeriod: 20e9,
+              Retries: 3,
+            },
+          }
+        : {}),
       HostConfig: {
-        NetworkMode: n.network,
+        NetworkMode: host ? "host" : n.network,
         Memory: parseMemory(m.resources.memory),
         NanoCpus: Math.round(m.resources.cpus * 1e9),
         PidsLimit: 256,

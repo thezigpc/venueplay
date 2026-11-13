@@ -21,6 +21,17 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.12.0 (integrations)
+
+- **Games and apps: nothing to change.** 0.12.0 adds a third kind of module, `"integration"`:
+  connectors such as Matter and Home Assistant, with no pages, managed under the box's
+  Settings → Smart home. They have their own guide:
+  [docs/INTEGRATIONS.md](../docs/INTEGRATIONS.md). They use the Node helper
+  `@bargames/sdk/integration` and run against `bargames mock-box` like a game.
+- Your game's events (level 2) now also reach integrations the venue has allowed to hear
+  them. A `winner` event can then flash the lights through Home Assistant. Keep sending the
+  standard events.
+
 ## What's new in SDK 0.11.0 (announcements anywhere, quickly; a way back to the box admin)
 
 - **Venue changes arrive in seconds.** On box 0.12.0 the gateway holds `watchVenue()`'s

@@ -18,8 +18,50 @@ export interface ContentPack {
  * "app" (SDK 0.6.0): anything else the venue runs on the box (menus, signage, a jukebox):
  * no rooms, listed under Apps. "display" (SDK 0.5.0) is the old name for "app", still accepted.
  */
-export const MODULE_KINDS = ["game", "app", "display"] as const;
+export const MODULE_KINDS = ["game", "app", "display", "integration"] as const;
 export type ModuleKind = (typeof MODULE_KINDS)[number];
+
+/**
+ * SDK 0.12.0, integrations: connectors between the box and other systems (Matter,
+ * Home Assistant, a POS). No pages and no rooms; they talk to the box's integration API
+ * with what the venue approved:
+ *   scenes  list the venue's scenes and run them
+ *   tvs     list the TVs and switch them on or off
+ *   status  read what's on: games, open rooms, what each TV shows
+ *   events  receive game events and box changes as they happen
+ *   lan     run on the venue network itself (the host's network), e.g. for Matter's
+ *           discovery. Only granted to integrations from a source the box trusts.
+ */
+export const INTEGRATION_PERMISSIONS = ["scenes", "tvs", "status", "events", "lan"] as const;
+export type IntegrationPermission = (typeof INTEGRATION_PERMISSIONS)[number];
+
+/** What the box admin says when it asks the venue to approve a permission. */
+export const PERMISSION_TEXT: Record<IntegrationPermission, string> = {
+  scenes: "See and run your scenes",
+  tvs: "See your TVs and switch them on or off",
+  status: "See which games are on, open rooms and what each TV shows",
+  events: "Hear game events (rounds, winners) as they happen",
+  lan: "Use the venue network directly (needed to be found by Alexa, Google or Apple Home)",
+};
+
+/**
+ * A setting the venue fills in on the box (Settings → Smart home), handed to the
+ * integration as an environment variable. Secret ones are never shown again.
+ */
+export interface IntegrationSetting {
+  /** The environment variable, e.g. "MQTT_URL". Capitals, digits and _, not BG_*. */
+  name: string;
+  label: string;
+  secret?: boolean;
+  required?: boolean;
+  placeholder?: string;
+  help?: string;
+}
+
+export interface IntegrationSpec {
+  permissions: IntegrationPermission[];
+  settings: IntegrationSetting[];
+}
 
 export interface GameManifest {
   /** Unique slug; also the default hostname label (pool → pool.example.com). */
@@ -72,6 +114,11 @@ export interface GameManifest {
    * box keeps the game on its own subdomain.
    */
   routing?: { basePath: boolean };
+  /**
+   * SDK 0.12.0: kind "integration" only. Integrations have no pages: port, routes and
+   * health may be left out (port 0 = no web server; the box then skips the health check).
+   */
+  integration?: IntegrationSpec;
   /** Static, non-secret environment. Keys starting with BG_ are reserved. */
   env: Record<string, string>;
   minBoxVersion?: string;
@@ -101,12 +148,21 @@ export function validateManifest(input: unknown): ManifestResult {
   if (!isStr(m.version) || !SEMVER.test(m.version)) errors.push("version: must be semver, e.g. 1.2.0");
   if (!isStr(m.image) || /\s/.test(m.image)) errors.push("image: required container image reference");
   else if (!m.image.includes("@sha256:")) warnings.push("image: not pinned by digest; releases should use image@sha256:…");
-  if (typeof m.port !== "number" || !Number.isInteger(m.port) || m.port < 1 || m.port > 65535) errors.push("port: integer 1-65535");
 
   const kind = m.kind === undefined ? "game" : m.kind;
   if (!(MODULE_KINDS as readonly unknown[]).includes(kind)) errors.push(`kind: ${MODULE_KINDS.join(" or ")}`);
-  const display = kind === "app" || kind === "display";
+  const integration = kind === "integration";
+  const display = kind === "app" || kind === "display" || integration;
   if (kind === "display") warnings.push('kind: "display" is now "app" (both work)');
+
+  // Integrations may run no web server at all (port 0 or left out).
+  const port = integration && m.port === undefined ? 0 : m.port;
+  const portMin = integration ? 0 : 1;
+  if (typeof port !== "number" || !Number.isInteger(port) || port < portMin || port > 65535) errors.push(`port: integer ${portMin}-65535`);
+
+  let spec: IntegrationSpec | undefined;
+  if (integration) spec = validateIntegration(m.integration, errors);
+  else if (m.integration !== undefined) warnings.push('integration: only used with kind "integration"');
 
   // sdk
   let level: IntegrationLevel = 0;
@@ -117,22 +173,23 @@ export function validateManifest(input: unknown): ManifestResult {
     else level = m.sdk.level as IntegrationLevel;
   }
 
-  // routes
-  const routes = isObj(m.routes) ? m.routes : undefined;
+  // routes (an integration has no pages: "/" stands in)
+  const routes = isObj(m.routes) ? m.routes : integration && m.routes === undefined ? { player: "/" } : undefined;
   if (!routes || !isStr(routes.player) || !routes.player.startsWith("/")) errors.push("routes.player: required path starting with /");
   for (const k of ["table", "host", "admin"] as const) {
     if (routes && routes[k] !== undefined && (!isStr(routes[k]) || !(routes[k] as string).startsWith("/"))) {
       errors.push(`routes.${k}: must be a path starting with /`);
     }
   }
-  if (routes && routes.table === undefined) {
+  if (routes && routes.table === undefined && !integration) {
     warnings.push(display ? "routes.table: no TV view; this app can't be cast to TVs or used on idle TVs" : "routes.table: no big-screen view; this game cannot be cast to TVs");
   }
   if (display && routes && isStr(routes.table) && routes.table.includes("{code}")) errors.push("routes.table: apps have no rooms, so no {code}");
-  if (display && level >= 2 && m.media === undefined) warnings.push("sdk.level: apps have no rooms; level 2+ room events and commands won't be used");
+  if (integration && routes && (routes.table !== undefined || routes.host !== undefined)) warnings.push("routes: integrations have no TV or host pages; only routes.admin is used");
+  if (!integration && display && level >= 2 && m.media === undefined) warnings.push("sdk.level: apps have no rooms; level 2+ room events and commands won't be used");
 
-  const health = m.health === undefined ? "/health" : m.health;
-  if (!isStr(health) || !health.startsWith("/")) errors.push("health: path starting with /");
+  const health = m.health === undefined ? (port === 0 ? "" : "/health") : m.health;
+  if (port !== 0 && (!isStr(health) || !health.startsWith("/"))) errors.push("health: path starting with /");
 
   const events = m.events === undefined ? [] : m.events;
   if (!strArray(events)) errors.push("events: array of strings");
@@ -145,7 +202,7 @@ export function validateManifest(input: unknown): ManifestResult {
     for (const e of events) if (!/^[a-z][a-z0-9_]*$/.test(e) && !/^x-[a-z0-9-]+$/.test(e)) errors.push(`events: "${e}" must be snake_case or x-custom`);
   }
 
-  const brandable = m.brandable === undefined ? (level >= 1 ? ["displayName", "accent"] : ["displayName"]) : m.brandable;
+  const brandable = m.brandable === undefined ? (integration ? [] : level >= 1 ? ["displayName", "accent"] : ["displayName"]) : m.brandable;
   if (!strArray(brandable) || !brandable.every((s) => (BRANDABLE_SLOTS as readonly string[]).includes(s))) {
     errors.push(`brandable: subset of ${BRANDABLE_SLOTS.join(", ")}`);
   }
@@ -197,14 +254,14 @@ export function validateManifest(input: unknown): ManifestResult {
   const manifest: GameManifest = {
     id: m.id as string,
     name: m.name as string,
-    kind: display ? "app" : (kind as ModuleKind),
+    kind: integration ? "integration" : display ? "app" : (kind as ModuleKind),
     version: m.version as string,
     description: m.description as string | undefined,
     author: m.author as string | undefined,
     homepage: m.homepage as string | undefined,
     license: m.license as string | undefined,
     image: m.image as string,
-    port: m.port as number,
+    port: port as number,
     sdk: { version: sdk.version, level },
     routes: {
       player: routes!.player as string,
@@ -224,8 +281,47 @@ export function validateManifest(input: unknown): ManifestResult {
     minBoxVersion: m.minBoxVersion as string | undefined,
     ...(media ? { media } : {}),
     ...(routing ? { routing } : {}),
+    ...(spec ? { integration: spec } : {}),
   };
   return { ok: true, manifest, warnings };
+}
+
+const SETTING_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+function validateIntegration(v: unknown, errors: string[]): IntegrationSpec | undefined {
+  if (!isObj(v)) {
+    errors.push("integration: required object { permissions, settings? } for kind integration");
+    return undefined;
+  }
+  const perms = v.permissions === undefined ? [] : v.permissions;
+  if (!strArray(perms) || !perms.every((p) => (INTEGRATION_PERMISSIONS as readonly string[]).includes(p))) {
+    errors.push(`integration.permissions: subset of ${INTEGRATION_PERMISSIONS.join(", ")}`);
+    return undefined;
+  }
+  const settings = v.settings === undefined ? [] : v.settings;
+  const out: IntegrationSetting[] = [];
+  if (!Array.isArray(settings)) errors.push("integration.settings: array of { name, label, secret?, required?, placeholder?, help? }");
+  else {
+    const seen = new Set<string>();
+    for (const s of settings) {
+      if (!isObj(s) || !isStr(s.name) || !isStr(s.label)) {
+        errors.push("integration.settings: each needs a name and a label");
+        continue;
+      }
+      if (!SETTING_NAME.test(s.name) || s.name.startsWith("BG_") || s.name === "PORT") errors.push(`integration.settings: "${s.name}" must be CAPITALS_AND_UNDERSCORES, not BG_* or PORT`);
+      if (seen.has(s.name)) errors.push(`integration.settings: "${s.name}" is listed twice`);
+      seen.add(s.name);
+      out.push({
+        name: s.name,
+        label: s.label.slice(0, 60),
+        ...(s.secret === true ? { secret: true } : {}),
+        ...(s.required === true ? { required: true } : {}),
+        ...(isStr(s.placeholder) ? { placeholder: s.placeholder.slice(0, 100) } : {}),
+        ...(isStr(s.help) ? { help: s.help.slice(0, 300) } : {}),
+      });
+    }
+  }
+  return { permissions: [...new Set(perms)] as IntegrationPermission[], settings: out };
 }
 
 /** The game's own admin page: routes.admin, or for an app its routes.host (where 0.6.0 apps put it). */
@@ -233,6 +329,9 @@ export const adminPath = (m: Pick<GameManifest, "kind" | "routes">): string | un
 
 /** True for apps (menus, signage…), including SDK 0.5.0's "display". No kind: a game. */
 export const isApp = (m: Pick<GameManifest, "kind">): boolean => m.kind === "app" || m.kind === "display";
+
+/** True for integrations (SDK 0.12.0): connectors with no pages, listed under Smart home. */
+export const isIntegration = (m: Pick<GameManifest, "kind">): boolean => m.kind === "integration";
 
 /** @deprecated SDK 0.5.0 name; use isApp. */
 export const isDisplayModule = isApp;

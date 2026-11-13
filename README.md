@@ -8,7 +8,8 @@ A self-hosted game-night box for venues. It runs these services:
 - an iPad page controls all of it.
 
 The plan is in [GAMEPLAN.md](GAMEPLAN.md), the big picture is in [VISION.md](VISION.md),
-and the game integration guide is in [docs/SDK.md](docs/SDK.md).
+and the game integration guide is in [docs/SDK.md](docs/SDK.md). Connector modules
+(Matter, Home Assistant) follow [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
 
 ## Layout
 
@@ -97,10 +98,11 @@ Docker socket. Each game gets:
 - the Docker runtime and sandbox, verified on bg-box
 - the Cloudflare setup wizard (Internet tab: tunnel, routes, DNS, connector), described in [docs/CLOUDFLARE.md](docs/CLOUDFLARE.md)
 - the game integration hand-off in `integration/`, with the SDK's mock box and conformance check
+- integrations (box 0.14.0, SDK 0.12.0): connector modules such as Matter and Home Assistant, installed and updated on their own, limited to what the venue approves (Settings → Smart home). Guide: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)
 
 **Not built yet:**
 - the casting pipeline (Chromium → QuickSync → AirPlay/HLS)
-- the Home Assistant/MQTT sink
+- the Matter and Home Assistant modules themselves (separate repos, built on the integration API)
 - signed Market catalogs
 - the placard generator
 - schedules

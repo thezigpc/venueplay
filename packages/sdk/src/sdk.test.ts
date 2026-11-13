@@ -621,3 +621,35 @@ test("0.11.0: announcement where/position, boxAdminUrl, and watchVenue follows a
     globalThis.fetch = realFetch;
   }
 });
+
+test("integration helper against the mock box: catalog, permissions, scenes, TV power, stream", async () => {
+  const { createIntegration } = await import("./integration.js");
+  const { mockBox, DEV_TOKEN } = await import("./devbox.js");
+  const m = validateManifest({ id: "ha", name: "HA", kind: "integration", version: "0.1.0", image: "x/ha:0.1.0", sdk: { version: "0.12.0", level: 0 }, integration: { permissions: ["scenes", "events"] } });
+  assert.ok(m.ok);
+  const box = mockBox({ gameId: "ha", displayName: "HA (mock)", gameUrl: "http://127.0.0.1:9", corePort: 0, gatewayPort: 0, manifest: m.ok ? m.manifest : undefined });
+  await new Promise((r) => box.core.once("listening", r));
+  const log = console.log;
+  console.log = () => undefined;
+  try {
+    const it = createIntegration({ coreUrl: `http://127.0.0.1:${(box.core.address() as AddressInfo).port}`, token: DEV_TOKEN });
+    const cat = await it.catalog();
+    assert.deepEqual(cat.permissions, ["events", "scenes"]);
+    assert.equal(cat.tvs, undefined, "no tvs permission");
+    assert.equal((await it.runScene("bingo-night")).ok, true);
+    await assert.rejects(it.tvPower("fake-bar", true), /hasn't allowed "tvs"/);
+    assert.deepEqual(await it.report({ state: "ok", message: "fine" }), { ok: true });
+    const first = await new Promise<number>((resolve) => {
+      const stop = it.connect({ onCatalog: (c) => (stop(), resolve(c.scenes?.length ?? 0)) });
+    });
+    assert.equal(first, 3);
+    // Off a box: nothing to call.
+    const off = createIntegration({ coreUrl: "", token: "" });
+    assert.equal(off.onBox, false);
+    await assert.rejects(off.catalog(), /not running on a Bar Games box/);
+  } finally {
+    console.log = log;
+    box.core.close();
+    box.gateway.close();
+  }
+});

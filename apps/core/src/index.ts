@@ -23,6 +23,7 @@ const runtime: GameRuntime =
   config.runtime === "docker"
     ? new DockerRuntime(config.dockerUrl, {
         coreUrl: config.internalUrl,
+        hostCoreUrl: config.hostCoreUrl,
         attach: config.attachContainers,
         publicUrlFor: (g) => gameUrl(state.venue.get(), g),
         basePathFor: (g) => gamePath(g),
@@ -63,8 +64,8 @@ app.listen(config.port, () => {
     log.info("boot", "box just booted: applying TV startup choices", { uptimeSec: Math.round(os.uptime()) });
     setTimeout(() => (app.locals.startup as { start(): void }).start(), 15_000).unref();
   }
-  // Bring enabled games back after a reboot.
-  for (const g of games.list().filter((g) => g.enabled)) {
+  // Bring enabled games, apps and integrations back after a reboot.
+  for (const g of games.all().filter((g) => g.enabled)) {
     runtime.ensureRunning(g).catch((err) => log.error("runtime", "failed to start game", { game: g.id, err: String(err) }));
   }
 });

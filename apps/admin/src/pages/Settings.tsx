@@ -7,6 +7,7 @@ import { useLoad } from "../useLoad";
 import { AccessPage } from "./Access";
 import { InternetPage } from "./Internet";
 import { SchedulesCard } from "./Scenes";
+import { SmartHomePage } from "./SmartHome";
 import { SystemPage } from "./System";
 import { VenuePage } from "./Venue";
 import { WifiPage, wifiSummary } from "./Wifi";
@@ -18,6 +19,7 @@ const PAGES: Record<string, string> = {
   wifi: "Box Wi-Fi",
   system: "Box and updates",
   schedules: "Schedules",
+  "smart-home": "Smart home",
 };
 
 export function SettingsPage({ page }: { page?: string }) {
@@ -36,6 +38,7 @@ export function SettingsPage({ page }: { page?: string }) {
         {page === "wifi" && <WifiPage />}
         {page === "system" && <SystemPage />}
         {page === "schedules" && <SchedulesPage />}
+        {page === "smart-home" && <SmartHomePage />}
       </div>
     );
   }
@@ -50,6 +53,7 @@ function Hub() {
   const stats = useLoad(api.systemStats, 30_000);
   const schedules = useLoad(api.schedules);
   const wifi = useLoad(api.wifi, 30_000);
+  const integrations = useLoad(api.integrations, 30_000);
 
   const v = venue.data;
   const a = access.data;
@@ -58,6 +62,10 @@ function Hub() {
   const lastFailed = s?.update?.lastExit !== undefined && s.update.lastExit !== 0;
   const cfBad = Boolean(cf.data?.connected && cf.data.lastSync && !cf.data.lastSync.ok);
   const on = (schedules.data?.schedules ?? []).filter((x) => x.enabled);
+  const ints = integrations.data?.integrations ?? [];
+  const intsOn = ints.filter((x) => x.enabled);
+  const smartWarn = intsOn.some((x) => x.needsApproval.length || x.report?.state === "error" || x.report?.state === "warn");
+  const smartSummary = !ints.length ? "Alexa, Google Home, Apple Home, Home Assistant: not connected" : intsOn.length ? intsOn.map((x) => `${x.name}${x.report?.state === "setup" ? " (waiting for setup)" : x.report?.state === "error" ? " (not working)" : ""}`).join(" · ") : `${ints.length} added, all off`;
 
   return (
     <div>
@@ -95,6 +103,12 @@ function Hub() {
           to="schedules"
           title="Schedules"
           detail={schedules.data ? (on.length ? `${on.length} on: ${on.slice(0, 2).map((x) => `${x.title ?? (x.kind === "scene" ? "a scene" : "a game")} at ${x.time}`).join(" · ")}` : "None: start a game or scene by the clock") : schedules.error || "…"}
+        />
+        <Row
+          to="smart-home"
+          title="Smart home"
+          level={smartWarn ? "warn" : undefined}
+          detail={integrations.data ? smartSummary : integrations.error || "…"}
         />
         <button type="button" className="hub-logout" onClick={() => void api.logout().then(() => window.location.reload())}>
           Log out

@@ -27,6 +27,9 @@ services:
       ADMIN_DIST: /app/apps/admin/dist
       LOG_LEVEL: ${LOG_LEVEL:-info}
     extra_hosts: ["host.docker.internal:host-gateway"]
+    # Loopback only (never the LAN): integrations on the host network (Matter) reach core here.
+    # Every /internal route still needs its own token; /api needs the admin login.
+    ports: ["127.0.0.1:7100:7100"]
     volumes: ["./data/core:/data"]
     networks: [bargames, docker-api]
     healthcheck:

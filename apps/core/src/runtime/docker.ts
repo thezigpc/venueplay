@@ -4,7 +4,7 @@
 import type { Logger } from "@bargames/common";
 import type { InstalledGame } from "../state.js";
 import { containerCpuPercent, type ContainerStat } from "../systemStats.js";
-import { containerSpec, names, TUNNEL_CONTAINER, tunnelSpec } from "./spec.js";
+import { containerSpec, names, onHostNetwork, TUNNEL_CONTAINER, tunnelSpec } from "./spec.js";
 import type { GameRuntime, GameState, TunnelConnector } from "./types.js";
 
 export class DockerRuntime implements GameRuntime, TunnelConnector {
@@ -14,6 +14,8 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
     private readonly base: string,
     private readonly opts: {
       coreUrl: string;
+      /** Core as an integration on the host network reaches it (loopback-published port). */
+      hostCoreUrl?: string;
       attach: string[];
       publicUrlFor: (g: InstalledGame) => string;
       /** Path routing (SDK 0.10.0): the game's prefix, or undefined on its own hostname. */
@@ -38,23 +40,32 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
   }
 
   async ensureRunning(game: InstalledGame): Promise<void> {
-    const spec = containerSpec(game, { coreUrl: this.opts.coreUrl, publicUrl: this.opts.publicUrlFor(game), basePath: this.opts.basePathFor?.(game), secrets: this.opts.secretsFor?.(game.id) });
+    const spec = containerSpec(game, {
+      coreUrl: this.opts.coreUrl,
+      hostCoreUrl: this.opts.hostCoreUrl,
+      publicUrl: this.opts.publicUrlFor(game),
+      basePath: this.opts.basePathFor?.(game),
+      secrets: this.opts.secretsFor?.(game.id),
+    });
 
     // 1. Image.
     const imageId = await this.ensureImage(game.manifest.image);
 
-    // 2. Network, and attach core + gateway so they can reach the game.
-    const net = await this.call("GET", `/networks/${spec.network.name}`, undefined, [404]);
-    if (net.status === 404) {
-      await this.call("POST", "/networks/create", {
-        Name: spec.network.name,
-        Internal: spec.network.internal,
-        Labels: { "bargames.game": game.id, "bargames.managed": "true" },
-      });
-    }
-    for (const c of this.opts.attach) {
-      // 403/409 = already connected.
-      await this.call("POST", `/networks/${spec.network.name}/connect`, { Container: c }, [403, 409]);
+    // 2. Network, and attach core + gateway so they can reach the game. An integration on
+    // the host network ("lan") has no network of its own.
+    if (!onHostNetwork(game)) {
+      const net = await this.call("GET", `/networks/${spec.network.name}`, undefined, [404]);
+      if (net.status === 404) {
+        await this.call("POST", "/networks/create", {
+          Name: spec.network.name,
+          Internal: spec.network.internal,
+          Labels: { "bargames.game": game.id, "bargames.managed": "true" },
+        });
+      }
+      for (const c of this.opts.attach) {
+        // 403/409 = already connected.
+        await this.call("POST", `/networks/${spec.network.name}/connect`, { Container: c }, [403, 409]);
+      }
     }
 
     // 3. Container.

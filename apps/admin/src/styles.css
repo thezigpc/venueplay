@@ -328,3 +328,15 @@ button.tv-tile.selected { border-color: var(--primary); }
 .day-picks { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
 .day-pick { min-height: 44px; padding: 0; border-radius: 10px; background: none; border: 1px solid #3a4170; color: var(--text); font-size: 0.85rem; }
 .day-pick.on { background: var(--primary); border-color: var(--primary); color: #1b1b1b; font-weight: 600; }
+
+/* Smart home (integrations) */
+.integration.off { opacity: 0.85; }
+.integration .approve { border: 1px solid var(--warn, #e0a800); border-radius: 12px; padding: 12px 14px; }
+.integration .approve ul { margin: 4px 0 4px 18px; padding: 0; }
+.pairing { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.pairing img { background: #fff; border-radius: 12px; padding: 6px; }
+.pair-code { font-size: 1.3rem; letter-spacing: 0.06em; font-variant-numeric: tabular-nums; }
+.details { display: grid; gap: 4px; margin: 0; }
+.details div { display: flex; gap: 8px; flex-wrap: wrap; }
+.details dt { color: var(--muted); min-width: 120px; }
+.details dd { margin: 0; }
