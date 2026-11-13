@@ -151,6 +151,23 @@ export function createLogger(service: string, level: Level = (process.env.LOG_LE
 }
 export type Logger = ReturnType<typeof createLogger>;
 
+/** An error as a log field: message and stack only (never the request or anything attached to it). */
+export function errorText(err: unknown): string {
+  return err instanceof Error ? (err.stack ?? `${err.name}: ${err.message}`) : String(err);
+}
+
+/**
+ * Box 0.15.1: a stray rejected promise is logged and the service keeps running; an
+ * uncaught exception is logged and the process exits 1, so Docker restarts it clean.
+ */
+export function installCrashHandlers(log: Logger, exit: (code: number) => void = (c) => process.exit(c)): void {
+  process.on("unhandledRejection", (reason) => log.error("process", "unhandled promise rejection (kept running)", { err: errorText(reason) }));
+  process.on("uncaughtException", (err) => {
+    log.error("process", "uncaught exception: exiting so Docker restarts the service", { err: errorText(err) });
+    exit(1);
+  });
+}
+
 // ---------------------------------------------------------------- env
 
 export function envNum(name: string, fallback: number): number {

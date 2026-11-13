@@ -1,4 +1,4 @@
-import { createLogger, envNum, type GatewayConfig } from "@bargames/common";
+import { installCrashHandlers, createLogger, envNum, type GatewayConfig } from "@bargames/common";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +6,7 @@ import { VenueIpDetector } from "./publicIp.js";
 import { createGateway } from "./server.js";
 
 const log = createLogger("gateway");
+installCrashHandlers(log);
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 const port = envNum("PORT", 7080);

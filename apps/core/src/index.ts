@@ -1,6 +1,6 @@
 import os from "node:os";
 import { BOOT_WINDOW_SEC } from "./startup.js";
-import { createLogger } from "@bargames/common";
+import { installCrashHandlers, createLogger } from "@bargames/common";
 import { createApp } from "./app.js";
 import { AdminAuth } from "./auth.js";
 import { CloudflareService } from "./cloudflare/service.js";
@@ -14,6 +14,7 @@ import { openState } from "./state.js";
 import { allHosts, gamePath, gameUrl } from "./venue.js";
 
 const log = createLogger("core");
+installCrashHandlers(log);
 const state = openState(config.dataDir);
 const games = new GameRegistry(state.games);
 const bus = new EventBus(200, (sink, err) => log.warn("events", "sink failed", { sink, err: String(err) }));

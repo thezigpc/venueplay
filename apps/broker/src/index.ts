@@ -1,4 +1,4 @@
-import { createLogger, envNum, JsonStore } from "@bargames/common";
+import { installCrashHandlers, createLogger, envNum, JsonStore } from "@bargames/common";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,7 @@ import { audioFromEnv } from "./audio/index.js";
 import { listenHosts } from "./listen.js";
 
 const log = createLogger("broker");
+installCrashHandlers(log);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR ?? path.resolve(here, "../../../data/broker");
 const port = envNum("PORT", 7200);
