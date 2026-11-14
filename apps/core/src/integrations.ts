@@ -115,7 +115,9 @@ export function cleanReport(r: unknown): IntegrationReport | string {
   if (message) out.message = message;
   if (x.pairing && typeof x.pairing === "object") {
     const p = x.pairing as Record<string, unknown>;
-    const pairing = { qr: str(p.qr, 512), code: str(p.code, 40), note: str(p.note, 200) };
+    // SDK 0.13.1: expiresAt, an ISO time after which the admin shows the code as expired.
+    const exp = typeof p.expiresAt === "string" && Number.isFinite(Date.parse(p.expiresAt)) ? new Date(Date.parse(p.expiresAt)).toISOString() : undefined;
+    const pairing = { qr: str(p.qr, 512), code: str(p.code, 40), note: str(p.note, 200), expiresAt: exp };
     if (pairing.qr || pairing.code) out.pairing = Object.fromEntries(Object.entries(pairing).filter(([, v]) => v)) as IntegrationReport["pairing"];
   }
   if (Array.isArray(x.details)) {

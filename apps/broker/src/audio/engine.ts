@@ -12,7 +12,7 @@ import { randomBytes } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
 import type { JsonStore, Logger } from "@bargames/common";
 import { applyGain, BYTES_PER_SEC, gainFor, SampleAligner, SILENCE, toneStream, wavHeader } from "./pcm.js";
-import { DEFAULT_VOLUME, type AudioSettings, type OutputTarget, type OutputView, type SessionView, type TrackInfo } from "./types.js";
+import { DEFAULT_VOLUME, type AudioSettings, type EndReason, type OutputTarget, type OutputView, type SessionView, type TrackInfo } from "./types.js";
 
 export type Spawn = (cmd: string, args: string[]) => ChildProcess;
 
@@ -138,7 +138,7 @@ export class AudioEngine {
     if (target.kind === "tv" && !this.o.airplay) throw httpError(409, "Playing on TVs isn't available on this box.");
 
     const old = this.current(target.id);
-    if (old) this.stop(old.view.id, `Replaced by something else on ${target.name}.`);
+    if (old) this.stop(old.view.id, `Replaced by something else on ${target.name}.`, "replaced");
     if (target.kind === "bluetooth") await this.o.ensureBluetooth?.(target.address);
 
     const s: Session = {
@@ -173,7 +173,7 @@ export class AudioEngine {
       }
       void this.pump(s, source);
     } catch (err) {
-      this.finish(s, "error", `Couldn't start playing: ${(err as Error).message}`);
+      this.finish(s, "error", `Couldn't start playing: ${(err as Error).message}`, "error");
     }
     this.o.log.info("audio", "playing", { session: s.view.id, output: target.id, owner: req.owner });
     return this.view(s);
@@ -194,7 +194,7 @@ export class AudioEngine {
     return this.view(s);
   }
 
-  stop(id: string, message = "Stopped."): SessionView {
+  stop(id: string, message = "Stopped.", reason: EndReason = "stopped"): SessionView {
     const s = this.sessions.get(id);
     if (!s) throw httpError(404, "no such session");
     if (s.view.state !== "ended" && s.view.state !== "error") {
@@ -203,7 +203,7 @@ export class AudioEngine {
       s.wake?.();
       s.source?.kill("SIGTERM");
       s.sink?.kill("SIGTERM");
-      this.finish(s, "ended", message);
+      this.finish(s, "ended", message, reason);
     }
     return this.view(s);
   }
@@ -284,19 +284,20 @@ export class AudioEngine {
 
     if (sinkGone) {
       s.source?.kill("SIGTERM");
-      return this.finish(s, "error", sinkProblem(s.kind, s.sinkErr));
+      return this.finish(s, "error", sinkProblem(s.kind, s.sinkErr), s.kind === "box" ? "error" : "disconnected");
     }
     sink.end();
     const [srcCode, sinkCode] = await Promise.all([sourceExit, sinkExit]);
     if (s.stopped) return;
-    if (srcCode !== 0 && s.bytes === 0) return this.finish(s, "error", `Couldn't play that audio${gstProblem(s.sourceErr)}`);
+    if (srcCode !== 0 && s.bytes === 0) return this.finish(s, "error", `Couldn't play that audio${gstProblem(s.sourceErr)}`, "error");
     // aplay and the AirPlay helper exit 0 at the end of the stream; anything else is a failure.
-    if (sinkCode !== 0) return this.finish(s, "error", sinkProblem(s.kind, s.sinkErr));
-    this.finish(s, "ended", srcCode !== 0 ? `Stopped early${gstProblem(s.sourceErr)}` : undefined);
+    if (sinkCode !== 0) return this.finish(s, "error", sinkProblem(s.kind, s.sinkErr), s.kind === "box" ? "error" : "disconnected");
+    this.finish(s, "ended", srcCode !== 0 ? `Stopped early${gstProblem(s.sourceErr)}` : undefined, srcCode !== 0 ? "error" : "finished");
   }
 
-  private finish(s: Session, state: "ended" | "error", message?: string) {
+  private finish(s: Session, state: "ended" | "error", message: string | undefined, reason: EndReason) {
     if (s.view.state === "ended" || s.view.state === "error") return;
+    s.view.endReason = reason;
     s.view.positionMs = positionOf(s);
     s.view.state = state;
     s.view.endedAt = new Date().toISOString();

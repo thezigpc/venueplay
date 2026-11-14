@@ -210,6 +210,7 @@ test("engine: a URL plays through gstreamer into aplay on the default output, th
   src.emit("close", 0);
   await until(() => engine.get(s.id)!.state === "ended");
   assert.equal(engine.get(s.id)!.message, undefined);
+  assert.equal(engine.get(s.id)!.endReason, "finished");
   assert.equal(engine.list("app:music").length, 1, "ended sessions stay visible for a while");
   assert.equal(engine.list("app:other").length, 0);
 });
@@ -236,6 +237,7 @@ test("engine: volume scales samples; pause sends silence and holds the position"
   assert.equal(engine.get(s.id)!.state, "playing");
   const stopped = engine.stop(s.id);
   assert.equal(stopped.state, "ended");
+  assert.equal(stopped.endReason, "stopped");
   assert.ok(sink.killed && src.killed);
   assert.throws(() => engine.pause(s.id), /finished/);
 });
@@ -246,6 +248,7 @@ test("engine: one session per output; a new one replaces the old", async () => {
   const b = await engine.play({ tone: true, owner: "admin", title: "Test sound" });
   assert.equal(engine.get(a.id)!.state, "ended");
   assert.match(engine.get(a.id)!.message!, /Replaced/);
+  assert.equal(engine.get(a.id)!.endReason, "replaced");
   assert.equal((await engine.outputs())[0].session?.id, b.id);
   engine.stop(b.id);
 });

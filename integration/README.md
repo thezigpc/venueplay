@@ -21,6 +21,29 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.13.1 (join addresses, mock-box tools)
+
+- **Nothing breaks; every change is optional.** Update to it in your next release.
+- **"Join at <address>" under a QR code:** a venue address has no spaces, so it doesn't wrap
+  and can run out of a narrow box. New helpers:
+  - client `joinDisplay(ctx, path)` → `{ url, short }`: `url` for the QR code, `short`
+    ("play.example.net/bingo": no scheme, no room path) to print;
+  - `shortAddress(base)` (client and server) does the same for an address you already have.
+
+  Print `short` with a `<wbr>` after every "." and "/" and `overflow-wrap: anywhere`, and
+  shrink long ones. GameKit 0.7.3's `<JoinAddress>` does all of that; the box width stays
+  your own (`--join-max-width`).
+- **`bargames mock-box --public-url https://play.example.net/<id>`:** venue.json reports that
+  address, so you can test long addresses. Open the game on localhost as before.
+- **Apps at level 2+ that declare `events`** no longer get the "apps have no rooms" warning
+  from `bargames validate`.
+- **Sound:** a finished session has `endReason`: `finished`, `stopped`, `replaced`,
+  `disconnected` or `error` (box 0.15.4; absent on older boxes, so fall back to `state`).
+- **Integrations:** `report.pairing.expiresAt` (ISO time); the box admin greys the code out
+  after it. Mock-box controls under `/__bargames/dev/integration`: press a report button,
+  drop the stream, edit the catalog (see docs/INTEGRATIONS.md).
+- The SDK tarball now carries its MIT `LICENSE`.
+
 ## What's new in SDK 0.13.0 (sound on the venue's speakers)
 
 - **Games and apps that don't play sound: nothing to change.** `bg.playSound()` and

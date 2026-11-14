@@ -191,7 +191,9 @@ export function validateManifest(input: unknown): ManifestResult {
   }
   if (display && routes && isStr(routes.table) && routes.table.includes("{code}")) errors.push("routes.table: apps have no rooms, so no {code}");
   if (integration && routes && (routes.table !== undefined || routes.host !== undefined)) warnings.push("routes: integrations have no TV or host pages; only routes.admin is used");
-  if (!integration && display && level >= 2 && m.media === undefined) warnings.push("sdk.level: apps have no rooms; level 2+ room events and commands won't be used");
+  // SDK 0.13.1: an app that declares events uses level 2 (integrations hear them), so no warning.
+  const declaresEvents = Array.isArray(m.events) && m.events.length > 0;
+  if (!integration && display && level >= 2 && m.media === undefined && !declaresEvents) warnings.push("sdk.level: apps have no rooms; level 2+ room events and commands won't be used");
 
   const health = m.health === undefined ? (port === 0 ? "" : "/health") : m.health;
   if (port !== 0 && (!isStr(health) || !health.startsWith("/"))) errors.push("health: path starting with /");

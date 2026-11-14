@@ -490,4 +490,4 @@ export { AudioError, AudioUnavailable, createAudio, type Audio } from "./audio.j
 export type { AudioPlayOptions, AudioSession, AudioSessionState } from "./protocol.js";
 
 // SDK 0.10.0: running under a path prefix (see base.ts).
-export { BASE_META, basePathFromEnv, injectBasePath, joinUrl, normalizeBasePath } from "./base.js";
+export { BASE_META, basePathFromEnv, injectBasePath, joinUrl, normalizeBasePath, shortAddress } from "./base.js";

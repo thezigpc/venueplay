@@ -76,7 +76,7 @@ await bg.audio.stop(s.id);
 // Follow your sessions, e.g. to start the next song:
 const unwatch = bg.audio.watch((sessions) => {
   const mine = sessions.find((x) => x.id === s.id);
-  if (mine?.state === "ended") playNext();
+  if (mine?.endReason === "finished") playNext();      // SDK 0.13.1; older boxes: mine?.state === "ended"
   if (mine?.state === "error") tellStaff(mine.message);   // plain words: "The speaker disconnected."
 });
 ```
@@ -100,6 +100,10 @@ returns `{ ok, reason, sessionId }`. `reason` is one of:
 - **Another app's output:** if another app is playing there, `play` answers **409**, naming
   that app. Pass `replace: true` to take the output over, but only when staff asked for it.
 - **States:** `starting` → `playing` ⇄ `paused` → `ended`, or `error`.
+- **`endReason`** (SDK 0.13.1, box 0.15.4): why it ended, for code: `finished` (played to
+  the end), `stopped` (an app or staff stopped it, or the box restarted), `replaced`
+  (something else started on that output), `disconnected` (the speaker or TV went away) or
+  `error`. A queue moves on after `finished`. Older boxes leave it out: fall back to `state`.
 - **`message`:** an ended or failed session says why, for example "The app's audio file
   wasn't found.", "The speaker disconnected." or "Replaced by something else on Bar amp.".
   Show it to staff.

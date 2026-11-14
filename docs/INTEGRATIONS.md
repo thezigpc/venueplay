@@ -125,8 +125,11 @@ await box.report({ state: "ok", message: "Connected to Home Assistant", details:
     live in memory, so a box restart clears them.
   - `state`: `"setup"` (waiting for the venue), `"ok"`, `"warn"` or `"error"`.
   - `message`: one short sentence.
-  - `pairing`: `{ qr, code, note }`. The admin draws `qr` as a QR code, for example Matter's
-    `MT:…` payload, and shows `code` as text, for example the 11-digit manual pairing code.
+  - `pairing`: `{ qr, code, note, expiresAt? }`. The admin draws `qr` as a QR code, for
+    example Matter's `MT:…` payload, and shows `code` as text, for example the 11-digit manual
+    pairing code. `expiresAt` (SDK 0.13.1, an ISO time) is when the code stops working, such
+    as a 15-minute commissioning window: the admin shows the minutes left, then greys the
+    code out and says it expired, even if your integration never reports again.
   - `details`: up to 12 label/value lines.
   - `actions`: up to 4 buttons for the Smart home page, each `{ id, label, confirm? }`, for
     example `{ id: "reset", label: "Forget all pairings", confirm: "Alexa and Google will lose
@@ -160,6 +163,15 @@ BG_CORE_URL=http://127.0.0.1:7199 BG_GAME_TOKEN=dev-token npm run dev
   comes back every 60 seconds, so your code sees `catalog` updates.
 - **Events:** a pretend game event every 30 seconds, alternating `round_started` and `winner`.
 - **Logging:** it prints every scene run, TV switch and report, including the pairing payload.
+- **Test controls (SDK 0.13.1)**, on the mock gateway (default port 7080), no login:
+
+  | Request | Does |
+  |---|---|
+  | `GET /__bargames/dev/integration` | What the mock box holds: open streams, your last report, the catalog |
+  | `POST /__bargames/dev/integration/action/<id>` | Presses a button from your latest report (an `action` on the stream) |
+  | `POST /__bargames/dev/integration/drop` | Drops every stream, as a box restart does; check you reconnect and report again |
+  | `PUT /__bargames/dev/integration/catalog` | Body `{ scenes?, tvs?, games? }` replaces those lists and sends a `catalog` message |
+  | `DELETE /__bargames/dev/integration/catalog` | Back to the pretend lists |
 
 ## Publishing and installing
 

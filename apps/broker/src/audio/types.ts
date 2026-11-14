@@ -44,7 +44,11 @@ export interface SessionView extends TrackInfo {
   endedAt?: string;
   /** Why it ended or failed, in plain words. */
   message?: string;
+  /** Box 0.15.4 / SDK 0.13.1: why it ended, for apps to act on (a queue moves on after "finished"). */
+  endReason?: EndReason;
 }
+
+export type EndReason = "finished" | "stopped" | "replaced" | "disconnected" | "error";
 
 /** Saved per box (data/broker/audio.json). */
 export interface AudioSettings {

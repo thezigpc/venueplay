@@ -59,6 +59,12 @@ its own audio on the box's speakers. These are the box's jack or HDMI, Bluetooth
 and AirPlay TVs, which the venue sets up under Settings → Connected devices. Use
 `bg.audio` (or `@bargames/sdk/audio`) and `bg.fromBox(req)`. Guide: [AUDIO.md](AUDIO.md).
 
+**"Join at" addresses (SDK 0.13.1):** the client's `joinDisplay(ctx, path)` returns
+`{ url, short }`: `url` for the QR code, and `short` ("play.example.net/bingo") to print under
+it. Venue addresses have no spaces, so break `short` after "." and "/" (`<wbr>`) and shrink
+long ones; GameKit's `<JoinAddress>` does this. Test with
+`bargames mock-box --public-url https://play.example.net/<id>`.
+
 ## 2. What the box gives your container
 
 | Env var | Meaning |

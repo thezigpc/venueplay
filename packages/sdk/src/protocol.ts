@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.13.0";
+export const SDK_VERSION = "0.13.1";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -433,7 +433,17 @@ export interface AudioSession {
   endedAt?: string;
   /** Why it ended early or failed, in plain words (show it to staff). */
   message?: string;
+  /**
+   * SDK 0.13.1 (box 0.15.4): why it ended, for code. "finished": played to the end;
+   * "stopped": an app or staff stopped it (or the box restarted); "replaced": something
+   * else started on that output; "disconnected": the speaker or TV went away; "error":
+   * it couldn't play. A queue moves on after "finished", and usually after "error".
+   * Absent on older boxes: fall back to `state`.
+   */
+  endReason?: AudioEndReason;
 }
+
+export type AudioEndReason = "finished" | "stopped" | "replaced" | "disconnected" | "error";
 
 export interface AudioPlayOptions {
   /**
@@ -607,7 +617,17 @@ export interface IntegrationReport {
    * A pairing code for the venue: the box shows `qr` (e.g. Matter's "MT:…" payload) as a
    * QR code and `code` (e.g. the 11-digit manual code) as text.
    */
-  pairing?: { qr?: string; code?: string; note?: string };
+  pairing?: {
+    qr?: string;
+    code?: string;
+    note?: string;
+    /**
+     * SDK 0.13.1: when the code stops working (ISO time), e.g. a 15-minute commissioning
+     * window. After it the box admin greys the code out and says it expired, even if the
+     * integration never sends a new report.
+     */
+    expiresAt?: string;
+  };
   /** A few label/value lines (e.g. "Paired with: Alexa"). At most 12. */
   details?: { label: string; value: string }[];
   /**

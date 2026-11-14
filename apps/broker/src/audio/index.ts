@@ -197,7 +197,7 @@ export function mountAudio(app: Express, audio: BoxAudio | undefined): void {
       const addr = req.params.address.toUpperCase();
       if (!isBtAddress(addr)) return void res.status(400).json({ error: "bad Bluetooth address" });
       const playing = a().engine.list().find((s) => s.output === `bt:${addr}` && (s.state === "playing" || s.state === "paused" || s.state === "starting"));
-      if (playing) a().engine.stop(playing.id, "The speaker was removed.");
+      if (playing) a().engine.stop(playing.id, "The speaker was removed.", "disconnected");
       await bt().forget(addr);
       res.json({ ok: true });
     }),

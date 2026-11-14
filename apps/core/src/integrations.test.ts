@@ -75,6 +75,10 @@ test("report: cleaned and capped", () => {
   assert.equal(typeof cleanReport({ state: "great" }), "string");
   const r = cleanReport({ state: "setup", message: "Scan to pair", pairing: { qr: "MT:Y.K90AFN00KA0648G00", code: "34970112332" }, details: [{ label: "Fabrics", value: "0" }, { nope: 1 }] });
   assert.deepEqual(r, { state: "setup", message: "Scan to pair", pairing: { qr: "MT:Y.K90AFN00KA0648G00", code: "34970112332" }, details: [{ label: "Fabrics", value: "0" }] });
+  // SDK 0.13.1: a pairing expiry is kept (normalized); a bad one is dropped.
+  const exp = cleanReport({ state: "setup", pairing: { code: "1", expiresAt: "2030-01-01T00:15:00+00:00" } }) as { pairing: { expiresAt?: string } };
+  assert.equal(exp.pairing.expiresAt, "2030-01-01T00:15:00.000Z");
+  assert.equal((cleanReport({ state: "setup", pairing: { code: "1", expiresAt: "soon" } }) as { pairing: { expiresAt?: string } }).pairing.expiresAt, undefined);
 });
 
 test("container: an approved lan integration runs on the host network; games are unchanged", () => {

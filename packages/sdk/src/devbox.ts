@@ -9,7 +9,7 @@
 import { createServer, request, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { connect } from "node:net";
 import { isApp, isIntegration, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
-import { AUDIO_PATHS, HEADERS, INTEGRATION_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type AudioOutput, type AudioPlayOptions, type AudioSession, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
+import { AUDIO_PATHS, HEADERS, INTEGRATION_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type AudioEndReason, type AudioOutput, type AudioPlayOptions, type AudioSession, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
 import { DEFAULT_THEME } from "./theme.js";
 import { joinUrl, normalizeBasePath } from "./base.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -38,6 +38,15 @@ export const MOCK_GAMES_PATH = "/__bargames/dev/games";
 export const MOCK_STAFF_COOKIE = "bg_staff_mock";
 /** SDK 0.11.1: the pretend box admin page (venue.adminUrl on the mock box). */
 export const MOCK_ADMIN_PATH = "/__bargames/dev/admin";
+/**
+ * SDK 0.13.1: controls for testing an integration on the mock box (fake gateway, no login):
+ *   GET    …/integration                what the mock box holds (streams, last report, catalog)
+ *   POST   …/integration/action/<id>    press one of your report's buttons (a stream "action")
+ *   POST   …/integration/drop           drop every stream, as a core restart does
+ *   PUT    …/integration/catalog        { scenes?, tvs?, games? }: replace those lists (sends "catalog")
+ *   DELETE …/integration/catalog        back to the built-in pretend lists
+ */
+export const MOCK_INTEGRATION_PATH = "/__bargames/dev/integration";
 
 export function mockContext(gameId: string, displayName: string, publicUrl: string, opts: { announcement?: string; announcementShow?: "everywhere" | "phones" | "tvs"; announcementPosition?: "top" | "bottom"; app?: boolean; /** @deprecated */ display?: boolean } = {}): VenueContext {
   const app = Boolean(opts.app ?? opts.display);
@@ -107,6 +116,12 @@ export interface MockBoxOptions {
   venuePassword?: string;
   /** SDK 0.10.0: serve the game under this prefix ("/bingo"), like the box's path routing. */
   basePath?: string;
+  /**
+   * SDK 0.13.1: the venue address the game is told it has (venue.json game.publicUrl), e.g.
+   * "https://play.example.net/bingo", to test long "Join at" addresses. The mock gateway
+   * still answers on localhost; only what the game prints and puts in QR codes changes.
+   */
+  publicUrl?: string;
 }
 
 /** The mock box's pretend venue TVs. */
@@ -126,12 +141,12 @@ export const MOCK_SCENES: readonly { id: string; name: string }[] = [
 let fakePatioOnline = true;
 
 /** What an integration sees on the mock box (permissions from its manifest). */
-export function mockCatalog(perms: Set<string>): IntegrationCatalog {
+export function mockCatalog(perms: Set<string>, edits: Partial<Pick<IntegrationCatalog, "scenes" | "tvs" | "games">> = {}): IntegrationCatalog {
   const cat: IntegrationCatalog = { box: { id: "mock0000box00001", version: "dev", venue: "Test Venue" }, permissions: [...perms].sort() };
-  if (perms.has("scenes")) cat.scenes = MOCK_SCENES.map((s) => ({ ...s }));
+  if (perms.has("scenes")) cat.scenes = edits.scenes ?? MOCK_SCENES.map((s) => ({ ...s }));
   if (perms.has("tvs") || perms.has("status"))
-    cat.tvs = FAKE_TVS.map((t) => ({ id: t.id, name: t.name, group: t.group, online: t.id === "fake-patio" ? fakePatioOnline : !t.unpaired, power: !t.unpaired, ...(perms.has("status") && t.id === "fake-bar" ? { showing: "Bingo · TEST" } : {}) }));
-  if (perms.has("status")) cat.games = [{ id: "bingo", name: "Bingo", kind: "game", rooms: 1 }, { id: "menu", name: "Menu", kind: "app", rooms: 0 }];
+    cat.tvs = edits.tvs ?? FAKE_TVS.map((t) => ({ id: t.id, name: t.name, group: t.group, online: t.id === "fake-patio" ? fakePatioOnline : !t.unpaired, power: !t.unpaired, ...(perms.has("status") && t.id === "fake-bar" ? { showing: "Bingo · TEST" } : {}) }));
+  if (perms.has("status")) cat.games = edits.games ?? [{ id: "bingo", name: "Bingo", kind: "game", rooms: 1 }, { id: "menu", name: "Menu", kind: "app", rooms: 0 }];
   return cat;
 }
 
@@ -161,6 +176,7 @@ class MockAudio {
       if ((s.state === "playing" || s.state === "starting") && this.pos(s) >= (s.durationMs ?? 30_000)) {
         s.positionMs = s.durationMs ?? 30_000;
         s.state = "ended";
+        s.endReason = "finished";
         s.endedAt = new Date().toISOString();
         s.resumedAt = undefined;
         console.log(`${c.ok("audio")} ended: ${s.title ?? s.id}`);
@@ -171,9 +187,10 @@ class MockAudio {
   private live(id: string) {
     return this.sessions.find((s) => s.id === id && s.state !== "ended" && s.state !== "error");
   }
-  private end(s: (typeof this.sessions)[number], state: "ended" | "error", message: string) {
+  private end(s: (typeof this.sessions)[number], state: "ended" | "error", message: string, reason: AudioEndReason) {
     s.positionMs = Math.round(this.pos(s));
     s.state = state;
+    s.endReason = reason;
     s.message = message;
     s.endedAt = new Date().toISOString();
     s.resumedAt = undefined;
@@ -191,7 +208,7 @@ class MockAudio {
       const out = b.output ? MOCK_OUTPUTS.find((x) => x.id === b.output) : MOCK_OUTPUTS[0];
       if (!out) return json(404, { error: "no such output" });
       const old = this.sessions.find((s) => s.output === out.id && this.live(s.id));
-      if (old) this.end(old, "ended", `Replaced by something else on ${out.name}.`);
+      if (old) this.end(old, "ended", `Replaced by something else on ${out.name}.`, "replaced");
       const s: (typeof this.sessions)[number] = {
         id: Math.random().toString(16).slice(2, 18),
         output: out.id,
@@ -213,7 +230,7 @@ class MockAudio {
           ctrl.abort();
           if (!r.ok) {
             console.log(c.bad(`✗ audio: GET ${b.path} answered ${r.status}; the box couldn't play it`));
-            return this.end(s, "error", r.status === 404 ? "Couldn't play that audio: the app's audio file wasn't found." : "Couldn't play that audio: the app refused the box's request for its audio.");
+            return this.end(s, "error", r.status === 404 ? "Couldn't play that audio: the app's audio file wasn't found." : "Couldn't play that audio: the app refused the box's request for its audio.", "error");
           }
           if (s.state === "starting") {
             s.state = "playing";
@@ -223,7 +240,7 @@ class MockAudio {
         })
         .catch(() => {
           console.log(c.bad(`✗ audio: couldn't reach ${b.path} on your app (${this.gameUrl})`));
-          this.end(s, "error", "Couldn't play that audio: the app didn't answer.");
+          this.end(s, "error", "Couldn't play that audio: the app didn't answer.", "error");
         });
       return json(200, this.view(s));
     }
@@ -239,7 +256,7 @@ class MockAudio {
       } else if (m[2] === "resume" && s.state === "paused") {
         s.resumedAt = Date.now();
         s.state = "playing";
-      } else if (m[2] === "stop") this.end(s, "ended", "Stopped.");
+      } else if (m[2] === "stop") this.end(s, "ended", "Stopped.", "stopped");
       console.log(`${c.ok("audio")} ${m[2]}: ${s.title ?? s.id}`);
       return json(200, this.view(s));
     }
@@ -265,8 +282,20 @@ export function mockBox(o: MockBoxOptions) {
   let fakeRokuApp = "home";
   const base = normalizeBasePath(o.basePath);
   const origin = `http://localhost:${o.gatewayPort}`;
-  const publicUrl = origin + base;
+  /** What the game is told its address is (--public-url), else the mock gateway's. */
+  /** The mock gateway's own address: every link that must open on this machine. */
+  const localUrl = origin + base;
+  const publicUrl = o.publicUrl ? o.publicUrl.replace(/\/+$/, "") : localUrl;
   const declared = new Set(o.manifest?.events ?? []);
+  // SDK 0.13.1: integration test controls (MOCK_INTEGRATION_PATH).
+  const perms = new Set<string>(o.manifest && isIntegration(o.manifest) ? (o.manifest.integration?.permissions ?? []) : []);
+  let catalogEdits: Partial<Pick<IntegrationCatalog, "scenes" | "tvs" | "games">> = {};
+  let lastReport: IntegrationReport | undefined;
+  const streams = new Set<{ send: (m: IntegrationMessage) => void; drop: () => void }>();
+  const catalog = () => mockCatalog(perms, catalogEdits);
+  const broadcast = (m: IntegrationMessage) => {
+    for (const st of streams) st.send(m);
+  };
   /** fake TV id -> room code it shows. */
   const showing = new Map<string, string>();
   let pinFailures = 0;
@@ -371,7 +400,6 @@ export function mockBox(o: MockBoxOptions) {
     // SDK 0.12.0: integrations. Everything they declare counts as approved here.
     if (req.url?.startsWith("/internal/integration/")) {
       if (!o.manifest || !isIntegration(o.manifest)) return json(401, { error: 'not an integration (kind "integration" in bargames.json)' });
-      const perms = new Set<string>(o.manifest.integration?.permissions ?? []);
       const need = (p: string) => {
         if (perms.has(p)) return false;
         console.log(c.bad(`✗ ${req.method} ${req.url}: needs the "${p}" permission in integration.permissions`));
@@ -379,11 +407,13 @@ export function mockBox(o: MockBoxOptions) {
         return true;
       };
       const url = req.url.split("?")[0];
-      if (url === INTEGRATION_PATHS.catalog && req.method === "GET") return json(200, mockCatalog(perms));
+      if (url === INTEGRATION_PATHS.catalog && req.method === "GET") return json(200, catalog());
       if (url === INTEGRATION_PATHS.stream && req.method === "GET") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
         const send = (m: IntegrationMessage) => res.write(`data: ${JSON.stringify(m)}\n\n`);
-        send({ type: "hello", catalog: mockCatalog(perms) });
+        const st = { send, drop: () => res.end() };
+        streams.add(st);
+        send({ type: "hello", catalog: catalog() });
         console.log(`${c.ok("stream")} connected; a pretend game event every 30 s, a TV going on/offline every 60 s`);
         let n = 0;
         const t = setInterval(() => {
@@ -391,15 +421,22 @@ export function mockBox(o: MockBoxOptions) {
           if (perms.has("events")) send({ type: "event", event: { type: n % 2 ? "round_started" : "winner", gameId: "bingo", roomCode: "TEST", data: n % 2 ? { round: n } : { name: "Sam" }, at: new Date().toISOString() } });
           if (n % 2 === 0) {
             fakePatioOnline = !fakePatioOnline;
-            send({ type: "catalog", catalog: mockCatalog(perms) });
+            send({ type: "catalog", catalog: catalog() });
           }
         }, 30_000);
-        req.on("close", () => clearInterval(t));
+        req.on("close", () => {
+          clearInterval(t);
+          streams.delete(st);
+        });
         return;
       }
       if (url === INTEGRATION_PATHS.report && req.method === "PUT") {
         const r = JSON.parse((await readBody(req)) || "{}") as IntegrationReport;
         if (!["setup", "ok", "warn", "error"].includes(r.state)) return json(400, { error: "state: setup, ok, warn or error" });
+        if (r.pairing?.expiresAt !== undefined && !Number.isFinite(Date.parse(r.pairing.expiresAt))) console.log(c.bad(`✗ report: pairing.expiresAt "${r.pairing.expiresAt}" isn't an ISO time; the box ignores it`));
+        lastReport = r;
+        if (r.pairing?.expiresAt) console.log(`${c.dim(`    pairing code expires ${r.pairing.expiresAt}`)}`);
+        if (r.actions?.length) console.log(c.dim(`    buttons: ${r.actions.map((a) => a.id).join(", ")} (press one: curl -X POST ${origin}${MOCK_INTEGRATION_PATH}/action/<id>)`));
         console.log(`${c.ok("report")} [${r.state}] ${r.message ?? ""}${r.pairing ? `\n    pairing: ${[r.pairing.qr, r.pairing.code].filter(Boolean).join(" · ")}` : ""}${(r.details ?? []).map((d) => `\n    ${d.label}: ${d.value}`).join("")}`);
         return json(200, { ok: true });
       }
@@ -427,7 +464,12 @@ export function mockBox(o: MockBoxOptions) {
     }
     if (req.url?.startsWith("/internal/profiles")) return json(501, { error: "player profiles aren't built yet" });
     if (req.url === "/internal/venue") {
-      const ctx = mockContext(o.gameId, o.displayName, publicUrl, { announcement: o.announcement, announcementShow: o.announcementShow, announcementPosition: o.announcementPosition, app: o.manifest ? isApp(o.manifest) : false });
+      const ctx = mockContext(o.gameId, o.displayName, localUrl, { announcement: o.announcement, announcementShow: o.announcementShow, announcementPosition: o.announcementPosition, app: o.manifest ? isApp(o.manifest) : false });
+      // --public-url: the game's own address is the pretend venue one; box links stay local.
+      if (publicUrl !== localUrl) {
+        ctx.game.publicUrl = publicUrl;
+        for (const g of [...(ctx.venue.games ?? []), ...(ctx.venue.apps ?? []), ...(ctx.venue.modules ?? [])]) if (g.id === o.gameId) g.url = publicUrl;
+      }
       if (countdown && Date.parse(countdown.endsAt) > Date.now()) ctx.venue.countdown = countdown;
       return json(200, ctx);
     }
@@ -464,7 +506,7 @@ export function mockBox(o: MockBoxOptions) {
         }
       }
       // Apps have no rooms: the box casts their TV view as is.
-      const url = joinUrl(publicUrl, display ? o.manifest.routes.table : tableUrl(o.manifest, room as string)!);
+      const url = joinUrl(localUrl, display ? o.manifest.routes.table : tableUrl(o.manifest, room as string)!);
       for (const id of ids) {
         const tv = FAKE_TVS.find((t) => t.id === id);
         if (!tv) {
@@ -540,11 +582,12 @@ export function mockBox(o: MockBoxOptions) {
       console.log(`${c.ok(off ? "staff signed out" : "staff signed in")} (requests now ${off ? "without" : "with"} ${HEADERS.staff}: 1)`);
       return void res.end();
     }
+    if (req.url?.split("?")[0].startsWith(MOCK_INTEGRATION_PATH)) return void integrationControl(req, res);
     if (req.url?.split("?")[0] === MOCK_ADMIN_PATH) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return void res.end("<!doctype html><meta charset=utf-8><title>Box admin (mock)</title><h1>Box admin (mock)</h1><p>On a real box this is the venue's admin. Your BoxAdminLink works.</p>");
     }
-    if (req.url?.split("?")[0] === MOCK_GAMES_PATH) return void mockGamesList(o, publicUrl).then((html) => {
+    if (req.url?.split("?")[0] === MOCK_GAMES_PATH) return void mockGamesList(o, localUrl).then((html) => {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(html);
     });
@@ -586,10 +629,62 @@ export function mockBox(o: MockBoxOptions) {
     socket.on("error", () => up.destroy());
   });
 
+  /** SDK 0.13.1: MOCK_INTEGRATION_PATH, for testing an integration's reactions. */
+  async function integrationControl(req: IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
+    const json = (status: number, body: unknown) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    if (!o.manifest || !isIntegration(o.manifest)) return json(400, { error: 'not an integration (kind "integration" in bargames.json)' });
+    const sub = req.url!.split("?")[0].slice(MOCK_INTEGRATION_PATH.length);
+    if ((sub === "" || sub === "/") && req.method === "GET") return json(200, { streams: streams.size, report: lastReport ?? null, catalog: catalog() });
+    const act = /^\/action\/([^/]+)$/.exec(sub);
+    if (act && req.method === "POST") {
+      const id = decodeURIComponent(act[1]);
+      // Like the box: only buttons from the latest report can be pressed.
+      if (!lastReport?.actions?.some((a) => a.id === id)) return json(404, { error: `no button "${id}" in your latest report (actions: ${(lastReport?.actions ?? []).map((a) => a.id).join(", ") || "none"})` });
+      if (!streams.size) return json(409, { error: "no stream connected; the press would be lost" });
+      broadcast({ type: "action", action: id, at: new Date().toISOString() });
+      console.log(`${c.ok("action")} pressed "${id}" (sent on ${streams.size} stream(s))`);
+      return json(200, { ok: true, streams: streams.size });
+    }
+    if (sub === "/drop" && req.method === "POST") {
+      const n = streams.size;
+      for (const st of [...streams]) st.drop();
+      streams.clear();
+      console.log(`${c.warn("stream dropped")} ${n} stream(s) closed, as when the box restarts; your integration should reconnect`);
+      return json(200, { ok: true, dropped: n });
+    }
+    if (sub === "/catalog" && (req.method === "PUT" || req.method === "DELETE")) {
+      if (req.method === "DELETE") catalogEdits = {};
+      else {
+        let b: Record<string, unknown>;
+        try {
+          b = JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>;
+        } catch {
+          return json(400, { error: "body: JSON { scenes?, tvs?, games? }" });
+        }
+        const next = { ...catalogEdits };
+        for (const k of ["scenes", "tvs", "games"] as const) {
+          if (b[k] === undefined) continue;
+          if (!Array.isArray(b[k]) || (b[k] as unknown[]).some((x) => !x || typeof x !== "object" || typeof (x as { id?: unknown }).id !== "string" || typeof (x as { name?: unknown }).name !== "string")) {
+            return json(400, { error: `${k}: an array of objects with id and name` });
+          }
+          (next as Record<string, unknown>)[k] = b[k];
+        }
+        catalogEdits = next;
+      }
+      broadcast({ type: "catalog", catalog: catalog() });
+      console.log(`${c.ok("catalog")} ${req.method === "DELETE" ? "back to the pretend lists" : "edited"} (sent on ${streams.size} stream(s))`);
+      return json(200, catalog());
+    }
+    json(404, { error: `mock box: no ${req.method} ${MOCK_INTEGRATION_PATH}${sub}` });
+  }
+
   core.listen(o.corePort, "127.0.0.1");
   gateway.listen(o.gatewayPort);
   core.on("close", () => clearInterval(pinReset));
-  return { core, gateway, publicUrl, showing };
+  return { core, gateway, publicUrl: localUrl, venueUrl: publicUrl, showing };
 }
 
 /** What the real games list shows for this game: its open rooms and their Join links. */

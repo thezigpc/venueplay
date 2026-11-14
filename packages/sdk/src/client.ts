@@ -3,7 +3,7 @@
 
 import { PATHS, type VenueContext } from "./protocol.js";
 import { themeCssVars } from "./theme.js";
-import { basePath, bgUrl, joinUrl as joinAt } from "./base.js";
+import { basePath, bgUrl, joinUrl as joinAt, shortAddress } from "./base.js";
 import { activeAnnouncement, activeCountdown, ANNOUNCEMENT_BOTTOM_VAR, ANNOUNCEMENT_TOP_VAR, formatCountdown, GAMES_LINK_CSS, gamesLinkHtml, type GamesLinkOptions } from "./links.js";
 
 let cache: Promise<VenueContext | null> | undefined;
@@ -116,6 +116,17 @@ export function watchVenue(fn: (ctx: VenueContext) => void, opts: number | (Venu
 /** Absolute join link for a room, on the game's public address when known (path prefix included, SDK 0.10.2). */
 export function joinUrl(ctx: VenueContext | null, path: string): string {
   return joinAt(ctx?.game.publicUrl ?? location.origin + basePath(), path);
+}
+
+/**
+ * SDK 0.13.1: what a "Join at …" line under a QR code needs. `url` is the full link (for
+ * the QR code); `short` is the game's address to print, "play.example.net/bingo" (no
+ * scheme, no room path). Break `short` after "." and "/" (<wbr>) so it fits narrow boxes;
+ * GameKit's <JoinAddress> does that.
+ */
+export function joinDisplay(ctx: VenueContext | null, path: string): { url: string; short: string } {
+  const base = ctx?.game.publicUrl ?? location.origin + basePath();
+  return { url: joinAt(base, path), short: shortAddress(base) };
 }
 
 export type TableState = "connected" | "reconnecting" | "closed";
@@ -371,7 +382,7 @@ export function announcementBanner(ctx: VenueContext | null | undefined, opts: {
   };
 }
 
-export { BASE_META, basePath, bgUrl, normalizeBasePath, socketIoPath } from "./base.js";
+export { BASE_META, basePath, bgUrl, normalizeBasePath, shortAddress, socketIoPath } from "./base.js";
 export { activeAnnouncement, activeCountdown, ANNOUNCEMENT_BOTTOM_VAR, ANNOUNCEMENT_HIDE_CSS, ANNOUNCEMENT_TOP_VAR, boxAdminUrl, formatCountdown, gamesLinkHtml, gamesListUrl, otherGames, GAMES_LINK_CSS, type GamesLinkOptions } from "./links.js";
 export type { Announcement, Countdown, LeaderboardSummary, PlayerProfile, VenueGameLink, VenueLocation } from "./protocol.js";
 

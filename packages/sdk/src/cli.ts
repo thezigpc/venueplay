@@ -87,7 +87,18 @@ switch (cmd) {
       console.error(`--base "${flags.base}" isn't a path like /my-game. In Git Bash, run with MSYS_NO_PATHCONV=1 (it turns /my-game into C:/Program Files/Git/my-game).`);
       process.exit(1);
     }
-    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined, announcement: flags.announce, announcementShow: flags["announce-show"] as never, announcementPosition: flags["announce-position"] as never, basePath: flags.base });
+    let publicUrl: string | undefined;
+    if (flags["public-url"]) {
+      try {
+        const u = new URL(flags["public-url"]);
+        if (!/^https?:$/.test(u.protocol)) throw new Error();
+        publicUrl = u.toString().replace(/\/+$/, "");
+      } catch {
+        console.error(`--public-url "${flags["public-url"]}" isn't an address like https://play.example.net/${m?.id ?? "my-game"}`);
+        process.exit(1);
+      }
+    }
+    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined, announcement: flags.announce, announcementShow: flags["announce-show"] as never, announcementPosition: flags["announce-position"] as never, basePath: flags.base, publicUrl });
     const gamePort = new URL(gameUrl).port;
     const baseEnv = new URL(box.publicUrl).pathname.replace(/\/$/, "");
     console.log(`mock box for "${gameId}"
@@ -106,6 +117,7 @@ switch (cmd) {
   5. "← All games" (gamesLink) goes to ${box.publicUrl}/__bargames/dev/games, a pretend games list with
      your open rooms and their Join links (joinPath). ${flags.announce ? `Announcement: "${flags.announce}".` : `Try --announce "Last call at 1:30" for announcementBanner().`}
 
+${publicUrl ? `  6. Your game is told its venue address is ${publicUrl} (--public-url): Join links and QR codes use it,\n     but open the game at ${box.publicUrl}.\n` : `  6. Try --public-url https://play.example.net/${gameId} to test a long venue address in "Join at" lines.\n`}${m?.kind === "integration" ? `  7. Integration controls: curl ${new URL(box.publicUrl).origin}/__bargames/dev/integration (GET: what the box holds;\n     POST /action/<id>: press a report button; POST /drop: drop the stream; PUT/DELETE /catalog: edit the lists).\n` : ""}
 Events and casts from your game print below (✗ = would be rejected, or isn't declared in bargames.json).
 `);
     break;
@@ -148,6 +160,7 @@ Events and casts from your game print below (✗ = would be rejected, or isn't d
                                  --announce "Last call at 1:30": a pretend staff announcement
                                  --announce-show phones|tvs|everywhere · --announce-position top|bottom (SDK 0.11.1)
                                  --base /my-game: serve the game under a path prefix, like the box's path routing
+                                 --public-url https://play.example.net/my-game: the venue address the game is told (SDK 0.13.1)
       [--game http://127.0.0.1:PORT] [--port 7080] [--core-port 7199] [--name "Display Name"]
   bargames check [dir]           conformance checks against your running game (rooms only on the mock box's game; add --live last to override)
       [--room CODE]              also check one live room (its pendingClaims, times, table view)

@@ -698,6 +698,7 @@ test("audio against the mock box: outputs, play (file fetched with the app's tok
     await assert.rejects(audio.setVolume("tv:fake-bar", 25), /Only the app playing/);
     assert.equal((await audio.resume(s.id)).state, "playing");
     await until(async () => (await stateOf(s.id)) === "ended");
+    assert.equal((await audio.sessions()).find((x) => x.id === s.id)?.endReason, "finished", "SDK 0.13.1: endReason");
     await until(() => changes.some((c) => c.includes("ended")));
     stopWatch();
     assert.ok(changes.some((c) => c.includes("ended")), "watch saw the end");
@@ -707,6 +708,7 @@ test("audio against the mock box: outputs, play (file fetched with the app's tok
     const failed = (await audio.sessions()).find((x) => x.id === missing.id)!;
     assert.equal(failed.state, "error");
     assert.match(failed.message!, /wasn't found/);
+    assert.equal(failed.endReason, "error");
 
     // bg.audio / playSound / fromBox
     const bg = createBarGames({ coreUrl, token: DEV_TOKEN, gameId: "music" });
@@ -725,5 +727,84 @@ test("audio against the mock box: outputs, play (file fetched with the app's tok
     box.core.close();
     box.gateway.close();
     game.close();
+  }
+});
+
+test("SDK 0.13.1: shortAddress / joinUrl for 'Join at' lines; apps that declare events aren't warned about level 2", async () => {
+  const { shortAddress, joinUrl } = await import("./base.js");
+  assert.equal(shortAddress("https://play.example.net/bingo"), "play.example.net/bingo");
+  assert.equal(shortAddress("https://play.example.net/bingo/"), "play.example.net/bingo");
+  assert.equal(shortAddress("http://localhost:7082/"), "localhost:7082");
+  assert.equal(joinUrl("https://play.example.net/bingo", "/join/AB"), "https://play.example.net/bingo/join/AB");
+  const app = (events: string[]) => validateManifest({ id: "music", name: "Music", kind: "app", version: "0.1.0", image: "x/music:0.1.0", port: 3009, sdk: { version: "0.13.1", level: 2 }, routes: { player: "/" }, events });
+  const quiet = app(["x-track-started"]);
+  assert.ok(quiet.ok && !quiet.warnings.some((w) => /apps have no rooms/.test(w)), "events declared: no warning");
+  const loud = app([]);
+  assert.ok(loud.ok && loud.warnings.some((w) => /apps have no rooms/.test(w)), "no events: still warned");
+});
+
+test("SDK 0.13.1 mock box: --public-url reaches venue.json; integration controls (press, drop, catalog), pairing expiry", async () => {
+  const { createIntegration } = await import("./integration.js");
+  const { mockBox, DEV_TOKEN, MOCK_INTEGRATION_PATH } = await import("./devbox.js");
+  const log = console.log;
+  console.log = () => undefined;
+  // --public-url: the game's address in the venue context; links to the mock box stay local.
+  const g = validateManifest({ id: "bingo", name: "Bingo", version: "0.1.0", image: "x/bingo:0.1.0", port: 3002, sdk: { version: "0.13.1", level: 1 }, routes: { player: "/", table: "/room/{code}?role=table" } });
+  const gameBox = mockBox({ gameId: "bingo", displayName: "Bingo (mock)", gameUrl: "http://127.0.0.1:9", corePort: 0, gatewayPort: 0, manifest: g.ok ? g.manifest : undefined, basePath: "/bingo", publicUrl: "https://play.example.net/bingo/" });
+  await new Promise((r) => gameBox.core.once("listening", r));
+  const m = validateManifest({ id: "matter", name: "Matter", kind: "integration", version: "0.1.0", image: "x/matter:0.1.0", sdk: { version: "0.13.1", level: 0 }, integration: { permissions: ["scenes", "tvs"] } });
+  assert.ok(m.ok);
+  const box = mockBox({ gameId: "matter", displayName: "Matter (mock)", gameUrl: "http://127.0.0.1:9", corePort: 0, gatewayPort: 0, manifest: m.ok ? m.manifest : undefined });
+  await Promise.all([new Promise((r) => box.core.once("listening", r)), new Promise((r) => box.gateway.once("listening", r))]);
+  const until = async (cond: () => boolean, ms = 5000) => {
+    const end = Date.now() + ms;
+    while (!cond()) {
+      if (Date.now() > end) throw new Error("timed out");
+      await new Promise((r) => setTimeout(r, 15));
+    }
+  };
+  let stop: (() => void) | undefined;
+  try {
+    const venue = (await (await fetch(`http://127.0.0.1:${(gameBox.core.address() as AddressInfo).port}/internal/venue`, { headers: { authorization: `Bearer ${DEV_TOKEN}` } })).json()) as { game: { publicUrl: string; basePath?: string }; venue: { adminUrl: string } };
+    assert.equal(venue.game.publicUrl, "https://play.example.net/bingo");
+    assert.equal(venue.game.basePath, "/bingo");
+    assert.match(venue.venue.adminUrl, /^http:\/\/localhost:/, "box links still open locally");
+
+    const ctl = (sub: string, method = "POST", body?: unknown) =>
+      fetch(`http://127.0.0.1:${(box.gateway.address() as AddressInfo).port}${MOCK_INTEGRATION_PATH}${sub}`, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const it = createIntegration({ coreUrl: `http://127.0.0.1:${(box.core.address() as AddressInfo).port}`, token: DEV_TOKEN });
+    const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+    await it.report({ state: "setup", pairing: { qr: "MT:TEST", code: "12345678901", expiresAt }, actions: [{ id: "pair-another", label: "Pair another app" }] });
+    assert.equal(((await (await ctl("", "GET")).json()) as { report: { pairing: { expiresAt: string } } }).report.pairing.expiresAt, expiresAt);
+    assert.equal((await ctl("/action/pair-another")).status, 409, "no stream yet: the press would be lost");
+
+    const actions: string[] = [];
+    const catalogs: string[][] = [];
+    let ups = 0;
+    stop = it.connect({ onAction: (a) => actions.push(a), onCatalog: (c) => catalogs.push((c.scenes ?? []).map((s) => s.id)), onConnection: (up) => void (up && ups++) });
+    await until(() => catalogs.length === 1);
+    assert.equal((await ctl("/action/nope")).status, 404, "only buttons from the report");
+    assert.equal((await ctl("/action/pair-another")).status, 200);
+    await until(() => actions.length === 1);
+    assert.deepEqual(actions, ["pair-another"]);
+
+    assert.equal((await ctl("/catalog", "PUT", { scenes: [{ id: "trivia", name: "Trivia night" }] })).status, 200);
+    await until(() => catalogs.length === 2);
+    assert.deepEqual(catalogs[1], ["trivia"]);
+    assert.equal((await ctl("/catalog", "PUT", { tvs: [{ name: "no id" }] })).status, 400);
+    assert.equal((await ctl("/catalog", "DELETE")).status, 200);
+    await until(() => catalogs.length === 3);
+    assert.equal(catalogs[2].length, 3, "back to the pretend scenes");
+
+    assert.equal(((await (await ctl("/drop")).json()) as { dropped: number }).dropped, 1);
+    await until(() => ups >= 2, 15_000); // the helper reconnects on its own
+  } finally {
+    stop?.();
+    console.log = log;
+    for (const b of [box, gameBox]) {
+      b.core.closeAllConnections?.();
+      b.core.close();
+      b.gateway.close();
+    }
   }
 });

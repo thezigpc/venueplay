@@ -72,3 +72,13 @@ export function joinUrl(base: string, path: string): string {
   const u = new URL(base);
   return u.origin + u.pathname.replace(/\/+$/, "") + path;
 }
+
+/**
+ * SDK 0.13.1: the address to print under a QR code, "play.example.net/bingo": the game's
+ * address without the scheme, a trailing slash, the query or the room path. Long venue
+ * addresses don't wrap on their own (no spaces), so break it after "." and "/" when shown.
+ */
+export function shortAddress(base: string): string {
+  const u = new URL(base);
+  return u.host + u.pathname.replace(/\/+$/, "");
+}

@@ -173,10 +173,16 @@ function IntegrationCard({ item: i, reload }: { item: Integration; reload: () =>
 
 function Pairing({ item: i }: { item: Integration }) {
   const p = i.report!.pairing!;
+  // SDK 0.13.1: a code with an end time greys out once it's past (the page reloads every 5 s).
+  const ends = p.expiresAt ? Date.parse(p.expiresAt) : NaN;
+  const expired = Number.isFinite(ends) && ends <= Date.now();
+  const minutesLeft = Number.isFinite(ends) && !expired ? Math.max(1, Math.ceil((ends - Date.now()) / 60_000)) : undefined;
   return (
-    <div className="pairing">
-      {p.qr && <img src={api.integrationQrUrl(i.id, i.reportAt)} alt={`Pairing QR code for ${i.name}`} width={180} height={180} />}
+    <div className={`pairing${expired ? " expired" : ""}`}>
+      {p.qr && <img src={api.integrationQrUrl(i.id, i.reportAt)} alt={`Pairing QR code for ${i.name}${expired ? " (expired)" : ""}`} width={180} height={180} />}
       <div className="stack-gap">
+        {expired && <p className="warn">This code has expired. Ask {i.name} for a new one (for example its "Pair another app" button).</p>}
+        {minutesLeft !== undefined && <p className="muted">Works for about {minutesLeft} more minute{minutesLeft === 1 ? "" : "s"}.</p>}
         {p.note && <p>{p.note}</p>}
         {p.code && (
           <p>

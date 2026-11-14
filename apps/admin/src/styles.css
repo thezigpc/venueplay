@@ -335,6 +335,7 @@ button.tv-tile.selected { border-color: var(--primary); }
 .integration .approve ul { margin: 4px 0 4px 18px; padding: 0; }
 .pairing { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
 .pairing img { background: #fff; border-radius: 12px; padding: 6px; }
+.pairing.expired img, .pairing.expired .pair-code { opacity: 0.25; filter: grayscale(1); }
 .pair-code { font-size: 1.3rem; letter-spacing: 0.06em; font-variant-numeric: tabular-nums; }
 .details { display: grid; gap: 4px; margin: 0; }
 .details div { display: flex; gap: 8px; flex-wrap: wrap; }
