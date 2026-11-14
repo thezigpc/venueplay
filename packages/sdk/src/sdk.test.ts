@@ -808,3 +808,79 @@ test("SDK 0.13.1 mock box: --public-url reaches venue.json; integration controls
     }
   }
 });
+
+test("SDK 0.13.2: roomLink / joinDisplay roomShort only where the box serves short room links", async () => {
+  const { roomLink, joinDisplay } = await import("./client.js");
+  const ctx = (roomLinks?: boolean, standalone = false) =>
+    ({ standalone, venue: { name: "V", theme: DEFAULT_THEME, playUrl: "https://play.example.net", ...(roomLinks ? { roomLinks } : {}) }, game: { id: "bingo", displayName: "Bingo", publicUrl: "https://play.example.net/bingo", theme: DEFAULT_THEME } }) as never;
+  assert.deepEqual(roomLink(ctx(true), "ab12"), { url: "https://play.example.net/AB12", short: "play.example.net/AB12" });
+  assert.equal(roomLink(ctx(false), "AB12"), undefined, "older box");
+  assert.equal(roomLink(ctx(true, true), "AB12"), undefined, "standalone");
+  assert.equal(roomLink(ctx(true), "../x"), undefined, "not a code");
+  const d = joinDisplay(ctx(true), "/join/AB12", "AB12");
+  assert.deepEqual(d, { url: "https://play.example.net/bingo/join/AB12", short: "play.example.net/bingo", roomShort: "play.example.net/AB12" });
+  assert.equal(joinDisplay(ctx(false), "/join/AB12", "AB12").roomShort, undefined);
+});
+
+test("SDK 0.13.2 mock box: short room links, TV power from the edited catalog, drop?for=N, ending a sound session", async () => {
+  const { mockBox, DEV_TOKEN, MOCK_INTEGRATION_PATH, MOCK_AUDIO_END_PATH } = await import("./devbox.js");
+  const { createIntegration } = await import("./integration.js");
+  const { createAudio } = await import("./audio.js");
+  const log = console.log;
+  console.log = () => undefined;
+  const game = createServer((req, res) => {
+    if (req.url === "/__bargames/status") return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ rooms: [{ code: "AB12", kind: "venue", players: 1, joinPath: "/join/AB12" }, { code: "PRIV", kind: "private", players: 1, joinPath: "/join/PRIV" }] }));
+    if (req.url?.startsWith("/t.mp3")) return void res.writeHead(200, { "content-type": "audio/mpeg" }).end("ID3");
+    res.writeHead(404).end();
+  }).listen(0);
+  await new Promise((r) => game.once("listening", r));
+  const m = validateManifest({ id: "kitchen", name: "Kitchen", kind: "integration", version: "0.1.0", image: "x/k:0.1.0", sdk: { version: "0.13.2", level: 0 }, integration: { permissions: ["tvs"] } });
+  const a = validateManifest({ id: "music", name: "Music", kind: "app", version: "0.1.0", image: "x/m:0.1.0", port: 3009, sdk: { version: "0.13.2", level: 1 }, routes: { player: "/" }, audio: { play: true } });
+  assert.ok(m.ok && a.ok);
+  const gameUrl = `http://127.0.0.1:${(game.address() as AddressInfo).port}`;
+  const box = mockBox({ gameId: "kitchen", displayName: "K", gameUrl, corePort: 0, gatewayPort: 0, manifest: m.ok ? m.manifest : undefined, basePath: "/kitchen" });
+  const music = mockBox({ gameId: "music", displayName: "M", gameUrl, corePort: 0, gatewayPort: 0, manifest: a.ok ? a.manifest : undefined, basePath: "/music" });
+  await Promise.all([box, music].flatMap((b) => [new Promise((r) => b.core.once("listening", r)), new Promise((r) => b.gateway.once("listening", r))]));
+  const gw = (b: typeof box) => `http://127.0.0.1:${(b.gateway.address() as AddressInfo).port}`;
+  try {
+    // Short room links (with --base): venue rooms only.
+    const link = await fetch(`${gw(box)}/ab12`, { redirect: "manual" });
+    assert.equal(link.status, 302);
+    assert.match(link.headers.get("location")!, /\/kitchen\/join\/AB12$/);
+    assert.equal((await fetch(`${gw(box)}/PRIV`, { redirect: "manual" })).status, 404, "private rooms aren't linked");
+    const venue = (await (await fetch(`http://127.0.0.1:${(box.core.address() as AddressInfo).port}/internal/venue`, { headers: { authorization: `Bearer ${DEV_TOKEN}` } })).json()) as { venue: { roomLinks?: boolean } };
+    assert.equal(venue.venue.roomLinks, true);
+
+    // TV power answers from the edited catalog.
+    const it = createIntegration({ coreUrl: `http://127.0.0.1:${(box.core.address() as AddressInfo).port}`, token: DEV_TOKEN });
+    const ctl = (sub: string, method = "POST", body?: unknown) => fetch(`${gw(box)}${MOCK_INTEGRATION_PATH}${sub}`, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
+    await ctl("/catalog", "PUT", { tvs: [{ id: "new-tv", name: "New", online: true, power: true }, { id: "away", name: "Away", online: false, power: true }, { id: "dumb", name: "Dumb", online: true, power: false }] });
+    assert.deepEqual(await it.tvPower("new-tv", true), { ok: true });
+    await assert.rejects(it.tvPower("away", true), /didn't answer/);
+    await assert.rejects(it.tvPower("dumb", true), /can't be switched/);
+    await assert.rejects(it.tvPower("fake-bar", true), /no TV/);
+
+    // drop?for=N: the box stays down.
+    assert.equal(((await (await ctl("/drop?for=2")).json()) as { downForSeconds: number }).downForSeconds, 2);
+    await assert.rejects(it.catalog(), /restarting|503/);
+    await new Promise((r) => setTimeout(r, 2100));
+    assert.ok((await it.catalog()).tvs);
+
+    // Ending a sound session as the real box can.
+    const audio = createAudio({ coreUrl: `http://127.0.0.1:${(music.core.address() as AddressInfo).port}`, token: DEV_TOKEN });
+    const s = await audio.play({ path: "/t.mp3", durationMs: 60_000 });
+    const end = await fetch(`${gw(music)}${MOCK_AUDIO_END_PATH}?reason=disconnected&session=${s.id}`, { method: "POST" });
+    assert.equal(end.status, 200);
+    const after = (await audio.sessions()).find((x) => x.id === s.id)!;
+    assert.deepEqual([after.state, after.endReason], ["ended", "disconnected"]);
+    assert.equal((await fetch(`${gw(music)}${MOCK_AUDIO_END_PATH}?reason=nope`, { method: "POST" })).status, 400);
+  } finally {
+    console.log = log;
+    for (const b of [box, music]) {
+      b.core.closeAllConnections?.();
+      b.core.close();
+      b.gateway.close();
+    }
+    game.close();
+  }
+});

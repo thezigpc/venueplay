@@ -21,7 +21,9 @@ for (let i = 0; i < argv.length; i++) {
   if (argv[i].startsWith("--")) flags[argv[i].slice(2)] = argv[i + 1]?.startsWith("--") || argv[i + 1] === undefined ? "true" : argv[++i];
   else positional.push(argv[i]);
 }
-const [cmd = "help", target = "."] = positional;
+// SDK 0.13.2: --help / -h anywhere prints the help (it used to start a mock box).
+const wantsHelp = argv.includes("--help") || argv.includes("-h");
+const [cmd = "help", target = "."] = wantsHelp ? ["help"] : positional;
 /** The game server's own address (not the mock gateway). */
 const gameUrlFor = (port?: number) => flags.game ?? `http://127.0.0.1:${port ?? 3000}`;
 
@@ -99,6 +101,13 @@ switch (cmd) {
       }
     }
     const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined, announcement: flags.announce, announcementShow: flags["announce-show"] as never, announcementPosition: flags["announce-position"] as never, basePath: flags.base, publicUrl });
+    // SDK 0.13.2: a busy port is an error, not a silent second box (two sessions' boxes collided).
+    for (const [srv, port, flag] of [[box.core, corePort, "--core-port"], [box.gateway, gatewayPort, "--port"]] as const) {
+      srv.on("error", (err: NodeJS.ErrnoException) => {
+        console.error(err.code === "EADDRINUSE" ? `✗ port ${port} is in use (another mock box?). Pick another with ${flag} N, and point BG_CORE_URL at the core port.` : `✗ mock box: ${err.message}`);
+        process.exit(1);
+      });
+    }
     const gamePort = new URL(gameUrl).port;
     const baseEnv = new URL(box.publicUrl).pathname.replace(/\/$/, "");
     console.log(`mock box for "${gameId}"
@@ -161,6 +170,9 @@ Events and casts from your game print below (✗ = would be rejected, or isn't d
                                  --announce-show phones|tvs|everywhere · --announce-position top|bottom (SDK 0.11.1)
                                  --base /my-game: serve the game under a path prefix, like the box's path routing
                                  --public-url https://play.example.net/my-game: the venue address the game is told (SDK 0.13.1)
+                                 dev controls on the gateway port: POST /__bargames/dev/audio/end?reason=replaced|disconnected|error|stopped,
+                                 /__bargames/dev/integration (GET; POST /action/<id>, /drop[?for=N]; PUT/DELETE /catalog)
+                                 with --base, /<ROOM CODE> answers like the box's short room links (SDK 0.13.2)
       [--game http://127.0.0.1:PORT] [--port 7080] [--core-port 7199] [--name "Display Name"]
   bargames check [dir]           conformance checks against your running game (rooms only on the mock box's game; add --live last to override)
       [--room CODE]              also check one live room (its pendingClaims, times, table view)

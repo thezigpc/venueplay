@@ -47,6 +47,8 @@ export const MOCK_ADMIN_PATH = "/__bargames/dev/admin";
  *   DELETE …/integration/catalog        back to the built-in pretend lists
  */
 export const MOCK_INTEGRATION_PATH = "/__bargames/dev/integration";
+/** SDK 0.13.2: end the playing sound session as replaced, disconnected, error or stopped. */
+export const MOCK_AUDIO_END_PATH = "/__bargames/dev/audio/end";
 
 export function mockContext(gameId: string, displayName: string, publicUrl: string, opts: { announcement?: string; announcementShow?: "everywhere" | "phones" | "tvs"; announcementPosition?: "top" | "bottom"; app?: boolean; /** @deprecated */ display?: boolean } = {}): VenueContext {
   const app = Boolean(opts.app ?? opts.display);
@@ -196,6 +198,16 @@ class MockAudio {
     s.resumedAt = undefined;
   }
 
+  /** SDK 0.13.2: end a live session the way the real box can (dev control). */
+  endAs(id: string | undefined, reason: "replaced" | "disconnected" | "error" | "stopped"): AudioSession | undefined {
+    const s = id ? this.live(id) : this.sessions.find((x) => this.live(x.id));
+    if (!s) return undefined;
+    const message = { replaced: "Replaced by something else on that output.", disconnected: "The speaker disconnected.", error: "Couldn't keep playing (pretend error).", stopped: "Stopped by staff." }[reason];
+    this.end(s, reason === "error" ? "error" : "ended", message, reason);
+    console.log(`${c.warn("audio")} ${s.title ?? s.id} ended as "${reason}" (dev control)`);
+    return this.view(s);
+  }
+
   async handle(req: IncomingMessage, json: (status: number, body: unknown) => void): Promise<void> {
     this.tick();
     const url = (req.url ?? "").split("?")[0];
@@ -291,6 +303,8 @@ export function mockBox(o: MockBoxOptions) {
   const perms = new Set<string>(o.manifest && isIntegration(o.manifest) ? (o.manifest.integration?.permissions ?? []) : []);
   let catalogEdits: Partial<Pick<IntegrationCatalog, "scenes" | "tvs" | "games">> = {};
   let lastReport: IntegrationReport | undefined;
+  /** SDK 0.13.2: /drop?for=N keeps the integration endpoints down until then. */
+  let downUntil = 0;
   const streams = new Set<{ send: (m: IntegrationMessage) => void; drop: () => void }>();
   const catalog = () => mockCatalog(perms, catalogEdits);
   const broadcast = (m: IntegrationMessage) => {
@@ -407,8 +421,10 @@ export function mockBox(o: MockBoxOptions) {
         return true;
       };
       const url = req.url.split("?")[0];
+      if (Date.now() < downUntil && url !== INTEGRATION_PATHS.stream) return json(503, { error: "the box is restarting (mock-box /drop?for=N)" });
       if (url === INTEGRATION_PATHS.catalog && req.method === "GET") return json(200, catalog());
       if (url === INTEGRATION_PATHS.stream && req.method === "GET") {
+        if (Date.now() < downUntil) return json(503, { error: "the box is restarting (mock-box /drop?for=N)" });
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
         const send = (m: IntegrationMessage) => res.write(`data: ${JSON.stringify(m)}\n\n`);
         const st = { send, drop: () => res.end() };
@@ -454,9 +470,14 @@ export function mockBox(o: MockBoxOptions) {
         const id = decodeURIComponent(power[1]);
         const { on } = JSON.parse((await readBody(req)) || "{}") as { on?: unknown };
         if (typeof on !== "boolean") return json(400, { error: "on: true or false" });
-        const tv = FAKE_TVS.find((t) => t.id === id);
+        // SDK 0.13.2: from the catalog (edits included), with the real box's answers.
+        const tv = catalog().tvs?.find((t) => t.id === id);
         if (!tv) return json(404, { error: `no TV ${id}` });
-        if (tv.unpaired) return json(400, { error: `${tv.name} can't be switched on or off by the box` });
+        if (!tv.power) return json(400, { error: `${tv.name} can't be switched on or off by the box` });
+        if (!tv.online) {
+          console.log(c.warn(`! TV power: ${id} is offline (pretend failure)`));
+          return json(502, { error: `${tv.name} didn't answer` });
+        }
         console.log(`${c.ok("TV power")} ${id} ${on ? "on" : "off"} (pretend)`);
         return json(200, { ok: true });
       }
@@ -466,6 +487,8 @@ export function mockBox(o: MockBoxOptions) {
     if (req.url === "/internal/venue") {
       const ctx = mockContext(o.gameId, o.displayName, localUrl, { announcement: o.announcement, announcementShow: o.announcementShow, announcementPosition: o.announcementPosition, app: o.manifest ? isApp(o.manifest) : false });
       // --public-url: the game's own address is the pretend venue one; box links stay local.
+      // SDK 0.13.2: short room links (the mock gateway answers them under --base).
+      if (base) ctx.venue.roomLinks = true;
       if (publicUrl !== localUrl) {
         ctx.game.publicUrl = publicUrl;
         for (const g of [...(ctx.venue.games ?? []), ...(ctx.venue.apps ?? []), ...(ctx.venue.modules ?? [])]) if (g.id === o.gameId) g.url = publicUrl;
@@ -583,6 +606,33 @@ export function mockBox(o: MockBoxOptions) {
       return void res.end();
     }
     if (req.url?.split("?")[0].startsWith(MOCK_INTEGRATION_PATH)) return void integrationControl(req, res);
+    // SDK 0.13.2: POST /__bargames/dev/audio/end?reason=replaced|disconnected|error|stopped[&session=<id>]
+    if (req.url?.split("?")[0] === MOCK_AUDIO_END_PATH && req.method === "POST") {
+      const q = new URL(req.url, "http://x").searchParams;
+      const reason = q.get("reason") ?? "";
+      res.setHeader("content-type", "application/json");
+      if (!["replaced", "disconnected", "error", "stopped"].includes(reason)) return void res.writeHead(400).end(JSON.stringify({ error: "reason: replaced, disconnected, error or stopped" }));
+      const s = mockAudio.endAs(q.get("session") ?? undefined, reason as "replaced");
+      return void (s ? res.writeHead(200).end(JSON.stringify(s)) : res.writeHead(404).end(JSON.stringify({ error: "nothing is playing" })));
+    }
+    // SDK 0.13.2: short room links, like the box: /AB12 → the room's joinPath (only with --base,
+    // where the root isn't the game).
+    const askedPath = req.url?.split("?")[0] ?? "";
+    // The game's own path (/pool) wins, as on the box.
+    const shortCode = base && askedPath.replace(/\/$/, "") !== base ? /^\/([A-Za-z0-9]{3,8})\/?$/.exec(askedPath) : null;
+    if (shortCode && req.method === "GET") {
+      return void gameRooms().then((st) => {
+        const r = (st.rooms ?? []).find((x) => x.code.toUpperCase() === shortCode[1].toUpperCase() && x.kind !== "private" && typeof x.joinPath === "string" && x.joinPath.startsWith("/"));
+        if (r) {
+          console.log(`${c.ok("room link")} ${shortCode[1]} → ${base}${r.joinPath}`);
+          res.writeHead(302, { location: joinUrl(localUrl, r.joinPath!) });
+          return void res.end();
+        }
+        console.log(c.warn(`! room link ${shortCode[1]}: no open room with a joinPath has that code`));
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end(`mock box: no open room ${shortCode[1].toUpperCase()} (the box only links rooms whose status has a joinPath)`);
+      });
+    }
     if (req.url?.split("?")[0] === MOCK_ADMIN_PATH) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return void res.end("<!doctype html><meta charset=utf-8><title>Box admin (mock)</title><h1>Box admin (mock)</h1><p>On a real box this is the venue's admin. Your BoxAdminLink works.</p>");
@@ -650,10 +700,12 @@ export function mockBox(o: MockBoxOptions) {
     }
     if (sub === "/drop" && req.method === "POST") {
       const n = streams.size;
+      const secs = Math.min(600, Math.max(0, Number(new URL(req.url!, "http://x").searchParams.get("for")) || 0));
+      downUntil = secs ? Date.now() + secs * 1000 : 0;
       for (const st of [...streams]) st.drop();
       streams.clear();
-      console.log(`${c.warn("stream dropped")} ${n} stream(s) closed, as when the box restarts; your integration should reconnect`);
-      return json(200, { ok: true, dropped: n });
+      console.log(`${c.warn("stream dropped")} ${n} stream(s) closed, as when the box restarts${secs ? `; the box stays down for ${secs} s` : ""}; your integration should reconnect`);
+      return json(200, { ok: true, dropped: n, ...(secs ? { downForSeconds: secs } : {}) });
     }
     if (sub === "/catalog" && (req.method === "PUT" || req.method === "DELETE")) {
       if (req.method === "DELETE") catalogEdits = {};

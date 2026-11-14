@@ -98,6 +98,18 @@ export function hubPage(venue: VenueInfo | undefined, games: HubGame[]): string 
   );
 }
 
+/**
+ * Box 0.15.6: short room links (play.venue/AB12). Several games have a room with that code:
+ * pick one. None: say so, with the games list.
+ */
+export function roomLinkPage(venue: VenueInfo | undefined, code: string, matches: { game: HubGame; joinUrl: string }[]): string {
+  if (!matches.length) {
+    return page(venue, `No room ${code}`, `<h1>No open room ${esc(code)}</h1><p>Check the code on the TV, or pick a game below.</p><a class="btn" href="/">See what's on</a>`);
+  }
+  const li = matches.map((m) => `<li><span class="code">${esc(code)}</span><span class="who">${esc(m.game.displayName)}</span><a href="${esc(m.joinUrl)}">Join</a></li>`).join("");
+  return page(venue, `Room ${code}`, `<h1>Room ${esc(code)}</h1><p>More than one game has a room with that code. Which one?</p><div class="entry"><ul class="rooms">${li}</ul></div>`);
+}
+
 export function simplePage(venue: VenueInfo | undefined, title: string, text: string): string {
   return page(venue, title, `<h1>${esc(title)}</h1><p>${esc(text)}</p>`);
 }

@@ -21,6 +21,23 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.13.2 (short room links)
+
+- **Short room links (box 0.15.6):** `play.<venue>/AB12` opens room AB12's join page, for
+  venue and patron rooms whose status has a `joinPath`. Game paths (`/bingo`) always win.
+  - `joinDisplay(ctx, path, code)` now also returns `roomShort` ("play.example.net/AB12") when
+    the box serves these links (`ctx.venue.roomLinks`); print it under the QR code instead of
+    `short` when it's there: `<JoinAddress url={d.roomShort ?? d.short} />`.
+  - `roomLink(ctx, code)` → `{ url, short }` or undefined (off a box, older boxes).
+  - On the mock box, `--base /<id>` makes `/<CODE>` answer the same way.
+- **GameKit 0.7.4:** `JoinAddress` gets `minScale` (default 0.6; use 0.8-1 on TVs), `lines`,
+  `align: "start"` and a `--join-min-size` CSS floor. No more `!important` overrides.
+- **Mock box:** `--help` prints help; a busy port is a clear error (use `--port` /
+  `--core-port`); `POST /__bargames/dev/audio/end?reason=replaced|disconnected|error|stopped`;
+  integrations: TV power answers from the edited catalog (unknown 404, `power: false` 400,
+  offline 502) and `POST …/integration/drop?for=N` keeps the box down for N seconds.
+- `AudioEndReason` is exported from `@bargames/sdk/server`.
+
 ## What's new in SDK 0.13.1 (join addresses, mock-box tools)
 
 - **Nothing breaks; every change is optional.** Update to it in your next release.

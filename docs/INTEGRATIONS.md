@@ -169,8 +169,8 @@ BG_CORE_URL=http://127.0.0.1:7199 BG_GAME_TOKEN=dev-token npm run dev
   |---|---|
   | `GET /__bargames/dev/integration` | What the mock box holds: open streams, your last report, the catalog |
   | `POST /__bargames/dev/integration/action/<id>` | Presses a button from your latest report (an `action` on the stream) |
-  | `POST /__bargames/dev/integration/drop` | Drops every stream, as a box restart does; check you reconnect and report again |
-  | `PUT /__bargames/dev/integration/catalog` | Body `{ scenes?, tvs?, games? }` replaces those lists and sends a `catalog` message |
+  | `POST /__bargames/dev/integration/drop` | Drops every stream, as a box restart does; check you reconnect and report again. `?for=N` (SDK 0.13.2) keeps every integration endpoint answering 503 for N seconds |
+  | `PUT /__bargames/dev/integration/catalog` | Body `{ scenes?, tvs?, games? }` replaces those lists and sends a `catalog` message. TV power follows it (SDK 0.13.2): unknown TV 404, `power: false` 400, offline 502 |
   | `DELETE /__bargames/dev/integration/catalog` | Back to the pretend lists |
 
 ## Publishing and installing

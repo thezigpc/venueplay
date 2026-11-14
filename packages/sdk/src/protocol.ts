@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.13.1";
+export const SDK_VERSION = "0.13.2";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -54,6 +54,12 @@ export interface VenueInfo {
   wifi?: WifiInfo;
   /** The venue's games list (landing page), e.g. https://play.example.com */
   playUrl?: string;
+  /**
+   * SDK 0.13.2 (box 0.15.6): short room links work: playUrl + "/" + a room code
+   * (https://play.example.com/AB12) opens that room's join page, for rooms whose status has
+   * a joinPath. Use joinDisplay(ctx, path, code).roomShort to print it.
+   */
+  roomLinks?: boolean;
   /** SDK 0.11.0: the box admin's address (e.g. https://play.example.com/admin), for a "Box admin" link on staff pages. */
   adminUrl?: string;
   /** Every game that's on tonight, this one included (SDK 0.4.0+ boxes). */

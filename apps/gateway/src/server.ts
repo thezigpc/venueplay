@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { Duplex } from "node:stream";
 import { checkAccess, type AccessDecision } from "./ipgate.js";
 import { PinLimiter } from "./pinLimit.js";
-import { closedPage, hubPage, joinWifiPage, pinPage, simplePage } from "./pages.js";
+import { closedPage, hubPage, joinWifiPage, pinPage, roomLinkPage, simplePage } from "./pages.js";
 
 const PIN_COOKIE = "bg_pin";
 export { STAFF_COOKIE };
@@ -195,6 +195,20 @@ export function createGateway(d: GatewayDeps) {
         if (decision.reason !== "local") return send(res, 503, simplePage(cfg.venue, "Not set up yet", "This game box hasn't been set up. Staff: open it from the venue network."));
         res.writeHead(302, { location: cfg.adminUrl, "cache-control": "no-store" });
         return void res.end();
+      }
+      // Box 0.15.6: a short room link, play.venue/AB12, goes straight to that room's join page.
+      // Game paths (/bingo) and /admin are routed before this, so they always win.
+      const short = /^\/([A-Za-z0-9]{3,8})\/?$/.exec(url.pathname);
+      if (short && req.method === "GET") {
+        const code = short[1].toUpperCase();
+        const matches = cfg.hub.games
+          .filter((g) => g.enabled)
+          .flatMap((g) => (g.rooms ?? []).filter((r) => r.code.toUpperCase() === code && r.joinUrl).map((r) => ({ game: g, joinUrl: r.joinUrl! })));
+        if (matches.length === 1) {
+          res.writeHead(302, { location: matches[0].joinUrl, "cache-control": "no-store" });
+          return void res.end();
+        }
+        return send(res, matches.length ? 200 : 404, roomLinkPage(cfg.venue, code, matches));
       }
       return send(res, 200, hubPage(cfg.venue, cfg.hub.games));
     }

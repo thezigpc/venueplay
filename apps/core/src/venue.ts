@@ -14,7 +14,8 @@ export interface VenueExtras {
 }
 
 export function venueInfo(v: VenueSettings, extras: VenueExtras = {}): VenueInfo {
-  const info: VenueInfo = { name: v.name, theme: v.theme, wifi: v.wifi, playUrl: publicUrl(v, hostFor(v, v.playLabel)), adminUrl: adminUrl(v) };
+  // roomLinks (box 0.15.6): the gateway answers play.<venue>/<CODE> with the room's join page.
+  const info: VenueInfo = { name: v.name, theme: v.theme, wifi: v.wifi, playUrl: publicUrl(v, hostFor(v, v.playLabel)), adminUrl: adminUrl(v), roomLinks: true };
   if (extras.games) {
     const on = extras.games.filter((g) => g.enabled);
     // Apps (menus…) are listed apart, so games' "Also playing" skips them.

@@ -138,6 +138,20 @@ test("gateway: routing, gate, PIN, closed games, headers", async () => {
     assert.doesNotMatch(hub, /bingo\.example\.com/);
     assert.match(hub, /KQ7P.*6 players.*href="https:\/\/pool\.example\.com\/join\/KQ7P">Join/, "open rooms with Join links");
     assert.match(hub, /ZZ9.*1 player<\/span><\/li>/, "no joinPath: listed without a Join link");
+    // Box 0.15.6: short room links, any case.
+    const short = await get("play.example.com", "/kq7p", venueIp);
+    assert.equal(short.status, 302);
+    assert.equal(short.headers.location, "https://pool.example.com/join/KQ7P");
+    assert.equal((await get("play.example.com", "/KQ7P/", venueIp)).headers.location, "https://pool.example.com/join/KQ7P");
+    const none = await get("play.example.com", "/ZZ9", venueIp);
+    assert.equal(none.status, 404, "a room without a join link isn't reachable by code");
+    assert.match(await none.text(), /No open room ZZ9/);
+    assert.equal((await get("play.example.com", "/favicon.ico", venueIp)).status, 200, "other paths still show the games list");
+    cfg.hub.games.push({ id: "quiz", displayName: "Quiz", url: "https://quiz.example.com", enabled: true, rooms: [{ code: "KQ7P", players: 2, joinUrl: "https://quiz.example.com/j/KQ7P" }] });
+    const both = await get("play.example.com", "/KQ7P", venueIp);
+    assert.equal(both.status, 200);
+    assert.match(await both.text(), /More than one game.*Kava Pool.*Quiz/s);
+    cfg.hub.games.pop();
     assert.doesNotMatch(hub, /class="news"/);
     (venue as typeof venue & { announcement?: unknown }).announcement = { id: "a1", text: "Last call at 1:30" };
     assert.match(await (await get("play.example.com", "/", venueIp)).text(), /class="news" role="status">Last call at 1:30/);

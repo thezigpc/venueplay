@@ -124,9 +124,26 @@ export function joinUrl(ctx: VenueContext | null, path: string): string {
  * scheme, no room path). Break `short` after "." and "/" (<wbr>) so it fits narrow boxes;
  * GameKit's <JoinAddress> does that.
  */
-export function joinDisplay(ctx: VenueContext | null, path: string): { url: string; short: string } {
+export function joinDisplay(ctx: VenueContext | null, path: string, code?: string): { url: string; short: string; roomShort?: string } {
   const base = ctx?.game.publicUrl ?? location.origin + basePath();
-  return { url: joinAt(base, path), short: shortAddress(base) };
+  const out: { url: string; short: string; roomShort?: string } = { url: joinAt(base, path), short: shortAddress(base) };
+  // SDK 0.13.2: on a box with short room links, "play.example.net/AB12" opens the room directly.
+  const room = roomLink(ctx, code);
+  if (room) out.roomShort = room.short;
+  return out;
+}
+
+/**
+ * SDK 0.13.2 (box 0.15.6): the room's short link, { url: "https://play.example.net/AB12",
+ * short: "play.example.net/AB12" }, when the box serves them (ctx.venue.roomLinks) and your
+ * status gives the room a joinPath. Undefined off a box or on older boxes.
+ */
+export function roomLink(ctx: VenueContext | null, code: string | undefined): { url: string; short: string } | undefined {
+  const play = ctx && !ctx.standalone && ctx.venue.roomLinks ? ctx.venue.playUrl : undefined;
+  if (!play || !code || !/^[A-Za-z0-9]{3,8}$/.test(code)) return undefined;
+  // Room links live at the root of the games list's address.
+  const url = `${new URL(play).origin}/${code.toUpperCase()}`;
+  return { url, short: shortAddress(url) };
 }
 
 export type TableState = "connected" | "reconnecting" | "closed";

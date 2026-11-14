@@ -487,7 +487,7 @@ export type {
 
 // SDK 0.13.0: audio on the box's outputs.
 export { AudioError, AudioUnavailable, createAudio, type Audio } from "./audio.js";
-export type { AudioPlayOptions, AudioSession, AudioSessionState } from "./protocol.js";
+export type { AudioEndReason, AudioPlayOptions, AudioSession, AudioSessionState } from "./protocol.js";
 
 // SDK 0.10.0: running under a path prefix (see base.ts).
 export { BASE_META, basePathFromEnv, injectBasePath, joinUrl, normalizeBasePath, shortAddress } from "./base.js";

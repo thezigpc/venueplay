@@ -307,6 +307,7 @@ from the earlier plan.
 - [x] Box 0.15.3: experimental 4K (2160p) AirPlay picture setting per TV, for an Apple TV 4K (pages keep their 1080p layout, drawn at 2x)
 - [x] SDK 0.13.1 / box 0.15.4: join-address helpers (`joinDisplay`, `shortAddress`), mock box `--public-url` and integration controls, audio `endReason`, integration pairing expiry, no level-2 warning for apps with events, LICENSE in the SDK tarball
 - [x] Box 0.15.5: rooms the box opens on the TVs keep their host link; the Rooms page has "Host this room" and "Host on a phone" (a QR code) until the room closes
+- [x] Box 0.15.6 / SDK 0.13.2 / kit 0.7.4: short room links (play.<venue>/AB12 → the room's join page); SDK and mock-box fixes from the 0.13.1 round; JoinAddress minScale/lines/align
 - [ ] Next release: several screens plugged into the box, each its own TV with its own content and resolution. A venue setting picks "one screen" (today's cage kiosk) or "several screens" (a compositor that pins one Chromium window per output, e.g. Weston kiosk-shell). Look at smooth transitions (fade or hold the old page until the new one has painted) so switching content on one screen isn't jarring
 - [ ] Test 4K on real hardware: does doubletake send above 1080p, does the page fill the screen, CPU load with one 4K channel
 - [ ] Backup and restore of a box's settings (TV pairings, scenes, games), e.g. to a USB drive at the venue

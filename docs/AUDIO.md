@@ -104,6 +104,7 @@ returns `{ ok, reason, sessionId }`. `reason` is one of:
   the end), `stopped` (an app or staff stopped it, or the box restarted), `replaced`
   (something else started on that output), `disconnected` (the speaker or TV went away) or
   `error`. A queue moves on after `finished`. Older boxes leave it out: fall back to `state`.
+- **Testing the reasons on the mock box (SDK 0.13.2):** `POST /__bargames/dev/audio/end?reason=replaced` (or `disconnected`, `error`, `stopped`; add `&session=<id>`) on the mock gateway ends the playing session that way.
 - **`message`:** an ended or failed session says why, for example "The app's audio file
   wasn't found.", "The speaker disconnected." or "Replaced by something else on Bar amp.".
   Show it to staff.

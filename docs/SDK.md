@@ -63,7 +63,9 @@ and AirPlay TVs, which the venue sets up under Settings → Connected devices. U
 `{ url, short }`: `url` for the QR code, and `short` ("play.example.net/bingo") to print under
 it. Venue addresses have no spaces, so break `short` after "." and "/" (`<wbr>`) and shrink
 long ones; GameKit's `<JoinAddress>` does this. Test with
-`bargames mock-box --public-url https://play.example.net/<id>`.
+`bargames mock-box --public-url https://play.example.net/<id>`. Box 0.15.6 also answers
+short room links, `play.<venue>/AB12` (SDK 0.13.2: `joinDisplay(ctx, path, code).roomShort`,
+`roomLink(ctx, code)`), for rooms whose status has a `joinPath`.
 
 ## 2. What the box gives your container
 
