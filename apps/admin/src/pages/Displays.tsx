@@ -658,7 +658,7 @@ function StreamSettingsFields({ value, onChange }: { value: StreamSettings | nul
           <label>
             Resolution
             <select value={v.resolution} onChange={(e) => set({ resolution: e.target.value as StreamSettings["resolution"] })}>
-              <option value="2160p">4K / 2160p (Apple TV 4K only; heavy on the box, experimental)</option>
+              <option value="2160p">4K / 2160p (Apple TV 4K; real 4K on a box with an Nvidia GPU, otherwise drawn at 4K and sent at 1080p)</option>
               <option value="1080p">1080p (recommended)</option>
               <option value="720p">720p (lighter on the box and Wi-Fi)</option>
             </select>

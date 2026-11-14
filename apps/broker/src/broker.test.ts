@@ -204,6 +204,21 @@ test("local screens: connected outputs from sysfs; showing starts cage + Chromiu
     ["HDMI-A-1", true, ["3840x2160", "1920x1080"]],
   ]);
   assert.deepEqual(readConnectors(path.join(drm, "missing")), [], "no DRM: nothing");
+  // Box 0.16.1: the firmware's boot framebuffer isn't a screen (symlinks may need rights on Windows).
+  const { symlinkSync } = await import("node:fs");
+  const fb = mkdtempSync(path.join(tmpdir(), "bg-drm-fb-"));
+  mkdirSync(path.join(fb, "card0-Unknown-1"));
+  writeFileSync(path.join(fb, "card0-Unknown-1", "status"), "connected\n");
+  writeFileSync(path.join(fb, "card0-Unknown-1", "modes"), "800x600\n");
+  mkdirSync(path.join(fb, "card0", "device"), { recursive: true });
+  mkdirSync(path.join(fb, "drivers", "simple-framebuffer"), { recursive: true });
+  let linked = true;
+  try {
+    symlinkSync(path.join(fb, "drivers", "simple-framebuffer"), path.join(fb, "card0", "device", "driver"), "dir");
+  } catch {
+    linked = false;
+  }
+  if (linked) assert.deepEqual(readConnectors(fb), [], "simpledrm's Unknown-1 is skipped");
   const bare = new LocalScreenDriver({ drmDir: drm });
   const [screen] = await bare.discover();
   assert.equal(screen.id, "local:HDMI-A-1");

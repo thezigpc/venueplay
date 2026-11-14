@@ -74,6 +74,9 @@ services:
     command: ["node", "apps/broker/dist/index.js"]
     # Host network: SSDP/mDNS discovery and AirPlay connections from the TVs.
     network_mode: host
+    # Box 0.16.1: a box with an Nvidia GPU (driver + nvidia-container-toolkit on the host)
+    # sets BROKER_RUNTIME=nvidia in .env, and 4K TVs get real 4K (HEVC on NVENC).
+    runtime: ${BROKER_RUNTIME:-runc}
     environment:
       PORT: "7200"
       # Only core calls the broker's API: it reaches it at host.docker.internal (docker0).
@@ -86,6 +89,10 @@ services:
       MOCK_DISPLAYS: ${MOCK_DISPLAYS:-0}
       # AirPlay casting: auto picks the QuickSync encoder; vaapi forces it.
       AIRPLAY_HWACCEL: ${AIRPLAY_HWACCEL:-auto}
+      # 4K TVs: auto = HEVC on the Nvidia GPU when the broker has one (BROKER_RUNTIME=nvidia).
+      AIRPLAY_HEVC: ${AIRPLAY_HEVC:-auto}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-video,compute,utility}
       CAST_FPS: ${CAST_FPS:-30}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     # Sound (Settings > Connected devices): the box's jack/HDMI through /dev/snd (bound with a

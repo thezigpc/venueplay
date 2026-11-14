@@ -37,6 +37,11 @@ const token =
 // AirPlay needs Xvfb + Chromium + doubletake (the broker image has them); "auto" uses
 // them when present, so a dev machine without them still runs (casts say "not built").
 const streamMode = process.env.STREAMS ?? "auto";
+function hevcEncoder(v: string): string | undefined {
+  if (v === "off" || v === "") return undefined;
+  if (v === "auto") return existsSync("/dev/nvidiactl") ? "nvenc" : undefined;
+  return v; // e.g. "nvenc"
+}
 const airplayReady = streamMode === "airplay" || (streamMode === "auto" && existsSync("/usr/local/bin/doubletake"));
 const runDir = process.env.CAST_RUN_DIR ?? "/tmp/bargames-cast";
 const airplay = airplayReady
@@ -46,6 +51,9 @@ const airplay = airplayReady
       runDir,
       credsFile: path.join(dataDir, "airplay-credentials.json"),
       hwaccel: process.env.AIRPLAY_HWACCEL ?? "auto",
+      // Box 0.16.1: real 4K for 2160p TVs when the container has an Nvidia GPU (compose:
+      // BROKER_RUNTIME=nvidia). auto: NVENC if /dev/nvidiactl is there; off: never.
+      hevc: hevcEncoder(process.env.AIRPLAY_HEVC ?? "auto"),
       chromium: process.env.CHROMIUM_BIN ?? "chromium",
       fps: envNum("CAST_FPS", 30),
     })

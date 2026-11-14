@@ -64,6 +64,13 @@ export interface AirplayOptions {
   /** doubletake credentials file (persisted, e.g. /data/airplay-credentials.json). */
   credsFile: string;
   hwaccel?: string;
+  /**
+   * Box 0.16.1: the encoder for real 4K (2160p TVs), as doubletake's -hwaccel: "nvenc" on a
+   * box with an Nvidia GPU (HEVC at the receiver's maximum canvas, 3840x2160 on an Apple TV
+   * 4K). Unset: 2160p TVs are drawn at 4K but sent as H.264 at the receiver's nominal canvas
+   * (1080p on an Apple TV), which looks sharper than 1080p but isn't 4K.
+   */
+  hevc?: string;
   chromium?: string;
   width?: number;
   height?: number;
@@ -119,6 +126,8 @@ interface Profile {
   height: number;
   /** Chromium's device scale factor (2 for 2160p). */
   scale: number;
+  /** "hevc": real 4K through hevc (box 0.16.1); otherwise H.264. */
+  codec: "h264" | "hevc";
   fps: number;
   bitrateKbps: number;
 }
@@ -171,7 +180,7 @@ export class AirplayStreams implements StreamService {
   private readonly member = new Map<string, string>();
   private queue: Promise<unknown> = Promise.resolve();
   private timer?: NodeJS.Timeout;
-  private readonly o: Required<Omit<AirplayOptions, "runner" | "log">> & Pick<AirplayOptions, "runner" | "log">;
+  private readonly o: Required<Omit<AirplayOptions, "runner" | "log" | "hevc">> & Pick<AirplayOptions, "runner" | "log" | "hevc">;
 
   constructor(opts: AirplayOptions) {
     this.o = {
@@ -243,7 +252,7 @@ export class AirplayStreams implements StreamService {
     const t = ch?.targets.get(deviceId);
     if (!ch || !t) return undefined;
     const p = ch.profile;
-    return { delivery: "airplay", url: ch.url, state: t.state, needsCode: t.state === NEEDS_CODE, detail: t.detail, settings: `${p.height}p · ${p.fps} fps${p.bitrateKbps ? ` · ${p.bitrateKbps} kbps` : ""}` };
+    return { delivery: "airplay", url: ch.url, state: t.state, needsCode: t.state === NEEDS_CODE, detail: t.detail, settings: `${p.height}p${p.height === 2160 ? (p.codec === "hevc" ? " HEVC" : " (sent at 1080p)") : ""} · ${p.fps} fps${p.bitrateKbps ? ` · ${p.bitrateKbps} kbps` : ""}` };
   }
 
   /** A small JPEG of what this TV's channel renders (cached briefly; one capture per channel). */
@@ -262,7 +271,8 @@ export class AirplayStreams implements StreamService {
   /** The TV's settings, or the box default. */
   private profileFor(s?: StreamSettings): Profile {
     const [width, height] = s ? RESOLUTIONS[s.resolution] : [this.o.width, this.o.height];
-    return { width, height, scale: s ? PIXEL_SCALE[s.resolution] : 1, fps: s?.fps ?? this.o.fps, bitrateKbps: s?.bitrateKbps ?? 0 };
+    const codec = s?.resolution === "2160p" && this.o.hevc ? "hevc" : "h264";
+    return { width, height, scale: s ? PIXEL_SCALE[s.resolution] : 1, codec, fps: s?.fps ?? this.o.fps, bitrateKbps: s?.bitrateKbps ?? 0 };
   }
 
   /** Watchdog: restarts dead channels, reconnects TVs that dropped. */
@@ -305,7 +315,9 @@ export class AirplayStreams implements StreamService {
       `doubletake:${display}`,
       "doubletake",
       [
-        "-daemonize", "-socket", socket, "-no-audio", "-hwaccel", this.o.hwaccel, "-fps", String(profile.fps),
+        "-daemonize", "-socket", socket, "-no-audio",
+        ...(profile.codec === "hevc" ? ["-video-codec", "hevc", "-hwaccel", this.o.hevc!] : ["-hwaccel", this.o.hwaccel]),
+        "-fps", String(profile.fps),
         ...(profile.bitrateKbps ? ["-bitrate", String(profile.bitrateKbps)] : []),
         "-creds", this.o.credsFile, "-port-range", `${port}-${port + 29}`,
       ],
@@ -324,7 +336,7 @@ export class AirplayStreams implements StreamService {
       await runner.sleep(200);
     }
     this.channels.set(ch.key, ch);
-    this.o.log.info("airplay", "channel opened", { url: logUrl(url), display, size: `${width}x${height}`, fps: profile.fps, bitrateKbps: profile.bitrateKbps || "auto" });
+    this.o.log.info("airplay", "channel opened", { url: logUrl(url), display, size: `${width}x${height}`, codec: profile.codec === "hevc" ? `hevc (${this.o.hevc})` : "h264", fps: profile.fps, bitrateKbps: profile.bitrateKbps || "auto" });
     return ch;
   }
 
@@ -448,7 +460,7 @@ export class AirplayStreams implements StreamService {
 }
 
 function channelKey(url: string, p: Profile): string {
-  return `${p.width}x${p.height}@${p.fps}/${p.bitrateKbps}|${url}`;
+  return `${p.width}x${p.height}@${p.fps}/${p.bitrateKbps}/${p.codec}|${url}`;
 }
 
 /** A page address for the log: data: pages (the idle screen) are kilobytes long. */

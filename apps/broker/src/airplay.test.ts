@@ -113,6 +113,17 @@ test("chromium runs as a kiosk on the page", () => {
   assert.ok(args.includes("--force-device-scale-factor=1"));
 });
 
+test("airplay: 2160p sends real 4K as HEVC on the Nvidia GPU when there is one (box 0.16.1)", async () => {
+  const runner = new FakeRunner();
+  const s = new AirplayStreams({ runner, log: createLogger("test", "error"), runDir: "/run/cast", credsFile: "/data/creds.json", settleMs: 0, connectTimeoutMs: 0, hwaccel: "vaapi", hevc: "nvenc" });
+  await s.startAirplay({ ...tv(1), streamSettings: { resolution: "2160p", fps: 30 } }, { url: "https://menu.x/tv" });
+  await s.startAirplay(tv(2), { url: "https://menu.x/tv" });
+  const [four, hd] = [runner.alive("doubletake").find((p) => p.args.includes("hevc")), runner.alive("doubletake").find((p) => !p.args.includes("hevc"))];
+  assert.ok(four && four.args.includes("nvenc") && !four.args.includes("vaapi"), "4K: HEVC on NVENC");
+  assert.ok(hd && hd.args.includes("vaapi") && !hd.args.includes("-video-codec"), "1080p stays H.264 on QuickSync");
+  assert.match(s.state("roku:1")!.settings!, /2160p HEVC/);
+});
+
 test("airplay: 2160p renders 4K pixels with a 1080p layout (scale 2)", async () => {
   const runner = new FakeRunner();
   const s = make(runner);
@@ -124,7 +135,7 @@ test("airplay: 2160p renders 4K pixels with a 1080p layout (scale 2)", async () 
   const fourK = chromes.find((p) => p.args.includes("--force-device-scale-factor=2"));
   assert.ok(fourK && fourK.args.includes("--window-size=1920,1080"), "window in CSS pixels, drawn at 2x");
   assert.ok(chromes.some((p) => p.args.includes("--force-device-scale-factor=1") && p.args.includes("--window-size=1920,1080")));
-  assert.match(s.state("roku:1")!.settings!, /2160p · 30 fps · 20000 kbps/);
+  assert.match(s.state("roku:1")!.settings!, /2160p \(sent at 1080p\) · 30 fps · 20000 kbps/);
 });
 
 test("airplay: a receiver on another port waits for doubletake's discovery; Rokus don't", async () => {

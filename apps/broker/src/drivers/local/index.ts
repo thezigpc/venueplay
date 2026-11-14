@@ -11,7 +11,7 @@
 //
 // Enable with DRIVERS=roku,airplay,local.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import path from "node:path";
 import type { Logger } from "@bargames/common";
 import type { Proc, ProcRunner } from "../../airplay.js";
@@ -43,8 +43,17 @@ export function readConnectors(drmDir = "/sys/class/drm"): Connector[] {
       return "";
     }
   };
+  // Box 0.16.1: the firmware's boot framebuffer (simpledrm/efifb, "card0-Unknown-1") isn't a
+  // screen: it shows up "connected" until a GPU driver takes over the display.
+  const bootFb = (card: string) => {
+    try {
+      return /simple-framebuffer|simpledrm|efi-framebuffer/.test(readlinkSync(path.join(drmDir, card, "device", "driver")));
+    } catch {
+      return false;
+    }
+  };
   return entries
-    .filter((e) => /^card\d+-/.test(e))
+    .filter((e) => /^card\d+-/.test(e) && !bootFb(e.split("-")[0]))
     .map((e) => ({
       name: e.replace(/^card\d+-/, ""),
       card: e.split("-")[0],
