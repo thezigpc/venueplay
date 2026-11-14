@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api } from "../api";
+import { api, type AnnouncementPreset, type StatusItem } from "../api";
 import { go, useRoute } from "../nav";
 import { useAction, useLoad } from "../useLoad";
 import { CastFlow } from "./CastFlow";
@@ -36,6 +36,7 @@ export function HomePage() {
           </a>
         )}
       </div>
+      <StatusBar />
       <AttentionCard />
 
       <div className="tonight">
@@ -135,6 +136,91 @@ const DURATIONS = [
 ];
 
 /** A message on every game page, the players' page and idle TVs ("Last call at 1:30"). */
+/** Box 0.16.0: one line on how the box is doing; each item opens the page that fixes it. */
+function StatusBar() {
+  const status = useLoad(api.status, 30_000);
+  const items = status.data?.items ?? [];
+  const open = (p: StatusItem["page"]) =>
+    p === "tvs" || p === "games" || p === "tonight" ? go(p) : go("settings", p === "scenes" ? "schedules" : p);
+  if (status.error) return <div className="status-bar warn" role="status">Status: {status.error}</div>;
+  if (!status.data) return null;
+  if (!items.length) return <div className="status-bar ok" role="status">✓ All good: TVs online, games running, nothing waiting.</div>;
+  return (
+    <div className="status-bar" role="status">
+      {items.map((i, n) => (
+        <button key={n} type="button" className={`status-item ${i.level}`} onClick={() => open(i.page)}>
+          {i.level === "error" ? "⚠ " : i.level === "warn" ? "! " : ""}
+          {i.text}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Box 0.16.0: one-tap announcements, editable here. */
+function PresetButtons({ busy, post }: { busy: boolean; post: (p: AnnouncementPreset) => void }) {
+  const presets = useLoad(api.announcementPresets, 0);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<AnnouncementPreset[]>([]);
+  const [msg, setMsg] = useState("");
+  const list = presets.data?.presets ?? [];
+  if (editing)
+    return (
+      <div className="presets-edit">
+        {draft.map((p, i) => (
+          <div key={i} className="inline">
+            <input value={p.text} maxLength={200} aria-label={`Preset ${i + 1}`} onChange={(e) => setDraft(draft.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))} />
+            <select value={p.minutes ?? 0} aria-label="How long" onChange={(e) => setDraft(draft.map((x, j) => (j === i ? { ...x, minutes: Number(e.target.value) || undefined } : x)))}>
+              {DURATIONS.map((d) => (
+                <option key={d.minutes} value={d.minutes}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
+            <button type="button" className="ghost" aria-label="Remove" onClick={() => setDraft(draft.filter((_, j) => j !== i))}>
+              ✕
+            </button>
+          </div>
+        ))}
+        <div className="buttons">
+          {draft.length < 12 && (
+            <button type="button" onClick={() => setDraft([...draft, { id: "", text: "" }])}>
+              Add one
+            </button>
+          )}
+          <button
+            type="button"
+            className="primary"
+            onClick={() =>
+              void api
+                .saveAnnouncementPresets(draft.filter((p) => p.text.trim()))
+                .then(() => (setEditing(false), setMsg(""), presets.reload()))
+                .catch((e: Error) => setMsg(e.message))
+            }
+          >
+            Save
+          </button>
+          <button type="button" className="ghost" onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+        </div>
+        {msg && <p className="error">{msg}</p>}
+      </div>
+    );
+  return (
+    <div className="presets">
+      {list.map((p) => (
+        <button key={p.id} type="button" disabled={busy} onClick={() => post(p)} title={p.minutes ? `Up for ${p.minutes} min` : "Up until you take it down"}>
+          {p.text}
+        </button>
+      ))}
+      <button type="button" className="ghost" onClick={() => (setDraft(list.map((p) => ({ ...p }))), setEditing(true))}>
+        Edit quick ones
+      </button>
+    </div>
+  );
+}
+
 function AnnouncementCard() {
   const current = useLoad(api.announcement, 30_000);
   const { busy, run } = useAction(current.reload, current.setError);
@@ -166,6 +252,7 @@ function AnnouncementCard() {
       ) : (
         <p className="muted">Shown on every game's pages and on idle TVs: pick phones, TVs or both, and the top or bottom of the screen. Taking it down clears it within a few seconds.</p>
       )}
+      <PresetButtons busy={busy} post={(p) => void run(() => api.announce(p.text, p.minutes, { show: p.show, position: p.position }))} />
       <form
         onSubmit={(e) => {
           e.preventDefault();

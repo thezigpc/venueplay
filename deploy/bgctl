@@ -2,12 +2,31 @@
 # bgctl: the Bar Games box command line.
 #   ./bgctl status | check [game] | update <game...> | update --all [--wait 15] | install <url> | startup [--json]
 #       → games and TVs (runs inside the core container)
+#   ./bgctl backup [folder]   (box 0.16.0)
+#       → a settings backup file (settings, TV pairings, games' data) into the folder,
+#         default ../backups/settings; keeps the newest 30 there. BG_BACKUP_PASSPHRASE
+#         (8+ characters) encrypts it. Restore it in the admin: System → Backup.
 #   ./bgctl self-update [--check] [version]
 #       → Bar Games itself, from the released images (runs here, on the box)
 # Needs Docker access (the docker group, or sudo).
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 
+if [ "${1:-}" = "backup" ]; then
+  dir=${2:-$here/../backups/settings}
+  mkdir -p "$dir"
+  f="$dir/bargames-settings-$(date -u +%Y%m%d-%H%M%S).bgbackup"
+  umask 077
+  if docker exec -e BG_BACKUP_PASSPHRASE="${BG_BACKUP_PASSPHRASE:-}" bargames-core node apps/core/dist/ops.js backup-raw > "$f.part"; then
+    mv "$f.part" "$f"
+    echo "saved $f ($(du -h "$f" | cut -f1))${BG_BACKUP_PASSPHRASE:+, encrypted}"
+    # Keep the newest 30 backups in this folder.
+    ls -1t "$dir"/bargames-settings-*.bgbackup 2>/dev/null | tail -n +31 | while read -r old; do rm -f "$old"; done
+    exit 0
+  fi
+  rm -f "$f.part"
+  exit 1
+fi
 [ "${1:-}" = "self-update" ] || exec docker exec -i bargames-core node apps/core/dist/ops.js "$@"
 shift
 

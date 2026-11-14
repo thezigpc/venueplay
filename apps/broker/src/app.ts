@@ -1,5 +1,6 @@
 import { bearer, safeEqual, type Logger } from "@bargames/common";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import type { AirplayDriver } from "./drivers/airplay/index.js";
 import type { RokuDriver } from "./drivers/roku/index.js";
@@ -15,11 +16,18 @@ const h =
   (req, res, next) =>
     Promise.resolve(fn(req, res)).catch(next);
 
+/** Box 0.16.0: the broker's own saved files that go in a settings backup. */
+const BACKUP_FILE = /^[a-z0-9-]+\.json$/;
+const httpErr = (status: number, message: string) => Object.assign(new Error(message), { status });
+
 /** Broker API. Only core calls it (bearer token); it never faces players. */
-export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; vizio?: VizioDriver; appletv?: AppleTvDriver; venuebox?: VenueboxHub; audio?: BoxAudio; token: string; log: Logger }) {
+export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; vizio?: VizioDriver; appletv?: AppleTvDriver; venuebox?: VenueboxHub; audio?: BoxAudio; token: string; log: Logger; dataDir?: string; restart?: () => void }) {
   const app = express();
   app.disable("x-powered-by");
-  app.use(express.json({ limit: "64kb" }));
+  // Settings restores (box 0.16.0) carry every TV pairing file; everything else is small.
+  const small = express.json({ limit: "64kb" });
+  const large = express.json({ limit: "4mb" });
+  app.use((req, res, next) => (req.path === "/backup/restore" ? large : small)(req, res, next));
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
 
@@ -27,6 +35,46 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
     if (!safeEqual(bearer(req.headers.authorization), d.token)) return void res.status(401).json({ error: "unauthorized" });
     next();
   });
+
+  /**
+   * Box 0.16.0: settings backup. The broker's saved files (TVs, groups, pairings, sound
+   * settings), base64. Bluetooth pairings live in a root-only folder and aren't included.
+   */
+  app.get(
+    "/backup",
+    h(async (_req, res) => {
+      if (!d.dataDir) throw httpErr(501, "no data folder");
+      const files: Record<string, string> = {};
+      for (const f of readdirSync(d.dataDir)) {
+        if (!BACKUP_FILE.test(f)) continue;
+        try {
+          files[f] = readFileSync(path.join(d.dataDir, f)).toString("base64");
+        } catch {
+          // unreadable: left out
+        }
+      }
+      res.json({ files });
+    }),
+  );
+  /** { files }: writes them back (only *.json names) and restarts the broker to load them. */
+  app.post(
+    "/backup/restore",
+    h(async (req, res) => {
+      if (!d.dataDir) throw httpErr(501, "no data folder");
+      const files = (req.body ?? {}).files as Record<string, unknown> | undefined;
+      if (!files || typeof files !== "object") throw httpErr(400, "files: { name: base64 }");
+      const names = Object.keys(files).filter((f) => BACKUP_FILE.test(f) && typeof files[f] === "string");
+      for (const f of names) {
+        const target = path.join(d.dataDir, f);
+        const tmp = `${target}.restore`;
+        writeFileSync(tmp, Buffer.from(files[f] as string, "base64"), { mode: 0o600 });
+        renameSync(tmp, target);
+      }
+      d.log.warn("backup", "settings restored; restarting to load them", { files: names.length });
+      res.json({ ok: true, restored: names });
+      setTimeout(() => d.restart?.(), 500).unref?.();
+    }),
+  );
 
   /** Host network traffic (the broker shares the host's network) and casting load, for the System page. */
   app.get(

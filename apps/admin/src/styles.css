@@ -361,3 +361,17 @@ button.tv-tile.selected { border-color: var(--primary); }
 .host-qr img { background: #fff; border-radius: 12px; padding: 6px; }
 .host-link a.button { display: inline-flex; align-items: center; font-weight: 600; border-radius: 10px; padding: 10px 16px; min-height: 44px; text-decoration: none; box-sizing: border-box; }
 .host-link a.button.primary { background: var(--primary); color: #161616; }
+
+/* Box 0.16.0: status bar (Tonight) and announcement presets */
+.status-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.status-bar.ok { color: var(--muted); font-size: 0.95rem; }
+.status-bar.warn { color: var(--warn); }
+.status-item { min-height: 36px; padding: 6px 12px; border-radius: 999px; font-weight: 600; }
+.status-item.error { border-color: var(--danger); color: var(--danger); }
+.status-item.warn { border-color: var(--warn); color: var(--warn); }
+.status-item.info { color: var(--text); }
+.presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.presets button { min-height: 40px; padding: 8px 12px; }
+.presets-edit { display: grid; gap: 8px; margin: 12px 0; }
+.closing-nights { display: grid; gap: 6px; margin: 8px 0; }
+.closing-night { min-width: 9em; display: inline-block; }

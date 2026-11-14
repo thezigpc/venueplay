@@ -108,7 +108,8 @@ if (venuebox) venuebox.listen(clientPort).on("listening", () => log.info("boot",
 // The box's sound (Settings → Connected devices): its jack/HDMI, Bluetooth speakers, AirPlay TVs.
 const audio = audioFromEnv(registry, dataDir, log, { python: atvPython, script: atvScript });
 
-const brokerApp = createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, appletv, venuebox, audio, token, log });
+// restart: exit and let compose (restart: unless-stopped) start it with the restored files.
+const brokerApp = createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, appletv, venuebox, audio, token, log, dataDir, restart: () => process.kill(process.pid, "SIGTERM") });
 let started = false;
 for (const host of listen.hosts) {
   brokerApp.listen(port, host, () => {

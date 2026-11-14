@@ -151,6 +151,29 @@ export interface Scene {
   endRooms?: boolean;
   announcement?: { text: string; minutes?: number };
   countdown?: { label: string; minutes: number };
+  /** Box 0.16.0 extras and sequences. */
+  stopSound?: boolean;
+  clearAnnouncement?: boolean;
+  clearCountdown?: boolean;
+  next?: { sceneId: string; afterMinutes: number };
+}
+/** Box 0.16.0: closing time, Sunday night first; "" = not that night. */
+export interface Closing {
+  enabled: boolean;
+  sceneId?: string;
+  nights: string[];
+}
+export interface AnnouncementPreset {
+  id: string;
+  text: string;
+  minutes?: number;
+  show?: "everywhere" | "phones" | "tvs";
+  position?: "top" | "bottom";
+}
+export interface StatusItem {
+  level: "error" | "warn" | "info";
+  text: string;
+  page: "tvs" | "games" | "system" | "smart-home" | "tonight" | "scenes";
 }
 export interface Schedule {
   id: string;
@@ -280,7 +303,7 @@ export interface Announcement {
 export const api = {
   authStatus: () => call<{ setup: boolean; loggedIn: boolean; canSetup: boolean; title?: string }>("GET", "/auth/status"),
   setup: (password: string) => call("POST", "/auth/setup", { password }),
-  login: (password: string) => call("POST", "/auth/login", { password }),
+  login: (password: string, remember = false) => call("POST", "/auth/login", { password, remember }),
   logout: () => call("POST", "/auth/logout"),
   changePassword: (current: string, next: string) => call<{ ok: boolean }>("POST", "/auth/password", { current, next }),
   logoutEverywhere: () => call<{ ok: boolean }>("POST", "/auth/logout-everywhere", {}),
@@ -317,7 +340,32 @@ export const api = {
   saveScene: (s: Scene) => call<Scene>("PUT", `/scenes/${encodeURIComponent(s.id)}`, s),
   deleteScene: (id: string) => call("DELETE", `/scenes/${encodeURIComponent(id)}`),
   applyScene: (id: string) => call<{ steps: { step: string; ok: boolean; message?: string }[] }>("POST", `/scenes/${encodeURIComponent(id)}/apply`),
-  schedules: () => call<{ schedules: Schedule[] }>("GET", "/schedules"),
+  schedules: () => call<{ schedules: Schedule[]; sequences?: { from: string; sceneId: string; at: string }[] }>("GET", "/schedules"),
+  // Box 0.16.0
+  closing: () => call<Closing>("GET", "/closing"),
+  saveClosing: (c: Closing) => call<Closing>("PUT", "/closing", c),
+  announcementPresets: () => call<{ presets: AnnouncementPreset[] }>("GET", "/announcement-presets"),
+  saveAnnouncementPresets: (presets: AnnouncementPreset[]) => call<{ presets: AnnouncementPreset[] }>("PUT", "/announcement-presets", { presets }),
+  status: () => call<{ at: string; items: StatusItem[] }>("GET", "/status"),
+  /** A settings backup file, and what was left out of it. */
+  backup: async (passphrase?: string) => {
+    const res = await fetch(bgUrl("/api/backup"), { method: "POST", credentials: "same-origin", headers: passphrase ? { "x-backup-passphrase": encodeURIComponent(passphrase) } : undefined });
+    if (!res.ok) throw new ApiError(res.status, ((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`);
+    const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? "bargames-settings.bgbackup";
+    const skipped = JSON.parse(decodeURIComponent(res.headers.get("x-backup-skipped") ?? "%5B%5D")) as string[];
+    return { blob: await res.blob(), name, skipped };
+  },
+  restoreBackup: async (file: Blob, passphrase?: string) => {
+    const res = await fetch(bgUrl("/api/backup/restore"), {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/octet-stream", ...(passphrase ? { "x-backup-passphrase": encodeURIComponent(passphrase) } : {}) },
+      body: file,
+    });
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) throw new ApiError(res.status, data.error ?? `HTTP ${res.status}`);
+    return data as { ok: boolean; from: string; venue: string; box: string; core: number; broker: boolean; games: string[]; skipped: string[] };
+  },
   saveSchedule: (s: Schedule) => call<Schedule>("PUT", `/schedules/${encodeURIComponent(s.id)}`, s),
   deleteSchedule: (id: string) => call("DELETE", `/schedules/${encodeURIComponent(id)}`),
   systemStats: () => call<SystemStats>("GET", "/system/stats"),

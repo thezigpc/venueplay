@@ -39,6 +39,51 @@ export interface Scene {
   announcement?: { text: string; minutes?: number };
   /** Start a countdown. */
   countdown?: { label: string; minutes: number };
+  /** Box 0.16.0: stop every sound the box is playing (music, apps, test sounds). */
+  stopSound?: boolean;
+  /** Box 0.16.0: take the staff announcement down. */
+  clearAnnouncement?: boolean;
+  /** Box 0.16.0: clear the lobby countdown. */
+  clearCountdown?: boolean;
+  /**
+   * Box 0.16.0: a sequence. After this scene, apply another one this many minutes later
+   * ("Last call" → 15 min → "Closing"). Kept in memory: a core restart drops a pending step.
+   */
+  next?: { sceneId: string; afterMinutes: number };
+}
+
+/**
+ * Box 0.16.0: closing time. One time per night, Sunday night = 0 … Saturday night = 6
+ * ("" = not that night). A time before 12:00 means after midnight, so Friday night "02:00"
+ * runs early Saturday. At that time the box applies `sceneId` (and its sequence, if any).
+ */
+export interface ClosingSettings {
+  enabled: boolean;
+  sceneId?: string;
+  nights: string[];
+}
+export const DEFAULT_CLOSING: ClosingSettings = { enabled: false, nights: ["", "", "", "", "", "", ""] };
+
+export function cleanClosing(v: unknown, sceneExists: (id: string) => boolean): ClosingSettings | string {
+  if (typeof v !== "object" || v === null) return "closing: { enabled, sceneId, nights: [7 × \"HH:MM\" or \"\"] }";
+  const c = v as Record<string, unknown>;
+  const nights = Array.isArray(c.nights) ? (c.nights as unknown[]).map((t) => (typeof t === "string" ? t.trim() : "")) : [];
+  if (nights.length !== 7) return "nights: 7 entries, Sunday night first";
+  for (const t of nights) if (t && !HHMM.test(t)) return `nights: "${t}" isn't HH:MM (24-hour)`;
+  const enabled = c.enabled === true;
+  const sceneId = typeof c.sceneId === "string" && c.sceneId ? c.sceneId : undefined;
+  if (sceneId && !sceneExists(sceneId)) return "sceneId: a saved scene";
+  if (enabled && !sceneId) return "pick the scene to run at closing time";
+  if (enabled && !nights.some(Boolean)) return "set a closing time for at least one night";
+  return { enabled, ...(sceneId ? { sceneId } : {}), nights };
+}
+
+/** Closing time as ordinary scene schedules (the scheduler runs them like any other). */
+export function closingSchedules(c: ClosingSettings | undefined): Schedule[] {
+  if (!c?.enabled || !c.sceneId) return [];
+  return c.nights.flatMap((time, night) =>
+    time ? [{ id: `closing-${night}`, kind: "scene" as const, sceneId: c.sceneId, days: [time < "12:00" ? (night + 1) % 7 : night], time, enabled: true }] : [],
+  );
 }
 
 export interface Schedule {
@@ -62,7 +107,7 @@ export interface Schedule {
 const ID = /^[a-z0-9-]{1,40}$/;
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-export function cleanScene(v: unknown, exists: { game: (id: string) => boolean; display: (id: string) => boolean; caps?: (id: string) => TvCaps | undefined }): Scene | string {
+export function cleanScene(v: unknown, exists: { game: (id: string) => boolean; display: (id: string) => boolean; caps?: (id: string) => TvCaps | undefined; scene?: (id: string) => boolean }): Scene | string {
   if (typeof v !== "object" || v === null) return "scene: { id, name, actions, endRooms?, announcement?, countdown? }";
   const s = v as Record<string, unknown>;
   const id = typeof s.id === "string" && ID.test(s.id) ? s.id : undefined;
@@ -110,17 +155,35 @@ export function cleanScene(v: unknown, exists: { game: (id: string) => boolean; 
     if (!(minutes >= 0.25 && minutes <= 180)) return "countdown.minutes: 0.25-180";
     out.countdown = { label: cd.label.trim().slice(0, 60), minutes };
   }
+  if (s.stopSound === true) out.stopSound = true;
+  if (s.clearAnnouncement === true && !out.announcement) out.clearAnnouncement = true;
+  if (s.clearCountdown === true && !out.countdown) out.clearCountdown = true;
+  const next = s.next as Record<string, unknown> | undefined;
+  if (next && typeof next === "object") {
+    const after = Number(next.afterMinutes);
+    if (typeof next.sceneId !== "string" || !next.sceneId) return "next.sceneId: the scene to apply next";
+    if (next.sceneId === id) return "next: a scene can't follow itself";
+    if (!(after >= 1 && after <= 240)) return "next.afterMinutes: 1-240";
+    if (exists.scene && !exists.scene(next.sceneId)) return "next.sceneId: a saved scene";
+    out.next = { sceneId: next.sceneId, afterMinutes: Math.round(after) };
+  }
   return out;
 }
 
-/** The built-in "Closing time" preset: end rooms, say goodnight, TVs to the idle screen. */
-export function closingTimeScene(displayIds: string[]): Scene {
+/**
+ * The built-in "Closing time" preset: end rooms, stop the music, say goodnight. Box 0.16.0:
+ * it leaves the TVs alone (a TV may be on something else, like an Apple TV); add TV steps
+ * in a scene of your own.
+ */
+export function closingTimeScene(_displayIds: string[] = []): Scene {
   return {
     id: "closing-time",
     name: "Closing time",
     endRooms: true,
+    stopSound: true,
+    clearCountdown: true,
     announcement: { text: "We're closing. Thanks for playing, see you next time!", minutes: 60 },
-    actions: displayIds.map((displayId) => ({ displayId, do: "idle" as const })),
+    actions: [],
   };
 }
 

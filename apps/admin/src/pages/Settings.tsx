@@ -7,7 +7,8 @@ import { useLoad } from "../useLoad";
 import { AccessPage } from "./Access";
 import { DevicesPage } from "./Devices";
 import { InternetPage } from "./Internet";
-import { SchedulesCard } from "./Scenes";
+import { BackupPage } from "./Backup";
+import { ClosingCard, SchedulesCard } from "./Scenes";
 import { SigninPage } from "./Signin";
 import { SmartHomePage } from "./SmartHome";
 import { SystemPage } from "./System";
@@ -20,7 +21,8 @@ const PAGES: Record<string, string> = {
   internet: "Internet address",
   wifi: "Box Wi-Fi",
   system: "Box and updates",
-  schedules: "Schedules",
+  schedules: "Schedules and closing time",
+  backup: "Backup and restore",
   "smart-home": "Smart home",
   devices: "Connected devices",
   signin: "Sign-in",
@@ -42,6 +44,7 @@ export function SettingsPage({ page }: { page?: string }) {
         {page === "wifi" && <WifiPage />}
         {page === "system" && <SystemPage />}
         {page === "schedules" && <SchedulesPage />}
+        {page === "backup" && <BackupPage />}
         {page === "smart-home" && <SmartHomePage />}
         {page === "devices" && <DevicesPage />}
         {page === "signin" && <SigninPage />}
@@ -113,7 +116,7 @@ function Hub() {
         />
         <Row
           to="schedules"
-          title="Schedules"
+          title="Schedules and closing time"
           detail={schedules.data ? (on.length ? `${on.length} on: ${on.slice(0, 2).map((x) => `${x.title ?? (x.kind === "scene" ? "a scene" : "a game")} at ${x.time}`).join(" · ")}` : "None: start a game or scene by the clock") : schedules.error || "…"}
         />
         <Row
@@ -123,6 +126,7 @@ function Hub() {
           detail={integrations.data ? smartSummary : integrations.error || "…"}
         />
         <Row to="devices" title="Connected devices" level={au?.bluetooth && !au.bluetooth.available ? "warn" : undefined} detail={devicesSummary} />
+        <Row to="backup" title="Backup and restore" detail="Save the box's settings, TV pairings and games' data to a file, or put them back" />
         <Row to="signin" title="Sign-in" detail="Change the admin password · sign out other devices" />
         <button type="button" className="hub-logout" onClick={() => void api.logout().then(() => window.location.reload())}>
           Log out
@@ -151,6 +155,7 @@ function SchedulesPage() {
   const displays = useLoad(api.displays);
   return (
     <div className="grid">
+      <ClosingCard />
       <SchedulesCard games={games.data ?? []} displays={displays.data ?? []} />
     </div>
   );

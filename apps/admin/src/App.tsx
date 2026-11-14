@@ -71,6 +71,8 @@ export function App() {
 function Login({ setup, onDone, title }: { setup: boolean; onDone: () => void; title: string }) {
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
+  // Box 0.16.0: stay signed in for 30 days on this device (the bar's iPad, a home-screen app).
+  const [remember, setRemember] = useState(() => window.matchMedia?.("(display-mode: standalone)").matches ?? false);
   const [err, setErr] = useState("");
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,7 +80,7 @@ function Login({ setup, onDone, title }: { setup: boolean; onDone: () => void; t
     if (setup && pw.length < 8) return setErr("Use at least 8 characters.");
     if (setup && pw !== pw2) return setErr("The passwords don't match.");
     try {
-      await (setup ? api.setup(pw) : api.login(pw));
+      await (setup ? api.setup(pw) : api.login(pw, remember));
       onDone();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "Something went wrong");
@@ -90,6 +92,11 @@ function Login({ setup, onDone, title }: { setup: boolean; onDone: () => void; t
       <p>{setup ? "Welcome! Choose the admin password for this box (8+ characters). Staff use it to run games from the iPad." : "Admin login"}</p>
       <input type="password" placeholder="Password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus autoComplete={setup ? "new-password" : "current-password"} />
       {setup && <input type="password" placeholder="Confirm password" value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" />}
+      {!setup && (
+        <label className="inline remember">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} style={{ width: "auto" }} /> Keep me signed in on this device (30 days)
+        </label>
+      )}
       {err && <p className="error">{err}</p>}
       <button className="primary">{setup ? "Set password" : "Log in"}</button>
     </form>

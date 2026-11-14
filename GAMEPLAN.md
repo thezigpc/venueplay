@@ -308,9 +308,10 @@ from the earlier plan.
 - [x] SDK 0.13.1 / box 0.15.4: join-address helpers (`joinDisplay`, `shortAddress`), mock box `--public-url` and integration controls, audio `endReason`, integration pairing expiry, no level-2 warning for apps with events, LICENSE in the SDK tarball
 - [x] Box 0.15.5: rooms the box opens on the TVs keep their host link; the Rooms page has "Host this room" and "Host on a phone" (a QR code) until the room closes
 - [x] Box 0.15.6 / SDK 0.13.2 / kit 0.7.4: short room links (play.<venue>/AB12 → the room's join page); SDK and mock-box fixes from the 0.13.1 round; JoinAddress minScale/lines/align
+- [x] Box 0.16.0 QoL: closing time (a scene per night, after-midnight times count as the night before); scene extras (stop all sound, clear the announcement or countdown) and sequences (then another scene N minutes later); the Closing time preset leaves TVs alone; announcement presets on Tonight; a status bar on Tonight; "Add to Home Screen" for the admin, with "keep me signed in" (30 days); settings backup and restore (admin, and `bgctl backup` onto the USB drive; docs/BACKUP.md)
 - [ ] Next release: several screens plugged into the box, each its own TV with its own content and resolution. A venue setting picks "one screen" (today's cage kiosk) or "several screens" (a compositor that pins one Chromium window per output, e.g. Weston kiosk-shell). Look at smooth transitions (fade or hold the old page until the new one has painted) so switching content on one screen isn't jarring
 - [ ] Test 4K on real hardware: does doubletake send above 1080p, does the page fill the screen, CPU load with one 4K channel
-- [ ] Backup and restore of a box's settings (TV pairings, scenes, games), e.g. to a USB drive at the venue
+- [x] Backup and restore of a box's settings (TV pairings, scenes, games), e.g. to a USB drive at the venue (box 0.16.0)
 - [ ] Health alerts (box → HA → you)
 
 ### Phase 6: On-site install and handoff

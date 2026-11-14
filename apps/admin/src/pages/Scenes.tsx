@@ -2,7 +2,7 @@
 
 import { isApp } from "@bargames/sdk";
 import { useEffect, useState } from "react";
-import { api, type Display, type Game, type Scene, type SceneAction, type Schedule } from "../api";
+import { api, type Closing, type Display, type Game, type Scene, type SceneAction, type Schedule } from "../api";
 import { inputLabel } from "./Displays";
 import { useLoad } from "../useLoad";
 
@@ -41,7 +41,7 @@ export function ScenesCard({ games, displays }: { games: Game[]; displays: Displ
       {preset && !list.some((s) => s.id === "closing-time") && (
         <p>
           <button className="ghost" onClick={() => void api.saveScene(preset).then(() => scenes.reload())}>
-            + Add "Closing time" (ends rooms, says goodnight, TVs to the idle screen)
+            + Add "Closing time" (ends rooms, stops the music, says goodnight; leaves the TVs alone)
           </button>
         </p>
       )}
@@ -53,6 +53,7 @@ export function ScenesCard({ games, displays }: { games: Game[]; displays: Displ
         <SceneEditor
           games={games}
           displays={displays}
+          scenes={list}
           onDone={() => {
             setEditing(false);
             void scenes.reload();
@@ -91,7 +92,13 @@ export function tvActions(displayId: string, show: string, power: string, channe
   return out;
 }
 
-function SceneEditor({ games, displays, onDone }: { games: Game[]; displays: Display[]; onDone: () => void }) {
+function SceneEditor({ games, displays, scenes, onDone }: { games: Game[]; displays: Display[]; scenes: Scene[]; onDone: () => void }) {
+  // Box 0.16.0 extras and sequences.
+  const [stopSound, setStopSound] = useState(false);
+  const [clearAnn, setClearAnn] = useState(false);
+  const [clearCd, setClearCd] = useState(false);
+  const [nextId, setNextId] = useState("");
+  const [nextMin, setNextMin] = useState(15);
   const [name, setName] = useState("");
   const [pick, setPick] = useState<Record<string, string>>({});
   const [power, setPower] = useState<Record<string, string>>({});
@@ -113,7 +120,16 @@ function SceneEditor({ games, displays, onDone }: { games: Game[]; displays: Dis
   const save = async () => {
     const actions = displays.flatMap((d) => tvActions(d.id, pick[d.id] ?? "", power[d.id] ?? "", channel[d.id] ?? "", (id) => apps[d.id]?.find((a) => a.id === id)?.name));
     try {
-      await api.saveScene({ id: slug(name), name, actions, ...(endRooms ? { endRooms: true } : {}), ...(text.trim() ? { announcement: { text: text.trim() } } : {}) } as Scene);
+      await api.saveScene({
+        id: slug(name),
+        name,
+        actions,
+        ...(endRooms ? { endRooms: true } : {}),
+        ...(text.trim() ? { announcement: { text: text.trim() } } : clearAnn ? { clearAnnouncement: true } : {}),
+        ...(stopSound ? { stopSound: true } : {}),
+        ...(clearCd ? { clearCountdown: true } : {}),
+        ...(nextId ? { next: { sceneId: nextId, afterMinutes: nextMin } } : {}),
+      } as Scene);
       onDone();
     } catch (e) {
       setErr((e as Error).message);
@@ -193,10 +209,44 @@ function SceneEditor({ games, displays, onDone }: { games: Game[]; displays: Dis
       <label className="inline">
         <input type="checkbox" checked={endRooms} onChange={(e) => setEndRooms(e.target.checked)} style={{ width: "auto" }} /> End every open room first
       </label>
+      <label className="inline">
+        <input type="checkbox" checked={stopSound} onChange={(e) => setStopSound(e.target.checked)} style={{ width: "auto" }} /> Stop all sound (music, apps)
+      </label>
       <label>
         Announcement (optional)
         <input value={text} onChange={(e) => setText(e.target.value)} />
       </label>
+      {!text.trim() && (
+        <label className="inline">
+          <input type="checkbox" checked={clearAnn} onChange={(e) => setClearAnn(e.target.checked)} style={{ width: "auto" }} /> Take the announcement down
+        </label>
+      )}
+      <label className="inline">
+        <input type="checkbox" checked={clearCd} onChange={(e) => setClearCd(e.target.checked)} style={{ width: "auto" }} /> Clear the countdown
+      </label>
+      <label>
+        Then (a sequence, optional)
+        <div className="inline">
+          <select value={nextId} onChange={(e) => setNextId(e.target.value)} aria-label="Scene to apply next">
+            <option value="">Nothing after this</option>
+            {scenes.map((s) => (
+              <option key={s.id} value={s.id}>
+                apply {s.name}
+              </option>
+            ))}
+          </select>
+          {nextId && (
+            <select value={nextMin} onChange={(e) => setNextMin(Number(e.target.value))} aria-label="After how long">
+              {[1, 5, 10, 15, 20, 30, 45, 60, 90, 120].map((m) => (
+                <option key={m} value={m}>
+                  {m} min later
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      </label>
+      <p className="muted small-print">TVs left on "Leave alone" aren't touched, so a scene can skip a TV that's showing something else (an Apple TV on input 1, say).</p>
       <div className="buttons">
         <button className="primary" disabled={!name.trim()} onClick={() => void save()}>
           Save scene
@@ -205,6 +255,107 @@ function SceneEditor({ games, displays, onDone }: { games: Game[]; displays: Dis
       </div>
       {err && <p className="error">{err}</p>}
     </div>
+  );
+}
+
+const NIGHTS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const fmt12 = (t: string) => {
+  const [h, m] = t.split(":").map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+};
+
+/**
+ * Box 0.16.0: closing time. A time per night and the scene (or the first scene of a
+ * sequence) to run then. After-midnight times belong to the night before.
+ */
+export function ClosingCard() {
+  const closing = useLoad(api.closing);
+  const scenes = useLoad(api.scenes);
+  const [form, setForm] = useState<Closing | undefined>();
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    if (closing.data && !form) setForm(closing.data);
+  }, [closing.data, form]);
+  const list = scenes.data?.scenes ?? [];
+  if (!form)
+    return (
+      <section className="card">
+        <h2>Closing time</h2>
+        <p className="muted">{closing.error || "…"}</p>
+      </section>
+    );
+  const save = async (next: Closing) => {
+    setMsg("");
+    try {
+      setForm(await api.saveClosing(next));
+      setMsg("Saved.");
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  };
+  const scene = list.find((s) => s.id === form.sceneId);
+  return (
+    <section className="card">
+      <h2>Closing time</h2>
+      <p className="muted">At closing time each night the box applies a scene: end the games, stop the music, say goodnight, whatever the scene does. It only touches the TVs the scene names. A time after midnight counts as the night before (Friday at 2:00 AM is early Saturday).</p>
+      <label>
+        Scene to apply
+        <select value={form.sceneId ?? ""} onChange={(e) => setForm({ ...form, sceneId: e.target.value || undefined })}>
+          <option value="">Pick a scene…</option>
+          {list.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+              {s.next ? ` (then ${list.find((x) => x.id === s.next!.sceneId)?.name ?? s.next.sceneId} ${s.next.afterMinutes} min later)` : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      {!list.length && <p className="muted small-print">Make a scene first (Tonight → Scenes), for example "Closing time".</p>}
+      <div className="closing-nights">
+        {NIGHTS.map((n, i) => (
+          <label key={n} className="inline">
+            <span className="closing-night">{n} night</span>
+            <input type="time" value={form.nights[i] ?? ""} onChange={(e) => setForm({ ...form, nights: form.nights.map((t, j) => (j === i ? e.target.value : t)) })} aria-label={`${n} night closing time`} />
+            {form.nights[i] && (
+              <button type="button" className="ghost" onClick={() => setForm({ ...form, nights: form.nights.map((t, j) => (j === i ? "" : t)) })}>
+                Not this night
+              </button>
+            )}
+          </label>
+        ))}
+      </div>
+      <label className="inline">
+        <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} style={{ width: "auto" }} /> On
+      </label>
+      <div className="buttons">
+        <button className="primary" onClick={() => void save(form)}>
+          Save
+        </button>
+        {scene && (
+          <button
+            className="danger"
+            onClick={() =>
+              window.confirm(`Apply ${scene.name} now?${scene.endRooms ? " It ends every open room." : ""}`) &&
+              void api.applyScene(scene.id).then(
+                () => setMsg(`${scene.name} applied.`),
+                (e: Error) => setMsg(e.message),
+              )
+            }
+          >
+            Run it now
+          </button>
+        )}
+      </div>
+      {form.enabled && scene && (
+        <p className="muted">
+          {form.nights
+            .map((t, i) => (t ? `${NIGHTS[i].slice(0, 3)} ${fmt12(t)}` : ""))
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
+      )}
+      {msg && <p className="muted">{msg}</p>}
+    </section>
   );
 }
 

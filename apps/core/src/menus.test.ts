@@ -845,13 +845,15 @@ test("0.9.0 scenes and schedules: closing time, scheduled bingo with a countdown
     const list = (await (await b.json("GET", "/api/scenes", undefined, b.authed)).json()) as { scenes: unknown[]; presets: { id: string; actions: { displayId: string; do: string }[]; endRooms?: boolean }[] };
     const preset = list.presets[0];
     assert.equal(preset.id, "closing-time");
-    assert.deepEqual(preset.actions.map((a) => [a.displayId, a.do]), [["tv1", "idle"], ["tv2", "idle"]]);
+    // Box 0.16.0: the preset leaves the TVs alone (one may be on an Apple TV) and stops the sound.
+    assert.deepEqual(preset.actions, []);
+    assert.equal((preset as { stopSound?: boolean }).stopSound, true);
     assert.equal((await b.json("PUT", "/api/scenes/closing-time", preset, b.authed)).status, 200);
     assert.equal((await b.json("PUT", "/api/scenes/bad", { name: "x", actions: [{ displayId: "nope", do: "idle" }] }, b.authed)).status, 400);
     const applied = (await (await b.json("POST", "/api/scenes/closing-time/apply", undefined, b.authed)).json()) as { steps: { step: string; ok: boolean }[] };
     assert.deepEqual(ended, ["R1", "R2"], "every room ends, private ones too");
     assert.ok(applied.steps.some((s) => s.step === "announcement"));
-    assert.equal(b.displays[0].content?.kind, "idle");
+    assert.ok(!applied.steps.some((s) => s.step.startsWith("tv1") || s.step.startsWith("tv2")), "TVs untouched");
     assert.match(((await (await b.json("GET", "/api/announcement", undefined, b.authed)).json()) as { text: string }).text, /closing/i);
 
     // Scheduled bingo: countdown at 19:55, room on the TV at 20:00, once.

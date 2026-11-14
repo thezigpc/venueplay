@@ -19,6 +19,10 @@ export interface GameRuntime {
    * use or already gone; never forced.
    */
   removeImage?(image: string): Promise<boolean>;
+  /** Box 0.16.0: the game's /data as a tar (settings backup). Docker only; the container must exist. */
+  exportData?(gameId: string): Promise<Buffer>;
+  /** Box 0.16.0: puts a tar from exportData back into /data (restore). The game is restarted after. */
+  importData?(gameId: string, tar: Buffer): Promise<void>;
 }
 
 /** Runs the Cloudflare Tunnel connector (cloudflared) next to the gateway. */

@@ -4,6 +4,8 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 export { ADMIN_COOKIE } from "@bargames/common";
 import { ADMIN_COOKIE } from "@bargames/common";
 const SESSION_MS = 12 * 60 * 60 * 1000;
+/** Box 0.16.0: "Keep me signed in on this device" (the iPad, a home-screen app). */
+export const REMEMBER_MS = 30 * 24 * 60 * 60 * 1000;
 /** Bounds the work a login attempt costs (scrypt runs on whatever is sent). */
 export const MAX_PASSWORD = 256;
 
@@ -74,8 +76,8 @@ export class AdminAuth {
     return this.store.get().revokedAt ?? 0;
   }
 
-  issue(now = Date.now()): string {
-    const exp = String(now + SESSION_MS);
+  issue(now = Date.now(), ttlMs = SESSION_MS): string {
+    const exp = String(now + ttlMs);
     return `${exp}.${this.sign(exp)}`;
   }
 

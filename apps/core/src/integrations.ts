@@ -203,6 +203,11 @@ export class IntegrationHub {
   }
 
   /** A scene ran (admin, schedule or integration): integrations with "scenes" hear it. */
+  /** Box 0.16.0: an integration's latest report (the admin's status bar). */
+  reportOf(id: string): IntegrationReport | undefined {
+    return this.reports.get(id)?.report;
+  }
+
   sceneRan(sceneId: string, ok: boolean, by: string): void {
     const at = new Date().toISOString();
     for (const s of this.streams) if (s.perms.has("scenes")) this.send(s, { type: "scene", sceneId, ok, by, at });

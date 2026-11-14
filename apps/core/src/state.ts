@@ -5,7 +5,7 @@ import path from "node:path";
 import type { CloudflareSettings } from "./cloudflare/service.js";
 import type { StartupRule } from "./startup.js";
 import type { ResultEntry } from "./leaderboard.js";
-import type { Scene, Schedule } from "./scenes.js";
+import { DEFAULT_CLOSING, type ClosingSettings, type Scene, type Schedule } from "./scenes.js";
 
 export interface VenueSettings {
   name: string;
@@ -120,6 +120,21 @@ export interface WifiSettings {
   networks: SavedWifi[];
 }
 
+/** Box 0.16.0: a saved announcement staff post with one tap. */
+export interface AnnouncementPreset {
+  id: string;
+  text: string;
+  /** How long it stays up; absent: until staff take it down. */
+  minutes?: number;
+  show?: "everywhere" | "phones" | "tvs";
+  position?: "top" | "bottom";
+}
+export const DEFAULT_ANNOUNCEMENT_PRESETS: AnnouncementPreset[] = [
+  { id: "last-call", text: "Last call!", minutes: 15 },
+  { id: "bingo-soon", text: "Bingo starts in 10 minutes. Grab a card!", minutes: 10 },
+  { id: "next-round", text: "Next round starting soon.", minutes: 5 },
+];
+
 export function openState(dataDir: string) {
   return {
     venue: new JsonStore<VenueSettings>(path.join(dataDir, "venue.json"), DEFAULT_VENUE),
@@ -152,6 +167,10 @@ export function openState(dataDir: string) {
      * Pruned when the room is gone.
      */
     hostLinks: new JsonStore<Record<string, { url: string; at: string }>>(path.join(dataDir, "host-links.json"), {}, 0o600),
+    /** Box 0.16.0: closing time (a scene per night). */
+    closing: new JsonStore<ClosingSettings>(path.join(dataDir, "closing.json"), DEFAULT_CLOSING),
+    /** Box 0.16.0: one-tap announcement texts for staff. */
+    announcementPresets: new JsonStore<{ presets: AnnouncementPreset[] }>(path.join(dataDir, "announcement-presets.json"), { presets: DEFAULT_ANNOUNCEMENT_PRESETS }),
   };
 }
 export type State = ReturnType<typeof openState>;

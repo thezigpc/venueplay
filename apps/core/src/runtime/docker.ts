@@ -154,6 +154,17 @@ export class DockerRuntime implements GameRuntime, TunnelConnector {
     }
   }
 
+  async exportData(id: string): Promise<Buffer> {
+    const res = await this.call("GET", `/containers/${names(id).container}/archive?path=${encodeURIComponent("/data")}`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  async importData(id: string, tar: Buffer): Promise<void> {
+    // The tar's entries start with "data/", so extracting at / puts them back in /data.
+    const res = await fetch(`${this.base}/v1.45/containers/${names(id).container}/archive?path=${encodeURIComponent("/")}`, { method: "PUT", headers: { "content-type": "application/x-tar" }, body: tar });
+    if (!res.ok) throw new Error(`docker PUT archive ${id}: ${res.status} ${await res.text()}`);
+  }
+
   async removeImage(image: string): Promise<boolean> {
     // No force: Docker refuses (409) while any container, running or stopped, uses it.
     const res = await this.call("DELETE", `/images/${encodeURIComponent(image)}`, undefined, [404, 409]);

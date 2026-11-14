@@ -220,6 +220,21 @@ if (isMain) {
     process.exit(1);
   }
   const base = `http://127.0.0.1:${process.env.PORT ?? 7100}`;
+  // Box 0.16.0: bgctl backup (on the host) saves this to a file. The bytes go to stdout.
+  if (process.argv[2] === "backup-raw") {
+    const pass = process.env.BG_BACKUP_PASSPHRASE ?? "";
+    fetch(`${base}/internal/ops/backup`, { method: "POST", headers: { authorization: `Bearer ${token}`, ...(pass ? { "x-backup-passphrase": encodeURIComponent(pass) } : {}) }, signal: AbortSignal.timeout(10 * 60_000) })
+      .then(async (res) => {
+        if (!res.ok) throw new OpsError(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`);
+        const skipped = JSON.parse(decodeURIComponent(res.headers.get("x-backup-skipped") ?? "%5B%5D")) as string[];
+        for (const s of skipped) console.error(`left out: ${s}`);
+        process.stdout.write(Buffer.from(await res.arrayBuffer()), () => process.exit(0));
+      })
+      .catch((e: Error) => {
+        console.error(`backup failed: ${e.message}`);
+        process.exit(1);
+      });
+  } else
   runOps(process.argv.slice(2), opsClient(base, token))
     .then((code) => process.exit(code))
     .catch((e: Error) => {

@@ -2,7 +2,8 @@ import QRCode from "qrcode";
 import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_LINK_TTL_MS, STAFF_TTL_MS, type Logger } from "@bargames/common";
 import { PasswordLimiter } from "./limiter.js";
 import { HostSampler } from "./systemStats.js";
-import { cleanScene, cleanSchedule, closingTimeScene, dueNow, WAKE_RETRY_MS, WAKE_TRIES, type Scene, type Schedule, type TvCaps } from "./scenes.js";
+import { createBackup, packBackup, resumePendingRestore, unpackBackup, writeCoreFiles } from "./backup.js";
+import { cleanClosing, cleanScene, cleanSchedule, closingSchedules, closingTimeScene, dueNow, WAKE_RETRY_MS, WAKE_TRIES, type Scene, type Schedule, type TvCaps } from "./scenes.js";
 import { cleanResult, board, Leaderboards, nightStart } from "./leaderboard.js";
 import { rewardsHook } from "./rewards.js";
 import {
@@ -35,7 +36,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isIP } from "node:net";
-import { ADMIN_COOKIE, AdminAuth, readCookie } from "./auth.js";
+import { ADMIN_COOKIE, AdminAuth, readCookie, REMEMBER_MS } from "./auth.js";
 import type { CloudflareService } from "./cloudflare/service.js";
 import type { EventBus } from "./events.js";
 import { GameRegistry, HttpError } from "./games.js";
@@ -488,8 +489,10 @@ export function createApp(d: AppDeps) {
 
   const login = (req: Request, res: Response) => {
     const secure = req.headers["x-forwarded-proto"] === "https";
+    // Box 0.16.0: "keep me signed in" (30 days, e.g. the bar's iPad); "sign out everywhere" still ends it.
+    const ttl = req.body?.remember === true ? REMEMBER_MS : 12 * 3600e3;
     // Under /admin the session cookie is scoped to it, so browsing games doesn't send it around.
-    res.cookie(ADMIN_COOKIE, d.auth.issue(), { httpOnly: true, sameSite: "strict", secure, maxAge: 12 * 3600e3, path: `${adminPrefix(req)}/` });
+    res.cookie(ADMIN_COOKIE, d.auth.issue(Date.now(), ttl), { httpOnly: true, sameSite: "strict", secure, maxAge: ttl, path: `${adminPrefix(req)}/` });
     // Signed in here = signed in to every game's and app's own admin (SDK 0.7.0+): the
     // gateway checks this cookie and tells games "staff", never passing the cookie on.
     const domain = staffCookieDomain(req);
@@ -957,12 +960,28 @@ export function createApp(d: AppDeps) {
   };
 
   /** Applies a scene: end rooms, announcement, countdown, then each TV. Returns what happened per step. */
-  const applyScene = async (scene: Scene, by = "admin") => {
+  /** Box 0.16.0: sequences waiting for their next scene (scene id → when and what). */
+  const pendingNext = new Map<string, { sceneId: string; at: string; timer: ReturnType<typeof setTimeout> }>();
+  const applyScene = async (scene: Scene, by = "admin", depth = 0): Promise<{ step: string; ok: boolean; message?: string }[]> => {
     const steps = await runSceneSteps(scene);
     hub.sceneRan(scene.id, steps.every((s) => s.ok), by);
     d.log.info("scenes", "applied", { scene: scene.id, by, steps: steps.length, failed: steps.filter((s) => !s.ok).length });
+    // A sequence: the next scene later. Re-applying a scene restarts its wait; 8 steps at most.
+    if (scene.next && depth < 8) {
+      const { sceneId, afterMinutes } = scene.next;
+      clearTimeout(pendingNext.get(scene.id)?.timer);
+      const timer = setTimeout(() => {
+        pendingNext.delete(scene.id);
+        const next = d.state.scenes.get().scenes.find((x) => x.id === sceneId);
+        if (next) void applyScene(next, `sequence:${scene.id}`, depth + 1).catch((err) => d.log.warn("scenes", "sequence step failed", { scene: sceneId, err: (err as Error).message }));
+      }, afterMinutes * 60_000);
+      timer.unref?.();
+      pendingNext.set(scene.id, { sceneId, at: new Date(Date.now() + afterMinutes * 60_000).toISOString(), timer });
+      steps.push({ step: `next: ${sceneId} in ${afterMinutes} min`, ok: true });
+    }
     return steps;
   };
+  app.locals.pendingSequences = () => [...pendingNext.entries()].map(([from, p]) => ({ from, sceneId: p.sceneId, at: p.at }));
   const runSceneSteps = async (scene: Scene) => {
     const steps: { step: string; ok: boolean; message?: string }[] = [];
     if (scene.endRooms) {
@@ -981,6 +1000,25 @@ export function createApp(d: AppDeps) {
     if (scene.countdown) {
       await setCountdown(newCountdown(scene.countdown));
       steps.push({ step: "countdown", ok: true });
+    }
+    // Box 0.16.0 extras.
+    if (scene.clearAnnouncement) {
+      await d.state.announcement.set({});
+      scheduleExpiry(undefined);
+      void refreshIdleTvs().catch(() => undefined);
+      steps.push({ step: "announcement cleared", ok: true });
+    }
+    if (scene.clearCountdown) {
+      await setCountdown({});
+      steps.push({ step: "countdown cleared", ok: true });
+    }
+    if (scene.stopSound) {
+      const playing = (((await brokerCall("GET", "/audio/sessions").catch(() => [])) as { id: string; state: string }[]) ?? []).filter((s) => !["ended", "error"].includes(s.state));
+      for (const s of playing) {
+        const ok = await brokerCall("POST", `/audio/sessions/${encodeURIComponent(s.id)}/stop`, { by: "admin" }).then(() => true, () => false);
+        steps.push({ step: `sound stopped (${s.id})`, ok });
+      }
+      if (!playing.length) steps.push({ step: "no sound playing", ok: true });
     }
     const idle = scene.actions.some((a) => a.do === "idle") ? await idleContent() : undefined;
     /** TVs this scene just switched on: their next step retries while they wake up. */
@@ -1029,7 +1067,7 @@ export function createApp(d: AppDeps) {
     h(async (req, res) => {
       const tvs = ((await brokerCall("GET", "/displays").catch(() => [])) as { id: string; capabilities?: TvCaps }[]) ?? [];
       const byId = new Map(tvs.map((t) => [t.id, t]));
-      const scene = cleanScene({ ...(req.body ?? {}), id: req.params.id }, { game: (id) => Boolean(d.games.get(id)), display: (id) => byId.has(id), caps: (id) => byId.get(id)?.capabilities });
+      const scene = cleanScene({ ...(req.body ?? {}), id: req.params.id }, { game: (id) => Boolean(d.games.get(id)), display: (id) => byId.has(id), caps: (id) => byId.get(id)?.capabilities, scene: (id) => d.state.scenes.get().scenes.some((x) => x.id === id) });
       if (typeof scene === "string") throw new HttpError(400, scene);
       await d.state.scenes.update((s) => {
         s.scenes = [...s.scenes.filter((x) => x.id !== scene.id), scene];
@@ -1055,7 +1093,58 @@ export function createApp(d: AppDeps) {
     }),
   );
 
-  app.get("/api/schedules", (_req, res) => res.json({ schedules: d.state.schedules.get().schedules }));
+  app.get("/api/schedules", (_req, res) => res.json({ schedules: d.state.schedules.get().schedules, sequences: app.locals.pendingSequences() }));
+
+  /**
+   * Box 0.16.0: the admin's status bar. Short items, worst first; an empty list means all
+   * good. Each has a page to open ("tvs", "games", "system", "smart-home", "tonight", "scenes").
+   */
+  app.get(
+    "/api/status",
+    h(async (_req, res) => {
+      type Item = { level: "error" | "warn" | "info"; text: string; page: string };
+      const items: Item[] = [];
+      const tvs = ((await brokerCall("GET", "/displays?health=1").catch(() => undefined)) as { name: string; label?: string; health?: { online?: boolean } }[] | undefined) ?? undefined;
+      if (!tvs) items.push({ level: "error", text: "Can't reach the TV service (broker)", page: "system" });
+      else {
+        const off = tvs.filter((t) => !t.health?.online).map((t) => t.label || t.name);
+        if (off.length) items.push({ level: "warn", text: off.length === 1 ? `${off[0]} is offline` : `${off.length} TVs offline: ${off.slice(0, 3).join(", ")}${off.length > 3 ? "…" : ""}`, page: "tvs" });
+      }
+      const on = d.games.all().filter((g) => g.enabled);
+      const states = await Promise.all(on.map(async (g) => ({ g, state: await d.runtime.state(g.id).catch(() => "unknown") })));
+      const down = states.filter((x) => x.state !== "running").map((x) => buildContext(d.state.venue.get(), x.g).game.displayName);
+      if (down.length) items.push({ level: "error", text: `Not running: ${down.join(", ")}`, page: "games" });
+      for (const g of on.filter((x) => isIntegration(x.manifest))) {
+        const r = hub.reportOf(g.id);
+        if (r && (r.state === "error" || r.state === "warn")) items.push({ level: r.state === "error" ? "error" : "warn", text: `${g.manifest.name}: ${r.message ?? r.state}`, page: "smart-home" });
+      }
+      const claims = [...attention.values()].reduce((n, list) => n + list.length, 0);
+      if (claims) items.push({ level: "warn", text: `${claims} thing${claims === 1 ? "" : "s"} need${claims === 1 ? "s" : ""} staff`, page: "tonight" });
+      const ups = updates.list().filter((u) => u.available).length;
+      const latest = await latestVersion().catch(() => undefined);
+      if (latest && compareVersions(latest, d.config.boxVersion) > 0) items.push({ level: "info", text: `Box ${latest} is available`, page: "system" });
+      if (ups) items.push({ level: "info", text: `${ups} game/app update${ups === 1 ? "" : "s"} available`, page: "games" });
+      for (const p of app.locals.pendingSequences() as { sceneId: string; at: string }[]) {
+        const name = d.state.scenes.get().scenes.find((s) => s.id === p.sceneId)?.name ?? p.sceneId;
+        items.push({ level: "info", text: `${name} in ${Math.max(1, Math.ceil((Date.parse(p.at) - Date.now()) / 60_000))} min`, page: "scenes" });
+      }
+      const order = { error: 0, warn: 1, info: 2 };
+      items.sort((a, b) => order[a.level] - order[b.level]);
+      res.json({ at: new Date().toISOString(), items });
+    }),
+  );
+
+  // Box 0.16.0: closing time, a scene per night.
+  app.get("/api/closing", (_req, res) => res.json(d.state.closing.get()));
+  app.put(
+    "/api/closing",
+    h(async (req, res) => {
+      const c = cleanClosing(req.body, (id) => d.state.scenes.get().scenes.some((s) => s.id === id));
+      if (typeof c === "string") throw new HttpError(400, c);
+      await d.state.closing.set(c);
+      res.json(c);
+    }),
+  );
   app.put(
     "/api/schedules/:id",
     h(async (req, res) => {
@@ -1081,7 +1170,7 @@ export function createApp(d: AppDeps) {
   const runSchedules = async (now = new Date()) => {
     const { schedules, fired } = d.state.schedules.get();
     const tz = d.state.venue.get().timezone ?? undefined;
-    const due = dueNow(schedules, now, tz, fired);
+    const due = dueNow([...schedules, ...closingSchedules(d.state.closing.get())], now, tz, fired);
     if (!due.start.length && !due.countdown.length) return;
     const date = new Intl.DateTimeFormat("en-CA", { timeZone: tz ?? "UTC" }).format(now);
     const mark: Record<string, string> = {};
@@ -1428,6 +1517,28 @@ export function createApp(d: AppDeps) {
     }),
   );
 
+  // Box 0.16.0: one-tap announcement presets ("Last call!").
+  app.get("/api/announcement-presets", (_req, res) => res.json(d.state.announcementPresets.get()));
+  app.put(
+    "/api/announcement-presets",
+    h(async (req, res) => {
+      const list = (req.body ?? {}).presets;
+      if (!Array.isArray(list) || list.length > 12) throw new HttpError(400, "presets: up to 12");
+      const presets = list.map((p: Record<string, unknown>, i: number) => {
+        const text = typeof p?.text === "string" ? p.text.trim().replace(/\s+/g, " ") : "";
+        if (!text || text.length > 200) throw new HttpError(400, `preset ${i + 1}: text, up to 200 characters`);
+        const minutes = p.minutes === undefined || p.minutes === null || p.minutes === "" ? undefined : Number(p.minutes);
+        if (minutes !== undefined && !(Number.isFinite(minutes) && minutes > 0 && minutes <= 1440)) throw new HttpError(400, `preset ${i + 1}: minutes 1-1440`);
+        const show = ["everywhere", "phones", "tvs"].includes(p.show as string) ? (p.show as "everywhere") : undefined;
+        const position = ["top", "bottom"].includes(p.position as string) ? (p.position as "top") : undefined;
+        const id = typeof p.id === "string" && /^[a-z0-9-]{1,40}$/.test(p.id) ? p.id : `preset-${i + 1}`;
+        return { id, text, ...(minutes ? { minutes } : {}), ...(show ? { show } : {}), ...(position ? { position } : {}) };
+      });
+      await d.state.announcementPresets.set({ presets });
+      res.json({ presets });
+    }),
+  );
+
   // ------------------------------------------------------------ casting settings
 
   app.get("/api/cast-settings", (_req, res) => res.json(d.state.cast.get()));
@@ -1665,6 +1776,81 @@ export function createApp(d: AppDeps) {
     opsAuth,
     h(async (_req, res) => res.json({ box: d.config.boxVersion, lastCheck: updates.lastRun, games: await Promise.all(d.games.all().map(opsRow)) })),
   );
+  // ------------------------------------------------------------ box 0.16.0: settings backup
+  const backupDeps = () => {
+    if (!d.config.dataDir) throw new HttpError(501, "this core has no data folder");
+    return {
+      dataDir: d.config.dataDir,
+      boxVersion: d.config.boxVersion,
+      venueName: () => d.state.venue.get().name,
+      gameIds: () => d.games.all().map((g) => g.id),
+      brokerFiles: async () => ((await brokerCall("GET", "/backup")) as { files: Record<string, string> }).files,
+      exportData: d.runtime.exportData?.bind(d.runtime),
+    };
+  };
+  const backupName = () => `bargames-settings-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.bgbackup`;
+  const passphraseOf = (req: Request) => {
+    const p = decodeURIComponent(String(req.headers["x-backup-passphrase"] ?? ""));
+    if (p && p.length < 8) throw new HttpError(400, "the passphrase needs at least 8 characters");
+    return p || undefined;
+  };
+  const sendBackup = async (req: Request, res: Response, by: string) => {
+    const b = await createBackup(backupDeps());
+    const file = packBackup(b, passphraseOf(req));
+    d.log.info("backup", "settings backup made", { by, bytes: file.length, encrypted: Boolean(passphraseOf(req)), skipped: b.skipped.length });
+    res.set({ "content-type": "application/octet-stream", "content-disposition": `attachment; filename="${backupName()}"`, "cache-control": "no-store", "x-backup-skipped": encodeURIComponent(JSON.stringify(b.skipped)) });
+    res.send(file);
+  };
+  /** Downloads a backup. Header x-backup-passphrase (URI-encoded, 8+ characters) encrypts it. */
+  app.post("/api/backup", h(async (req, res) => sendBackup(req, res, "admin")));
+  /** bgctl backup (box host, ops token): the same file, e.g. onto the USB drive. */
+  app.post("/internal/ops/backup", opsAuth, h(async (req, res) => sendBackup(req, res, "bgctl")));
+  /**
+   * Restores a backup (the file as the body). Core's and the broker's settings are written
+   * now and both restart; each game's data goes back once the game is up again.
+   */
+  app.post(
+    "/api/backup/restore",
+    express.raw({ type: () => true, limit: "512mb" }),
+    h(async (req, res) => {
+      const buf = req.body as Buffer;
+      if (!Buffer.isBuffer(buf) || !buf.length) throw new HttpError(400, "send the backup file as the body");
+      let b;
+      try {
+        b = unpackBackup(buf, passphraseOf(req));
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
+      const deps = backupDeps();
+      const brokerOk = Object.keys(b.broker).length ? await brokerCall("POST", "/backup/restore", { files: b.broker }).then(() => true, () => false) : true;
+      const written = writeCoreFiles(deps.dataDir, b);
+      d.log.warn("backup", "settings restored; restarting", { from: b.createdAt, venue: b.venue, coreFiles: written.length, brokerOk, games: Object.keys(b.games).length });
+      res.json({ ok: true, from: b.createdAt, venue: b.venue, box: b.box, core: written.length, broker: brokerOk, games: Object.keys(b.games), skipped: b.skipped });
+      // Compose (restart: unless-stopped) starts core again with the restored files.
+      setTimeout(() => process.exit(0), 1000).unref?.();
+    }),
+  );
+  if (d.config.dataDir) {
+    const dataDir = d.config.dataDir;
+    const t = setTimeout(
+      () =>
+        void resumePendingRestore({
+          dataDir,
+          state: (id) => d.runtime.state(id),
+          importData: d.runtime.importData?.bind(d.runtime),
+          restart: async (id) => {
+            const g = d.games.get(id);
+            if (!g?.enabled) return;
+            await d.runtime.stop(id);
+            await d.runtime.ensureRunning(g);
+          },
+          log: d.log,
+        }).catch((err) => d.log.warn("backup", "pending restore failed", { err: (err as Error).message })),
+      5000,
+    );
+    t.unref?.();
+  }
+
   /** { gameId? }: re-check now (one game, or all). */
   app.post(
     "/internal/ops/check",
