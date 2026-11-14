@@ -244,7 +244,7 @@ export interface RoomSummary {
 
 export interface RoomsOverview {
   at: string;
-  games: { id: string; name: string; publicUrl?: string; commands: string[]; error?: string; rooms: (RoomSummary & { tvs: { id: string; name: string }[] })[] }[];
+  games: { id: string; name: string; publicUrl?: string; commands: string[]; error?: string; rooms: (RoomSummary & { tvs: { id: string; name: string }[]; /** Box 0.15.5: rooms the box created. */ hostUrl?: string })[] }[];
 }
 
 export interface CfZone {
@@ -362,6 +362,7 @@ export const api = {
   command: (id: string, body: { command: string; roomCode?: string; args?: Record<string, unknown> }) =>
     call<{ ok: boolean; message?: string; data?: unknown }>("POST", `/games/${encodeURIComponent(id)}/command`, body),
   rooms: () => call<RoomsOverview>("GET", "/rooms"),
+  hostQrUrl: (gameId: string, code: string) => bgUrl(`/api/rooms/${encodeURIComponent(gameId)}/${encodeURIComponent(code)}/host.svg`),
   announcement: () => call<Announcement | null>("GET", "/announcement"),
   announce: (text: string, minutes?: number, where: { show?: "everywhere" | "phones" | "tvs"; position?: "top" | "bottom" } = {}) => call<Announcement>("PUT", "/announcement", { text, minutes, ...where }),
   clearAnnouncement: () => call<null>("DELETE", "/announcement"),

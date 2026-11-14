@@ -146,6 +146,12 @@ export function openState(dataDir: string) {
     wifi: new JsonStore<WifiSettings>(path.join(dataDir, "wifi.json"), { networks: [] }, 0o600),
     // Holds the Cloudflare API token and tunnel token: owner-only.
     cloudflare: new JsonStore<CloudflareSettings>(path.join(dataDir, "cloudflare.json"), {}, 0o600),
+    /**
+     * Box 0.15.5: host links of the rooms the box created ("gameId:CODE" → link), so staff can
+     * take over hosting from the Rooms page later. They carry host secrets: owner-only.
+     * Pruned when the room is gone.
+     */
+    hostLinks: new JsonStore<Record<string, { url: string; at: string }>>(path.join(dataDir, "host-links.json"), {}, 0o600),
   };
 }
 export type State = ReturnType<typeof openState>;

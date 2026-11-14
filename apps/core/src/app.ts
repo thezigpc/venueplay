@@ -1,3 +1,4 @@
+import QRCode from "qrcode";
 import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_LINK_TTL_MS, STAFF_TTL_MS, type Logger } from "@bargames/common";
 import { PasswordLimiter } from "./limiter.js";
 import { HostSampler } from "./systemStats.js";
@@ -1816,6 +1817,11 @@ export function createApp(d: AppDeps) {
       }
       code = created.roomCode;
       hostUrl = absoluteHttpUrl(created.hostUrl, publicUrl);
+      // Box 0.15.5: kept so staff can open the host controls later (Rooms page), not just now.
+      if (hostUrl) {
+        const link = hostUrl;
+        await d.state.hostLinks.update((s) => void (s[`${game.id}:${code}`] = { url: link, at: new Date().toISOString() }));
+      }
       d.log.info("cast", "room created", { game: game.id, room: code });
     }
 
@@ -2026,10 +2032,17 @@ export function createApp(d: AppDeps) {
           try {
             const st = await gameStatusOf(game);
             if (!st) return { ...base, rooms: [], error: "status unavailable" };
+            const links = d.state.hostLinks.get();
             const rooms = (st.rooms ?? []).map((r) => ({
               ...r,
               tvs: displays.filter((x) => x.content?.kind === "url" && roomOf(game, x.content.url) === r.code).map((x) => ({ id: x.id, name: x.label || x.name })),
+              // Box 0.15.5: rooms the box created keep their host link (admins only see this page).
+              ...(links[`${game.id}:${r.code}`] ? { hostUrl: links[`${game.id}:${r.code}`]!.url } : {}),
             }));
+            // Forget links of rooms this game no longer has.
+            const live = new Set(rooms.map((r) => `${game.id}:${r.code}`));
+            const stale = Object.keys(links).filter((k) => k.startsWith(`${game.id}:`) && !live.has(k));
+            if (stale.length) await d.state.hostLinks.update((s) => void stale.forEach((k) => delete s[k]));
             return { ...base, rooms };
           } catch (err) {
             return { ...base, rooms: [], error: err instanceof Error ? err.message : String(err) };
@@ -2037,6 +2050,20 @@ export function createApp(d: AppDeps) {
         }),
       );
       res.json({ games: out, at: new Date().toISOString() });
+    }),
+  );
+
+  /**
+   * Box 0.15.5: a room's host link as a QR code, so staff can take over hosting on a phone
+   * (scan from the iPad's Rooms page). Admin only, like the link itself.
+   */
+  app.get(
+    "/api/rooms/:gameId/:code/host.svg",
+    h(async (req, res) => {
+      const link = d.state.hostLinks.get()[`${req.params.gameId}:${String(req.params.code).toUpperCase()}`];
+      if (!link) throw new HttpError(404, "no host link for that room");
+      const svg = await QRCode.toString(link.url, { type: "svg", margin: 2, errorCorrectionLevel: "M" });
+      res.type("image/svg+xml").set("cache-control", "no-store").send(svg);
     }),
   );
 

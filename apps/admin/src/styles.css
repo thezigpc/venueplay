@@ -354,3 +354,10 @@ button.tv-tile.selected { border-color: var(--primary); }
 /* TVs page: ignored TVs (box 0.15.2) */
 .ignored-tvs { margin-top: 20px; padding-top: 12px; border-top: 1px solid #252c55; }
 .ignored-tvs summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: #c3cae6; }
+
+/* Rooms: take over hosting a room the box opened (box 0.15.5) */
+.host-link { margin: 8px 0; }
+.host-qr { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.host-qr img { background: #fff; border-radius: 12px; padding: 6px; }
+.host-link a.button { display: inline-flex; align-items: center; font-weight: 600; border-radius: 10px; padding: 10px 16px; min-height: 44px; text-decoration: none; box-sizing: border-box; }
+.host-link a.button.primary { background: var(--primary); color: #161616; }

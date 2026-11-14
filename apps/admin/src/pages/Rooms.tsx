@@ -146,6 +146,7 @@ export function RoomsPage() {
               </button>
             ))}
           </div>
+          {r.hostUrl && <HostLink g={g} r={r} />}
           <RoomTvs g={g} r={r} displays={displays.data ?? []} busy={busy} act={act} />
         </section>
       ))}
@@ -158,6 +159,32 @@ function Stat({ n, label, warn }: { n: number; label: string; warn?: boolean }) 
     <div className={`stat${warn ? " warn" : ""}`}>
       <b>{n}</b>
       <span>{label}</span>
+    </div>
+  );
+}
+
+/**
+ * Box 0.15.5: a room the box opened on the TVs has no host phone. Staff take it over here
+ * at any time: open the host controls on this device, or scan the code with a phone.
+ */
+function HostLink({ g, r }: { g: Game; r: Room }) {
+  const [qr, setQr] = useState(false);
+  return (
+    <div className="host-link">
+      <div className="buttons">
+        <a className="button primary" href={r.hostUrl} target="_blank" rel="noreferrer">
+          Host this room
+        </a>
+        <button type="button" onClick={() => setQr(!qr)}>
+          {qr ? "Hide code" : "Host on a phone"}
+        </button>
+      </div>
+      {qr && (
+        <div className="host-qr">
+          <img src={api.hostQrUrl(g.id, r.code)} alt={`Code that opens the host controls of ${g.name} ${r.code}`} width={180} height={180} />
+          <p className="muted small-print">Scan with the phone that will run the game. Anyone with this code can host the room, so don't leave it on screen.</p>
+        </div>
+      )}
     </div>
   );
 }

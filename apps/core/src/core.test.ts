@@ -284,6 +284,19 @@ test("casting: new room from the admin, and casting from inside a game (gated, P
     assert.equal(cast.hostUrl, "http://bingo.localhost:7080/host/NEW1?key=s3cret");
     assert.equal(shows.at(-1)!.content.url, cast.url);
 
+    // Box 0.15.5: the Rooms page keeps that host link (and its QR) while the room lives.
+    type Ov = { games: { id: string; rooms: { code: string; hostUrl?: string }[] }[] };
+    const roomsOf = async () => ((await (await json("GET", "/api/rooms", undefined, authed)).json()) as Ov).games.find((x) => x.id === "bingo")!.rooms;
+    assert.equal((await roomsOf()).find((r) => r.code === "NEW1")?.hostUrl, cast.hostUrl);
+    const qr = await json("GET", "/api/rooms/bingo/new1/host.svg", undefined, authed);
+    assert.equal(qr.status, 200);
+    assert.match(await qr.text(), /<svg/);
+    assert.equal((await json("GET", "/api/rooms/bingo/NEW1/host.svg")).status, 401, "admins only");
+    rooms.splice(rooms.indexOf("NEW1"), 1);
+    assert.equal((await roomsOf()).some((r) => r.code === "NEW1"), false);
+    assert.equal((await json("GET", "/api/rooms/bingo/NEW1/host.svg", undefined, authed)).status, 404, "forgotten once the room is gone");
+    rooms.push("NEW1");
+
     // From the game: off until the venue allows it.
     const g = { authorization: `Bearer ${games.get("bingo")!.token}` };
     assert.deepEqual(await (await json("GET", "/internal/displays", undefined, g)).json(), { enabled: false, pinRequired: false, displays: [] });
