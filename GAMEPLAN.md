@@ -304,6 +304,8 @@ from the earlier plan.
 - [ ] Optional WAF list sync; optional split DNS (the router points game hostnames at the box, with a Let's Encrypt certificate obtained through the Cloudflare token) so phones work during internet outages
 - [x] Box 0.15.1 hardening: admin password change and "sign out everywhere"; wrong-PIN and lockout limits; tests in CI before every release; old images and snapshots cleaned up; owner-only credential files; the broker's API off the venue LAN; crash handlers; updates wait for core, gateway and broker and roll back otherwise
 - [x] Box 0.15.2: "Detach from all TVs" (stops every cast, sound session and media app on TVs; nothing powered off) and "Ignore this TV" for TVs that are away (the box travels between home and the venue)
+- [x] Box 0.15.3: experimental 4K (2160p) AirPlay picture setting per TV, for an Apple TV 4K (pages keep their 1080p layout, drawn at 2x)
+- [ ] Test 4K on real hardware: does doubletake send above 1080p, does the page fill the screen, CPU load with one 4K channel
 - [ ] Backup and restore of a box's settings (TV pairings, scenes, games), e.g. to a USB drive at the venue
 - [ ] Health alerts (box → HA → you)
 

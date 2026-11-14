@@ -11,20 +11,29 @@ export type DeliveryMethod = "native-url" | "airplay" | "roku-hls" | "local" | "
 
 /** How the box renders and encodes for a TV (AirPlay). TVs with the same page and settings share one encoder. */
 export interface StreamSettings {
-  resolution: "720p" | "1080p";
+  /** 2160p: for 4K receivers (Apple TV 4K). Experimental: not yet tested on real TVs. */
+  resolution: "720p" | "1080p" | "2160p";
   fps: 15 | 24 | 30 | 60;
   /** Video bitrate in kbps; 0 or absent: doubletake picks one for the resolution and frame rate. */
   bitrateKbps?: number;
 }
 
-export const RESOLUTIONS = { "720p": [1280, 720], "1080p": [1920, 1080] } as const;
+/** Pixels the box renders and encodes. */
+export const RESOLUTIONS = { "720p": [1280, 720], "1080p": [1920, 1080], "2160p": [3840, 2160] } as const;
+
+/**
+ * Chromium's device scale factor per resolution. 2160p lays pages out at 1920x1080 CSS
+ * pixels and draws them at 2x, so games and menus keep their 1080p layout but text and
+ * images are drawn at full 4K sharpness.
+ */
+export const PIXEL_SCALE: Record<StreamSettings["resolution"], number> = { "720p": 1, "1080p": 1, "2160p": 2 };
 export const FRAME_RATES = [15, 24, 30, 60] as const;
 
 /** Checks a settings object from the API; returns a problem or undefined. */
 export function checkStreamSettings(s: unknown): string | undefined {
   if (typeof s !== "object" || s === null) return "streamSettings: { resolution, fps, bitrateKbps? }";
   const v = s as Record<string, unknown>;
-  if (!(typeof v.resolution === "string" && v.resolution in RESOLUTIONS)) return "resolution: 720p or 1080p";
+  if (!(typeof v.resolution === "string" && v.resolution in RESOLUTIONS)) return "resolution: 720p, 1080p or 2160p";
   if (!(FRAME_RATES as readonly unknown[]).includes(v.fps)) return "fps: 15, 24, 30 or 60";
   if (v.bitrateKbps !== undefined && !(Number.isInteger(v.bitrateKbps) && (v.bitrateKbps === 0 || ((v.bitrateKbps as number) >= 500 && (v.bitrateKbps as number) <= 40_000)))) {
     return "bitrateKbps: 0 (automatic) or 500-40000";

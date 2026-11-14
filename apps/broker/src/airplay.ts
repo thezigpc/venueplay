@@ -14,7 +14,7 @@
 
 import type { Logger } from "@bargames/common";
 import type { DisplayDevice, ShowResult, StreamService, StreamSettings, StreamState } from "./types.js";
-import { NotBuiltYet, RESOLUTIONS } from "./types.js";
+import { NotBuiltYet, PIXEL_SCALE, RESOLUTIONS } from "./types.js";
 
 /** A child process the streamer started. */
 export interface Proc {
@@ -114,8 +114,11 @@ interface Channel {
 }
 
 interface Profile {
+  /** Rendered and encoded pixels. */
   width: number;
   height: number;
+  /** Chromium's device scale factor (2 for 2160p). */
+  scale: number;
   fps: number;
   bitrateKbps: number;
 }
@@ -128,14 +131,19 @@ export const AIRPLAY_PORT = 7000;
 const STREAMING = "streaming";
 const NEEDS_CODE = "pin_required";
 
-export function chromiumArgs(url: string, profileDir: string, width: number, height: number, debugPort?: number): string[] {
+/**
+ * width/height are the virtual screen's pixels. With scale > 1 the window size is given in
+ * CSS pixels (Chromium scales it by the device scale factor), so a 3840x2160 screen at
+ * scale 2 lays the page out at 1920x1080.
+ */
+export function chromiumArgs(url: string, profileDir: string, width: number, height: number, debugPort?: number, scale = 1): string[] {
   return [
     // Previews: DevTools on loopback only (the broker shares the host's network).
     ...(debugPort ? [`--remote-debugging-port=${debugPort}`, "--remote-debugging-address=127.0.0.1"] : []),
     "--kiosk",
-    `--window-size=${width},${height}`,
+    `--window-size=${Math.round(width / scale)},${Math.round(height / scale)}`,
     "--window-position=0,0",
-    "--force-device-scale-factor=1",
+    `--force-device-scale-factor=${scale}`,
     // The container has no user namespaces for Chromium's sandbox; it only ever loads
     // the venue's own game pages, and runs as an unprivileged user.
     "--no-sandbox",
@@ -254,7 +262,7 @@ export class AirplayStreams implements StreamService {
   /** The TV's settings, or the box default. */
   private profileFor(s?: StreamSettings): Profile {
     const [width, height] = s ? RESOLUTIONS[s.resolution] : [this.o.width, this.o.height];
-    return { width, height, fps: s?.fps ?? this.o.fps, bitrateKbps: s?.bitrateKbps ?? 0 };
+    return { width, height, scale: s ? PIXEL_SCALE[s.resolution] : 1, fps: s?.fps ?? this.o.fps, bitrateKbps: s?.bitrateKbps ?? 0 };
   }
 
   /** Watchdog: restarts dead channels, reconnects TVs that dropped. */
@@ -292,7 +300,7 @@ export class AirplayStreams implements StreamService {
       throw new Error(`virtual display :${display} didn't start: ${xvfb.tail().slice(-3).join(" | ") || String(err)}`);
     }
     const env = { DISPLAY: `:${display}`, XDG_RUNTIME_DIR: this.o.runDir };
-    const chrome = runner.spawn(`chromium:${display}`, this.o.chromium, chromiumArgs(url, `${this.o.runDir}/chromium-${display}`, width, height, debugPort), env);
+    const chrome = runner.spawn(`chromium:${display}`, this.o.chromium, chromiumArgs(url, `${this.o.runDir}/chromium-${display}`, width, height, debugPort, profile.scale), env);
     const daemon = runner.spawn(
       `doubletake:${display}`,
       "doubletake",

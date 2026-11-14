@@ -212,7 +212,7 @@ export interface Display {
 }
 
 export interface StreamSettings {
-  resolution: "720p" | "1080p";
+  resolution: "720p" | "1080p" | "2160p";
   fps: 15 | 24 | 30 | 60;
   bitrateKbps?: number;
 }

@@ -110,6 +110,21 @@ test("chromium runs as a kiosk on the page", () => {
   const args = chromiumArgs("https://x/t", "/run/p", 1920, 1080);
   assert.equal(args.at(-1), "https://x/t");
   assert.ok(args.includes("--kiosk") && args.includes("--window-size=1920,1080") && args.includes("--user-data-dir=/run/p"));
+  assert.ok(args.includes("--force-device-scale-factor=1"));
+});
+
+test("airplay: 2160p renders 4K pixels with a 1080p layout (scale 2)", async () => {
+  const runner = new FakeRunner();
+  const s = make(runner);
+  await s.startAirplay({ ...tv(1), streamSettings: { resolution: "2160p", fps: 30, bitrateKbps: 20000 } }, { url: "https://menu.x/tv" });
+  await s.startAirplay(tv(2), { url: "https://menu.x/tv" });
+  assert.equal(runner.alive("doubletake").length, 2, "4K and 1080p TVs don't share an encoder");
+  assert.deepEqual(runner.alive("Xvfb").map((p) => p.args[3]).sort(), ["1920x1080x24", "3840x2160x24"]);
+  const chromes = runner.alive("chromium");
+  const fourK = chromes.find((p) => p.args.includes("--force-device-scale-factor=2"));
+  assert.ok(fourK && fourK.args.includes("--window-size=1920,1080"), "window in CSS pixels, drawn at 2x");
+  assert.ok(chromes.some((p) => p.args.includes("--force-device-scale-factor=1") && p.args.includes("--window-size=1920,1080")));
+  assert.match(s.state("roku:1")!.settings!, /2160p · 30 fps · 20000 kbps/);
 });
 
 test("airplay: a receiver on another port waits for doubletake's discovery; Rokus don't", async () => {
