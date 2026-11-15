@@ -241,6 +241,9 @@ still fits).
    so **the first player who joins (scanning the TV's QR code) becomes the host**, with the
    same powers as a phone host who created the room. Without the flag, keep today's
    behavior (a venue room the box controls). Games without a host role can ignore it.
+   **Close the offer whenever anyone attaches to the host seat**: staff opening `hostUrl`
+   (box 0.15.5's Rooms page shows it any time) count, not only the first phone. Otherwise the
+   next QR joiner is handed the same host seat (a bug found in Bingo and BuzzBoard, 2026-11-14).
 4. **Slow casts:** a cast from inside the game now answers within about 6 s (the box says
    "starting" if TVs are still connecting). If you call it through the kit, you can also
    give it longer: `call.withTimeout(30_000)("castToTvs", …)`.

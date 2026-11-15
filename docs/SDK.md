@@ -210,7 +210,9 @@ watchVenue((c) => { link.update(c); news.update(c); }, 30_000);
   `adminRouter({ ..., trusted: (req) => bg.isStaff(req) })` and `staffSignIn()` on the
   client. Manifest `routes.admin`: the page the box links to.
 - `CreateRoomArgs.firstJoinerHosts`: the box put the room on a TV with no host; the first
-  player to join becomes the host.
+  player to join becomes the host. **The offer closes as soon as anyone attaches to the host
+  seat**, including staff opening the returned `hostUrl` (box 0.15.5's Rooms page shows it at
+  any time). Otherwise the next player to scan the QR code gets the same host seat.
 
 **SDK 0.5.0 additions:**
 - `ctx.venue.location` (`{ latitude, longitude, label? }`), `ctx.venue.timezone` (IANA),

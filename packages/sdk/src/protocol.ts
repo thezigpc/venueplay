@@ -210,6 +210,11 @@ export interface CreateRoomArgs {
    * SDK 0.7.0: staff put the room on a TV with nobody to host it yet. The first player who
    * joins (scanning the TV's QR code) should become the host. Games without a host role
    * can ignore it.
+   *
+   * The offer closes as soon as anyone attaches to the host seat, including staff opening
+   * the `hostUrl` this command returned (box 0.15.5 shows it on the Rooms page at any time),
+   * not only the first phone. Otherwise the next player to scan the QR code is handed the
+   * same host seat.
    */
   firstJoinerHosts?: boolean;
 }
