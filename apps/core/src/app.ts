@@ -3,6 +3,7 @@ import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF
 import { PasswordLimiter } from "./limiter.js";
 import { HostSampler } from "./systemStats.js";
 import { createBackup, packBackup, resumePendingRestore, unpackBackup, writeCoreFiles } from "./backup.js";
+import { cleanMatchStart, Matches } from "./matches.js";
 import { cleanClosing, cleanScene, cleanSchedule, closingSchedules, closingTimeScene, dueNow, WAKE_RETRY_MS, WAKE_TRIES, type Scene, type Schedule, type TvCaps } from "./scenes.js";
 import { cleanResult, board, Leaderboards, nightStart } from "./leaderboard.js";
 import { rewardsHook } from "./rewards.js";
@@ -178,6 +179,10 @@ export function createApp(d: AppDeps) {
       if (["room_created", "room_closed", "players_changed", "round_started", "round_ended"].includes(body.type)) roomCache.touched(game.id);
       if (body.type === "room_closed" && typeof body.roomCode === "string") {
         void tvWatch.roomClosed(game.id, body.roomCode).catch((err) => d.log.warn("tvwatch", "room_closed handling failed", { err: String(err) }));
+        // Box 0.18.0: a match room closing without a result cancels the match (after a moment,
+        // so a result sent just before the close still counts).
+        const code = body.roomCode;
+        setTimeout(() => void matches.roomClosed(game.id, code).catch(() => undefined), 3000).unref?.();
       }
       res.status(204).end();
     }),
@@ -906,6 +911,41 @@ export function createApp(d: AppDeps) {
 
   // ------------------------------------------------------------ SDK 0.9.0: results and leaderboards
 
+  // ---- box 0.18.0 (SDK 0.15.0): bracket matches (tournament apps ↔ compatible games)
+  const matches = new Matches({
+    store: d.state.matches,
+    games: () => d.games.all(),
+    game: (id) => d.games.get(id),
+    command: (game, body) => gameCommand(game, body),
+    cast: (gameId, roomCode, displayIds) => castGame(gameId, { displayIds }, { roomCode }),
+    joinUrl: async (game, roomCode) => {
+      const st = await gameStatusOf(game).catch(() => undefined);
+      const jp = st?.rooms?.find((r) => r.code === roomCode)?.joinPath;
+      return typeof jp === "string" && jp.startsWith("/") ? joinUrl(buildContext(d.state.venue.get(), game).game.publicUrl!, jp) : undefined;
+    },
+    log: d.log,
+  });
+  app.get("/internal/matches/games", (req, res) => {
+    const me = gameAuth(req);
+    if (!me.manifest.tournaments) return void res.status(403).json({ error: 'add "tournaments": true to bargames.json' });
+    res.json(matches.compatible());
+  });
+  app.post(
+    "/internal/matches",
+    h(async (req, res) => {
+      const me = gameAuth(req);
+      const m = cleanMatchStart(req.body);
+      if (typeof m === "string") throw new HttpError(400, m);
+      res.json(await matches.start(me, m));
+    }),
+  );
+  app.get("/internal/matches/:matchId", (req, res) => {
+    const me = gameAuth(req);
+    const rec = matches.get(me.id, req.params.matchId);
+    if (!rec) return void res.status(404).json({ error: "no such match" });
+    res.json(rec);
+  });
+
   app.post(
     "/internal/results",
     h(async (req, res) => {
@@ -913,6 +953,8 @@ export function createApp(d: AppDeps) {
       const r = cleanResult(req.body);
       if (typeof r === "string") throw new HttpError(400, r);
       await leaderboards.record(game.id, r);
+      // Box 0.18.0: a bracket match's result goes back to its tournament.
+      await matches.resultReported(game, r).catch((err: Error) => d.log.warn("matches", "result handling failed", { err: err.message }));
       res.json({ ok: true });
     }),
   );

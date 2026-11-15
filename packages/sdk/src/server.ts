@@ -33,6 +33,10 @@ import {
   type MediaPlayArgs,
   type MediaPlayResult,
   type PlayerProfile,
+  MATCH_PATHS,
+  type MatchGame,
+  type MatchRecord,
+  type MatchStart,
 } from "./protocol.js";
 import { themeToCss } from "./theme.js";
 import { AudioError, createAudio, type Audio } from "./audio.js";
@@ -151,6 +155,24 @@ export interface BarGames {
   playSound(sound: string, opts?: { outputId?: string }): Promise<{ ok: boolean; reason?: string; message?: string; sessionId?: string }>;
   /** SDK 0.13.0: play, pause and follow audio on the box's outputs (see "@bargames/sdk/audio"). */
   audio: Audio;
+  /**
+   * SDK 0.15.0: tournaments (apps with "tournaments": true in bargames.json). Start a bracket
+   * match in a compatible game and hear its result. Off a box: games() is [], the rest throws.
+   */
+  matches: {
+    /** Games that can play matches (they declare "matches"), with how many players. */
+    games(): Promise<MatchGame[]>;
+    /** Asks the game for a room for this match (and puts it on TVs when displayIds is set). */
+    start(m: MatchStart): Promise<MatchRecord>;
+    /** The match as the box knows it (playing, done with its result, or cancelled). */
+    get(matchId: string): Promise<MatchRecord | undefined>;
+    /**
+     * Called when a match ends (done, or cancelled: its room closed without a result). The box
+     * sends the standard "match_result" command; this registers the handler. Declare
+     * "match_result" in bargames.json "commands".
+     */
+    onResult(fn: (match: MatchRecord) => void | Promise<void>): void;
+  };
   /**
    * SDK 0.13.0: true when this request comes from the box itself (it carries your
    * BG_GAME_TOKEN), e.g. the box fetching the audio you asked it to play. Always false off a box.
@@ -412,6 +434,33 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
     },
     profile: async () => undefined,
     audio,
+    matches: {
+      async games() {
+        if (!connected) return [];
+        const r = await core("GET", MATCH_PATHS.games).catch(() => undefined);
+        return r?.ok ? ((await r.json()) as MatchGame[]) : [];
+      },
+      async start(m) {
+        if (!connected) throw new Error("not running on a Bar Games box");
+        const r = await core("POST", MATCH_PATHS.start, m);
+        const body = (await r.json().catch(() => ({}))) as MatchRecord & { error?: string };
+        if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+        return body;
+      },
+      async get(matchId) {
+        if (!connected) return undefined;
+        const r = await core("GET", MATCH_PATHS.one(matchId)).catch(() => undefined);
+        return r?.ok ? ((await r.json()) as MatchRecord) : undefined;
+      },
+      onResult(fn) {
+        commands.set("match_result", async ({ args }) => {
+          const match = (args as { match?: MatchRecord } | undefined)?.match;
+          if (!match?.matchId) return { ok: false, message: "match_result needs args.match" };
+          await fn(match);
+          return { ok: true };
+        });
+      },
+    },
     fromBox: (req) => authorized(req),
     audioOutputs: async () => (connected ? audio.outputs().catch(() => []) : []),
     async playSound(sound, o) {

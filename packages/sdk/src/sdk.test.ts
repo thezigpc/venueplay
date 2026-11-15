@@ -915,3 +915,46 @@ test("SDK 0.14.0: hosting commands are standard; mock box --play-url / --no-room
     console.log = log;
   }
 });
+
+test("SDK 0.15.0: matches/tournaments in the manifest; bg.matches against the mock box, result via onResult", async () => {
+  const pool = validateManifest({ id: "pool", name: "Pool", version: "1.0.0", image: "x/p:1", port: 3000, sdk: { version: "0.15.0", level: 3 }, routes: { player: "/" }, events: ["game_over"], commands: ["create_room"], matches: { players: [2, 2] } });
+  assert.ok(pool.ok);
+  assert.deepEqual(pool.ok && pool.manifest.matches, { players: [2, 2] });
+  assert.equal(validateManifest({ id: "pool", name: "Pool", version: "1.0.0", image: "x/p:1", port: 3000, sdk: { version: "0.15.0", level: 3 }, routes: { player: "/" }, events: ["x"], commands: ["create_room"], matches: { players: [3, 2] } }).ok, false);
+  const app = { id: "tourney", name: "Tournament", kind: "app", version: "1.0.0", image: "x/t:1", port: 3000, sdk: { version: "0.15.0", level: 3 }, routes: { player: "/" }, commands: ["match_result"], tournaments: true };
+  const t = validateManifest(app);
+  assert.ok(t.ok && t.manifest.tournaments === true);
+
+  const { mockBox, MOCK_MATCHES_PATH } = await import("./devbox.js");
+  const heard: { id: string; status: string; winner?: string }[] = [];
+  // The app's own server, answering the box's commands with the SDK's handler (set once the box is up).
+  let handler: ((req: unknown, res: unknown) => void) | undefined;
+  const appServer = createServer((req, res) => (handler ? handler(req, res) : res.writeHead(503).end())).listen(0);
+  await new Promise((r) => appServer.once("listening", r));
+  const log = console.log;
+  console.log = () => undefined;
+  const box = mockBox({ gameId: "tourney", displayName: "T", gameUrl: `http://127.0.0.1:${(appServer.address() as AddressInfo).port}`, corePort: 0, gatewayPort: 0, manifest: t.ok ? t.manifest : undefined });
+  await Promise.all([new Promise((r) => box.core.once("listening", r)), new Promise((r) => box.gateway.once("listening", r))]);
+  try {
+    const bg = createBarGames({ coreUrl: `http://127.0.0.1:${(box.core.address() as AddressInfo).port}`, token: "dev-token", gameId: "tourney" });
+    const bgApp = bg;
+    handler = bg.middleware() as never;
+    bgApp.matches.onResult((m) => void heard.push({ id: m.matchId, status: m.status, winner: m.result?.results[0]?.player.name }));
+    assert.deepEqual((await bg.matches.games()).map((g) => g.id), ["fake-pool"]);
+    const m = await bg.matches.start({ gameId: "fake-pool", matchId: "sf-1", players: [{ name: "Ann" }, { name: "Bo" }] });
+    assert.equal(m.status, "playing");
+    await assert.rejects(bg.matches.start({ gameId: "nope", matchId: "x", players: [{ name: "A" }, { name: "B" }] }), /can't play matches/);
+    const done = await fetch(`http://127.0.0.1:${(box.gateway.address() as AddressInfo).port}${MOCK_MATCHES_PATH}/sf-1/result`, { method: "POST", body: JSON.stringify({ winner: "Bo" }) });
+    assert.equal(done.status, 200);
+    assert.deepEqual(heard, [{ id: "sf-1", status: "done", winner: "Bo" }]);
+    assert.equal((await bg.matches.get("sf-1"))?.status, "done");
+    const off = createBarGames({ coreUrl: "", token: "", gameId: "tourney" });
+    assert.deepEqual(await off.matches.games(), []);
+  } finally {
+    console.log = log;
+    box.core.closeAllConnections?.();
+    box.core.close();
+    box.gateway.close();
+    appServer.close();
+  }
+});

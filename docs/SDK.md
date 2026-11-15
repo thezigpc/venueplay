@@ -59,6 +59,13 @@ its own audio on the box's speakers. These are the box's jack or HDMI, Bluetooth
 and AirPlay TVs, which the venue sets up under Settings → Connected devices. Use
 `bg.audio` (or `@bargames/sdk/audio`) and `bg.fromBox(req)`. Guide: [AUDIO.md](AUDIO.md).
 
+**Bracket matches (SDK 0.15.0):** a game that declares `"matches": { "players": [min, max] }`
+plays one tournament match per room: `create_room` gets `args.match` (`id`, `players`, `title`),
+and the game reports `bg.reportResults({ roomCode, matchId, results })`. A tournament app
+(`"tournaments": true`, command `"match_result"`) uses `bg.matches.games()`, `start()`,
+`get()` and `onResult()`; the box makes the room, keeps the match record and tells the app
+the result (or that the room closed without one: `cancelled`).
+
 **Hosting from the box (SDK 0.14.0):** hosted games answer the standard commands
 `host_link` (staff take over: a new host token; the old host stays on as a co-host),
 `cohost_link` `{ minutes? }` (a single-use, expiring co-host invite: `{ url, expiresAt }`) and

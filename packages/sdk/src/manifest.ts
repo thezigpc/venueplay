@@ -124,6 +124,13 @@ export interface GameManifest {
    * Bluetooth speakers, AirPlay TVs) through bg.audio. Apps and games; not integrations.
    */
   audio?: { play: boolean };
+  /**
+   * SDK 0.15.0: this game can play one bracket match per room (create_room's args.match),
+   * for this many players or teams. Tournaments list it as a game they can start matches in.
+   */
+  matches?: { players: [number, number] };
+  /** SDK 0.15.0: an app that runs tournaments: it may start matches in games that declare "matches". */
+  tournaments?: boolean;
   /** Static, non-secret environment. Keys starting with BG_ are reserved. */
   env: Record<string, string>;
   minBoxVersion?: string;
@@ -264,6 +271,26 @@ export function validateManifest(input: unknown): ManifestResult {
     else audio = { play };
   }
 
+  // SDK 0.15.0: bracket matches.
+  let matches: { players: [number, number] } | undefined;
+  if (m.matches !== undefined) {
+    const p = isObj(m.matches) ? (m.matches.players as unknown) : undefined;
+    const ok = Array.isArray(p) && p.length === 2 && p.every((n) => Number.isInteger(n) && (n as number) >= 2 && (n as number) <= 64) && (p[0] as number) <= (p[1] as number);
+    if (!ok) errors.push('matches: { "players": [min, max] } (2-64)');
+    else if (display) warnings.push("matches: only games play matches; ignored for apps");
+    else {
+      matches = { players: [p![0] as number, p![1] as number] };
+      if (level < 3 || !(Array.isArray(m.commands) && (m.commands as unknown[]).includes("create_room"))) warnings.push("matches: needs sdk.level 3 and the create_room command");
+    }
+  }
+  let tournaments: boolean | undefined;
+  if (m.tournaments !== undefined) {
+    if (typeof m.tournaments !== "boolean") errors.push("tournaments: true or false");
+    else if (m.tournaments && !display) warnings.push("tournaments: only apps run tournaments; ignored for games");
+    else if (m.tournaments && integration) warnings.push("tournaments: integrations can't run tournaments; ignored");
+    else if (m.tournaments) tournaments = true;
+  }
+
   if (errors.length) return { ok: false, errors, warnings };
 
   const sdk = m.sdk as { version: string };
@@ -299,6 +326,8 @@ export function validateManifest(input: unknown): ManifestResult {
     ...(routing ? { routing } : {}),
     ...(spec ? { integration: spec } : {}),
     ...(audio?.play ? { audio } : {}),
+    ...(matches ? { matches } : {}),
+    ...(tournaments ? { tournaments } : {}),
   };
   return { ok: true, manifest, warnings };
 }

@@ -6,6 +6,7 @@ import type { CloudflareSettings } from "./cloudflare/service.js";
 import type { StartupRule } from "./startup.js";
 import type { ResultEntry } from "./leaderboard.js";
 import { DEFAULT_CLOSING, type ClosingSettings, type Scene, type Schedule } from "./scenes.js";
+import type { MatchRecord } from "@bargames/sdk";
 
 export interface VenueSettings {
   name: string;
@@ -169,6 +170,8 @@ export function openState(dataDir: string) {
     hostLinks: new JsonStore<Record<string, { url: string; at: string }>>(path.join(dataDir, "host-links.json"), {}, 0o600),
     /** Box 0.16.0: closing time (a scene per night). */
     closing: new JsonStore<ClosingSettings>(path.join(dataDir, "closing.json"), DEFAULT_CLOSING),
+    /** Box 0.18.0: bracket matches tournaments started in games (the last 500). */
+    matches: new JsonStore<{ matches: MatchRecord[] }>(path.join(dataDir, "matches.json"), { matches: [] }),
     /** Box 0.16.0: one-tap announcement texts for staff. */
     announcementPresets: new JsonStore<{ presets: AnnouncementPreset[] }>(path.join(dataDir, "announcement-presets.json"), { presets: DEFAULT_ANNOUNCEMENT_PRESETS }),
   };

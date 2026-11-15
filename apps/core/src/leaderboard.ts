@@ -31,7 +31,7 @@ export function cleanResult(r: unknown): GameResult | string {
     if (score !== undefined && !Number.isFinite(score)) return "score: a number";
     results.push({ player: { name, ...(typeof p.profileId === "string" ? { profileId: p.profileId.slice(0, 64) } : {}) }, ...(place !== undefined ? { place } : {}), ...(score !== undefined ? { score } : {}) });
   }
-  return { ...(typeof v.roomCode === "string" ? { roomCode: v.roomCode.slice(0, 32) } : {}), results };
+  return { ...(typeof v.roomCode === "string" ? { roomCode: v.roomCode.slice(0, 32) } : {}), ...(typeof v.matchId === "string" && v.matchId ? { matchId: v.matchId.slice(0, 64) } : {}), results };
 }
 
 /** When the venue's current "night" began: the latest 4 AM in its time zone. */

@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.14.0";
+export const SDK_VERSION = "0.15.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -179,7 +179,7 @@ export interface BarGamesEvent<T = Record<string, unknown>> extends GameEventInp
 
 // ---------------------------------------------------------------- commands
 
-export const STANDARD_COMMANDS = ["create_room", "start", "pause", "resume", "next_round", "end", "confirm_claim", "reject_claim", "media_list", "media_play", "media_stop", "host_link", "cohost_link", "remove_cohost"] as const;
+export const STANDARD_COMMANDS = ["create_room", "start", "pause", "resume", "next_round", "end", "confirm_claim", "reject_claim", "media_list", "media_play", "media_stop", "host_link", "cohost_link", "remove_cohost", "match_result"] as const;
 export type StandardCommand = (typeof STANDARD_COMMANDS)[number];
 
 /**
@@ -243,7 +243,80 @@ export interface CreateRoomArgs {
    * same host seat.
    */
   firstJoinerHosts?: boolean;
+  /**
+   * SDK 0.15.0: a tournament (an app with "tournaments": true) started this room for one
+   * bracket match. Seat or label these players, and report the result with this id:
+   * bg.reportResults({ roomCode, matchId: match.id, results }). Games that declare
+   * "matches" in bargames.json get it.
+   */
+  match?: MatchSpec;
 }
+
+// ---------------------------------------------------------------- matches (SDK 0.15.0)
+// A tournament app (Tournament & Leaderboard) runs a bracket; a compatible game (one that
+// declares "matches") plays each match. The app asks the box for a room; the game plays
+// it and reports the result with the match id; the box tells the app ("match_result").
+
+export interface MatchPlayer {
+  name: string;
+  /** The tournament's own id for this player or team. */
+  id?: string;
+}
+
+/** create_room's args.match: who plays, and the id to report the result with. */
+export interface MatchSpec {
+  id: string;
+  players: MatchPlayer[];
+  /** "Quarter-final 2", for the game's screens. */
+  title?: string;
+  /** The tournament app's id. */
+  by?: string;
+}
+
+/** A game the tournament can start matches in (GET MATCH_PATHS.games). */
+export interface MatchGame {
+  id: string;
+  name: string;
+  players: { min: number; max: number };
+}
+
+/** POST MATCH_PATHS.start. */
+export interface MatchStart {
+  gameId: string;
+  /** The tournament's id for this match (unique per app). */
+  matchId: string;
+  players: MatchPlayer[];
+  title?: string;
+  /** Also put the match's table view on these TVs. */
+  displayIds?: string[];
+}
+
+export interface MatchRecord {
+  matchId: string;
+  appId: string;
+  gameId: string;
+  roomCode: string;
+  players: MatchPlayer[];
+  title?: string;
+  /** "done": the game reported a result; "cancelled": its room closed without one. */
+  status: "playing" | "done" | "cancelled";
+  createdAt: string;
+  endedAt?: string;
+  result?: GameResult;
+  /** Where players join, when the game gave a joinPath (absolute). */
+  joinUrl?: string;
+}
+
+/** args of the standard "match_result" command the box sends the tournament app. */
+export interface MatchResultArgs {
+  match: MatchRecord;
+}
+
+export const MATCH_PATHS = {
+  games: "/internal/matches/games",
+  start: "/internal/matches",
+  one: (matchId: string) => `/internal/matches/${encodeURIComponent(matchId)}`,
+} as const;
 
 /** `data` of a successful "create_room". */
 export interface CreatedRoom {
@@ -404,6 +477,8 @@ export interface Countdown {
 /** One finished game: who placed or scored. */
 export interface GameResult {
   roomCode?: string;
+  /** SDK 0.15.0: the bracket match this room was made for (create_room's args.match.id). */
+  matchId?: string;
   results: { player: { name: string; profileId?: string }; place?: number; score?: number }[];
 }
 

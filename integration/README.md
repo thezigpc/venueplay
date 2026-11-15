@@ -21,6 +21,29 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.15.0 (bracket matches: tournaments ↔ games)
+
+- **Most modules: nothing to change.** This is for two kinds of module:
+  - **Games that can play one bracket match per room** (pool, darts, chess…): declare
+    `"matches": { "players": [2, 2] }` (min, max). The box then sends your `create_room` an
+    `args.match` `{ id, players: [{ name, id? }], title?, by }`: seat or label those players,
+    and when the match ends call `bg.reportResults({ roomCode, matchId: match.id, results })`
+    (places: 1 = winner). A room that closes without a result cancels the match.
+  - **Tournament apps** (Tournament & Leaderboard): declare `"tournaments": true` and the
+    standard command `"match_result"`. Then:
+    - `bg.matches.games()`: compatible games and their player counts;
+    - `bg.matches.start({ gameId, matchId, players, title?, displayIds? })`: the box makes
+      the room (and puts it on those TVs) and answers the match record (`roomCode`, `joinUrl`);
+    - `bg.matches.onResult(fn)`: called with the record when it's `done` (with `result`) or
+      `cancelled`;
+    - `bg.matches.get(matchId)`: to poll instead.
+- **Mock box:**
+  - for a tournament app it has a pretend compatible game, `fake-pool` (2 players);
+  - `POST /__bargames/dev/matches/<matchId>/result` `{ "winner": "<name>" }` (or
+    `{ "cancel": true }`) finishes a match and sends your app `match_result`, as the box does;
+  - a game that declares `matches` can test with
+    `npx bargames command create_room --args '{"kind":"venue","match":{"id":"m1","players":[{"name":"A"},{"name":"B"}]}}'`.
+
 ## What's new in SDK 0.14.0 (hosting from the box, co-hosts)
 
 - **Hosted games (a host phone runs the room): please adopt this.** Three new standard

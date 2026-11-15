@@ -9,7 +9,7 @@
 import { createServer, request, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { connect } from "node:net";
 import { isApp, isIntegration, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
-import { AUDIO_PATHS, HEADERS, INTEGRATION_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type AudioEndReason, type AudioOutput, type AudioPlayOptions, type AudioSession, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
+import { AUDIO_PATHS, HEADERS, INTEGRATION_PATHS, MATCH_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type AudioEndReason, type AudioOutput, type AudioPlayOptions, type MatchRecord, type MatchStart, type AudioSession, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
 import { DEFAULT_THEME } from "./theme.js";
 import { joinUrl, normalizeBasePath } from "./base.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -49,6 +49,14 @@ export const MOCK_ADMIN_PATH = "/__bargames/dev/admin";
 export const MOCK_INTEGRATION_PATH = "/__bargames/dev/integration";
 /** SDK 0.13.2: end the playing sound session as replaced, disconnected, error or stopped. */
 export const MOCK_AUDIO_END_PATH = "/__bargames/dev/audio/end";
+/**
+ * SDK 0.15.0: finish a pretend bracket match. POST …/matches/<matchId>/result { winner? }
+ * (a player's name; default the first player) or { cancel: true }. The mock box then sends
+ * your app "match_result", as the box does.
+ */
+export const MOCK_MATCHES_PATH = "/__bargames/dev/matches";
+/** SDK 0.15.0: the mock box's pretend game that plays matches (for tournament apps). */
+export const MOCK_MATCH_GAME = { id: "fake-pool", name: "Pool (fake)", players: { min: 2, max: 2 } } as const;
 
 export function mockContext(gameId: string, displayName: string, publicUrl: string, opts: { announcement?: string; announcementShow?: "everywhere" | "phones" | "tvs"; announcementPosition?: "top" | "bottom"; app?: boolean; /** @deprecated */ display?: boolean } = {}): VenueContext {
   const app = Boolean(opts.app ?? opts.display);
@@ -339,6 +347,15 @@ export function mockBox(o: MockBoxOptions) {
   const pinReset = setInterval(() => (pinFailures = 0), 60_000);
   pinReset.unref();
   const mockAudio = new MockAudio(o.gameUrl);
+  // SDK 0.15.0: pretend bracket matches, for tournament apps.
+  const mockMatches = new Map<string, MatchRecord>();
+  const finishMatch = async (rec: MatchRecord) => {
+    mockMatches.set(rec.matchId, rec);
+    console.log(`${c.ok("match")} ${rec.matchId} ${rec.status}${rec.result ? `: ${rec.result.results.map((r) => `#${r.place} ${r.player.name}`).join(", ")}` : ""}`);
+    if (!o.manifest?.commands.includes("match_result")) return console.log(c.dim('    (declare "match_result" in commands to be told; polling GET works too)'));
+    const r = await callGame(o.gameUrl, PATHS.command, { command: "match_result", args: { match: rec } }).catch((err: Error) => ({ status: 0, body: err.message }));
+    if (r.status !== 200) console.log(c.bad(`✗ match_result → ${r.status} ${JSON.stringify(r.body)}`));
+  };
 
   // Fake core: what the SDK inside the game talks to (BG_CORE_URL).
   const core = createServer(async (req, res) => {
@@ -487,6 +504,29 @@ export function mockBox(o: MockBoxOptions) {
       }
       return json(404, { error: "not found" });
     }
+    if (req.url?.startsWith("/internal/matches")) {
+      if (!o.manifest?.tournaments) return json(403, { error: 'add "tournaments": true to bargames.json' });
+      const url = req.url.split("?")[0];
+      if (url === MATCH_PATHS.games && req.method === "GET") return json(200, [MOCK_MATCH_GAME]);
+      if (url === MATCH_PATHS.start && req.method === "POST") {
+        const b = JSON.parse((await readBody(req)) || "{}") as Partial<MatchStart>;
+        if (b.gameId !== MOCK_MATCH_GAME.id) return json(404, { error: `${b.gameId} can't play matches here (the mock box has ${MOCK_MATCH_GAME.id})` });
+        if (typeof b.matchId !== "string" || !b.matchId || !Array.isArray(b.players) || b.players.length !== 2 || b.players.some((p) => !p?.name)) return json(400, { error: "matchId and 2 players with names" });
+        const had = mockMatches.get(b.matchId);
+        if (had?.status === "playing") return json(200, had);
+        const rec: MatchRecord = { matchId: b.matchId, appId: o.gameId, gameId: MOCK_MATCH_GAME.id, roomCode: `M${(mockMatches.size + 1).toString().padStart(3, "0")}`, players: b.players, ...(b.title ? { title: b.title } : {}), status: "playing", createdAt: new Date().toISOString(), joinUrl: `${localUrl}/__bargames/dev/fake-pool/join/M` };
+        mockMatches.set(rec.matchId, rec);
+        console.log(`${c.ok("match")} ${rec.matchId} started in ${MOCK_MATCH_GAME.name}: ${rec.players.map((p) => p.name).join(" vs ")}${b.displayIds?.length ? ` on ${b.displayIds.join(", ")}` : ""}`);
+        console.log(c.dim(`    finish it: curl -X POST ${origin}${MOCK_MATCHES_PATH}/${encodeURIComponent(rec.matchId)}/result -d '{"winner":"${rec.players[1].name}"}'`));
+        return json(200, rec);
+      }
+      const one = /^\/internal\/matches\/([^/]+)$/.exec(url);
+      if (one && req.method === "GET") {
+        const rec = mockMatches.get(decodeURIComponent(one[1]));
+        return rec ? json(200, rec) : json(404, { error: "no such match" });
+      }
+      return json(404, { error: "not found" });
+    }
     if (req.url?.startsWith("/internal/profiles")) return json(501, { error: "player profiles aren't built yet" });
     if (req.url === "/internal/venue") {
       const ctx = mockContext(o.gameId, o.displayName, localUrl, { announcement: o.announcement, announcementShow: o.announcementShow, announcementPosition: o.announcementPosition, app: o.manifest ? isApp(o.manifest) : false });
@@ -611,6 +651,30 @@ export function mockBox(o: MockBoxOptions) {
       return void res.end();
     }
     if (req.url?.split("?")[0].startsWith(MOCK_INTEGRATION_PATH)) return void integrationControl(req, res);
+    // SDK 0.15.0: POST /__bargames/dev/matches/<id>/result { winner? | cancel? }
+    const mr = /^\/__bargames\/dev\/matches\/([^/]+)\/result$/.exec(req.url?.split("?")[0] ?? "");
+    if (mr && req.method === "POST") {
+      return void readBody(req).then(async (raw) => {
+        res.setHeader("content-type", "application/json");
+        const rec = mockMatches.get(decodeURIComponent(mr[1]));
+        if (!rec || rec.status !== "playing") return void res.writeHead(404).end(JSON.stringify({ error: "no playing match with that id" }));
+        const b = (() => {
+          try {
+            return JSON.parse(raw || "{}") as { winner?: string; cancel?: boolean };
+          } catch {
+            return {};
+          }
+        })();
+        const at = new Date().toISOString();
+        if (b.cancel) await finishMatch({ ...rec, status: "cancelled", endedAt: at });
+        else {
+          const win = rec.players.find((p) => p.name === b.winner) ?? rec.players[0];
+          const results = [win, ...rec.players.filter((p) => p !== win)].map((p, i) => ({ player: { name: p.name }, place: i + 1 }));
+          await finishMatch({ ...rec, status: "done", endedAt: at, result: { roomCode: rec.roomCode, matchId: rec.matchId, results } });
+        }
+        res.writeHead(200).end(JSON.stringify(mockMatches.get(rec.matchId)));
+      });
+    }
     // SDK 0.13.2: POST /__bargames/dev/audio/end?reason=replaced|disconnected|error|stopped[&session=<id>]
     if (req.url?.split("?")[0] === MOCK_AUDIO_END_PATH && req.method === "POST") {
       const q = new URL(req.url, "http://x").searchParams;
