@@ -100,7 +100,7 @@ switch (cmd) {
         process.exit(1);
       }
     }
-    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined, announcement: flags.announce, announcementShow: flags["announce-show"] as never, announcementPosition: flags["announce-position"] as never, basePath: flags.base, publicUrl });
+    const box = mockBox({ gameId, displayName: name, gameUrl, corePort, gatewayPort, manifest: m, tvPin, castFromGames: flags["no-cast"] === undefined, announcement: flags.announce, announcementShow: flags["announce-show"] as never, announcementPosition: flags["announce-position"] as never, basePath: flags.base, publicUrl, playUrl: flags["play-url"], noRoomLinks: flags["no-room-links"] !== undefined });
     // SDK 0.13.2: a busy port is an error, not a silent second box (two sessions' boxes collided).
     for (const [srv, port, flag] of [[box.core, corePort, "--core-port"], [box.gateway, gatewayPort, "--port"]] as const) {
       srv.on("error", (err: NodeJS.ErrnoException) => {
@@ -173,6 +173,8 @@ Events and casts from your game print below (✗ = would be rejected, or isn't d
                                  dev controls on the gateway port: POST /__bargames/dev/audio/end?reason=replaced|disconnected|error|stopped,
                                  /__bargames/dev/integration (GET; POST /action/<id>, /drop[?for=N]; PUT/DELETE /catalog)
                                  with --base, /<ROOM CODE> answers like the box's short room links (SDK 0.13.2)
+                                 --play-url https://play.example.net: the games list's address (long room links)
+                                 --no-room-links: act like a box without short room links (SDK 0.14.0)
       [--game http://127.0.0.1:PORT] [--port 7080] [--core-port 7199] [--name "Display Name"]
   bargames check [dir]           conformance checks against your running game (rooms only on the mock box's game; add --live last to override)
       [--room CODE]              also check one live room (its pendingClaims, times, table view)

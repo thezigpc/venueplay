@@ -202,7 +202,8 @@ export function validateManifest(input: unknown): ManifestResult {
   if (!strArray(events)) errors.push("events: array of strings");
   const commands = m.commands === undefined ? [] : m.commands;
   if (!strArray(commands)) errors.push("commands: array of strings");
-  if (level >= 2 && strArray(events) && events.length === 0) warnings.push("events: level 2+ games should declare the events they emit");
+  // SDK 0.14.0: apps often emit nothing (a YouTube remote); only games are expected to.
+  if (level >= 2 && strArray(events) && events.length === 0 && !display && !integration) warnings.push("events: level 2+ games should declare the events they emit");
   if (level === 3 && strArray(commands) && commands.length === 0) errors.push("commands: level 3 games must declare at least one command");
   if (level < 3 && strArray(commands) && commands.length > 0) warnings.push("commands: only used at sdk.level 3");
   if (strArray(events)) {

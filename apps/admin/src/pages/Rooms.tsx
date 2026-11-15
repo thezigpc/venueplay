@@ -146,7 +146,7 @@ export function RoomsPage() {
               </button>
             ))}
           </div>
-          {r.hostUrl && <HostLink g={g} r={r} />}
+          {g.commands.includes("host_link") || g.commands.includes("cohost_link") ? <Hosting g={g} r={r} /> : r.hostUrl && <HostLink g={g} r={r} />}
           <RoomTvs g={g} r={r} displays={displays.data ?? []} busy={busy} act={act} />
         </section>
       ))}
@@ -185,6 +185,75 @@ function HostLink({ g, r }: { g: Game; r: Room }) {
           <p className="muted small-print">Scan with the phone that will run the game. Anyone with this code can host the room, so don't leave it on screen.</p>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Box 0.17.0: hosting any room (games with SDK 0.14.0's host_link / cohost_link). Take over
+ * as host (the current host stays on as a co-host), or add a co-host with a single-use QR.
+ */
+function Hosting({ g, r }: { g: Game; r: Room }) {
+  const [shown, setShown] = useState<{ kind: "host" | "cohost"; url: string; expiresAt?: string; qrSvg: string } | null>(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const get = async (kind: "host" | "cohost") => {
+    if (kind === "host" && !window.confirm(`Take over hosting ${g.name} ${r.code}? The current host keeps the game's controls as a co-host.`)) return;
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await api.roomLink(g.id, r.code, kind);
+      setShown({ kind, url: res.url, expiresAt: res.expiresAt, qrSvg: res.qrSvg });
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const until = shown?.expiresAt ? new Date(shown.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  return (
+    <div className="host-link">
+      <div className="buttons">
+        {g.commands.includes("host_link") && (
+          <button type="button" className="primary" disabled={busy} onClick={() => void get("host")}>
+            Take over as host
+          </button>
+        )}
+        {g.commands.includes("cohost_link") && (
+          <button type="button" disabled={busy} onClick={() => void get("cohost")}>
+            Add a co-host
+          </button>
+        )}
+        {shown && (
+          <button type="button" className="ghost" onClick={() => setShown(null)}>
+            Hide code
+          </button>
+        )}
+      </div>
+      {shown && (
+        <div className="host-qr">
+          <span className="qr-svg" dangerouslySetInnerHTML={{ __html: shown.qrSvg }} />
+          <div>
+            {shown.kind === "host" ? (
+              <>
+                <p>
+                  <a href={shown.url} target="_blank" rel="noreferrer">
+                    Open the host controls here
+                  </a>{" "}
+                  or scan the code with the phone that will host.
+                </p>
+                <p className="muted small-print">This link is the host seat now; the old one stopped working. Anyone with it can host, so don't leave it on screen.</p>
+              </>
+            ) : (
+              <>
+                <p>Scan with the co-host's phone. It works once{until ? `, until ${until}` : ""}.</p>
+                <p className="muted small-print">A co-host runs the game (start, next round, claims) but can't end the room or remove anyone.</p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+      {msg && <p className="error">{msg}</p>}
     </div>
   );
 }

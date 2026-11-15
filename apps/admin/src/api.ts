@@ -407,6 +407,9 @@ export const api = {
   previewUrl: (id: string) => bgUrl(`/api/broker/displays/${encodeURIComponent(id)}/preview?t=${Date.now()}`),
   power: (id: string, on: boolean) => call("POST", `/broker/displays/${encodeURIComponent(id)}/power`, { on }),
   pair: (id: string, code?: string) => call<ShowResult>("POST", `/broker/displays/${encodeURIComponent(id)}/pair`, code ? { code } : {}),
+  /** Box 0.17.0: take over hosting, or invite a co-host; the link and its QR code (staff only). */
+  roomLink: (gameId: string, code: string, kind: "host" | "cohost", minutes?: number) =>
+    call<{ url: string; expiresAt?: string; message?: string; qrSvg: string }>("POST", `/rooms/${encodeURIComponent(gameId)}/${encodeURIComponent(code)}/link`, { kind, ...(minutes ? { minutes } : {}) }),
   command: (id: string, body: { command: string; roomCode?: string; args?: Record<string, unknown> }) =>
     call<{ ok: boolean; message?: string; data?: unknown }>("POST", `/games/${encodeURIComponent(id)}/command`, body),
   rooms: () => call<RoomsOverview>("GET", "/rooms"),

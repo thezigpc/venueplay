@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.13.2";
+export const SDK_VERSION = "0.14.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -179,8 +179,34 @@ export interface BarGamesEvent<T = Record<string, unknown>> extends GameEventInp
 
 // ---------------------------------------------------------------- commands
 
-export const STANDARD_COMMANDS = ["create_room", "start", "pause", "resume", "next_round", "end", "confirm_claim", "reject_claim", "media_list", "media_play", "media_stop"] as const;
+export const STANDARD_COMMANDS = ["create_room", "start", "pause", "resume", "next_round", "end", "confirm_claim", "reject_claim", "media_list", "media_play", "media_stop", "host_link", "cohost_link", "remove_cohost"] as const;
 export type StandardCommand = (typeof STANDARD_COMMANDS)[number];
+
+/**
+ * SDK 0.14.0: hosting from the box (any room, not only the ones the box made).
+ *
+ * - "host_link" (staff take over): the game makes a **new** host token and answers its link.
+ *   Whoever opens it becomes the host; the previous host's phone stays on as a **co-host**
+ *   (told "staff took over hosting"), so nobody is stranded. The "first joiner hosts" offer
+ *   (CreateRoomArgs.firstJoinerHosts) closes.
+ * - "cohost_link" { minutes? }: a **single-use** co-host invite that expires (default 10
+ *   minutes, at most 60). A co-host runs the game (start, next round, claims…) but can't end
+ *   the room or remove the host or other co-hosts. A used or expired invite opens nothing.
+ * - "remove_cohost" { memberId }: that co-host is a player again.
+ *
+ * GameKit 0.8.0's HostSeats keeps these rules for a game; wireBarGames({ seats }) answers
+ * the commands. The box's Rooms page offers "Take over as host" and "Add a co-host" (QR)
+ * for every room of a game that declares the commands.
+ */
+export interface HostLinkData {
+  /** A path on the game's address ("/join/AB12?host=…") or a full URL. Holds a secret: staff only. */
+  url: string;
+}
+export interface CohostLinkData {
+  url: string;
+  /** ISO time the invite stops working. */
+  expiresAt: string;
+}
 
 export interface CommandRequest {
   command: string;

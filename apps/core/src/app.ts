@@ -2250,6 +2250,35 @@ export function createApp(d: AppDeps) {
   );
 
   /**
+   * Box 0.17.0 (SDK 0.14.0): hosting any room from the Rooms page. { kind: "host" } runs the
+   * game's "host_link" (staff take over; the previous host stays on as a co-host), { kind:
+   * "cohost", minutes? } its "cohost_link" (a single-use invite). Answers the absolute link
+   * and a QR code of it. Admin only: the links carry secrets.
+   */
+  app.post(
+    "/api/rooms/:gameId/:code/link",
+    h(async (req, res) => {
+      const game = d.games.get(req.params.gameId);
+      if (!game || !game.enabled) throw new HttpError(404, "no such game");
+      const kind = req.body?.kind === "cohost" ? "cohost" : "host";
+      const command = kind === "host" ? "host_link" : "cohost_link";
+      if (game.manifest.sdk.level < 3 || !game.manifest.commands.includes(command)) throw new HttpError(400, `${game.manifest.name} can't ${kind === "host" ? "hand over hosting" : "add co-hosts"} yet (needs "${command}")`);
+      const code = String(req.params.code).toUpperCase();
+      const minutes = Number(req.body?.minutes);
+      const r = await gameCommand(game, { command, roomCode: code, args: kind === "cohost" && minutes > 0 ? { minutes } : {} });
+      if (!r.result.ok) throw new HttpError(409, r.result.message ?? `${game.manifest.name} refused`);
+      const data = (r.result.data ?? {}) as { url?: unknown; expiresAt?: unknown };
+      const url = absoluteHttpUrl(data.url, buildContext(d.state.venue.get(), game).game.publicUrl!);
+      if (!url) throw new HttpError(502, `${game.manifest.name} didn't answer a link`);
+      // The new host link replaces the one the box kept (box 0.15.5), so "Host on a phone" stays right.
+      if (kind === "host") await d.state.hostLinks.update((s) => void (s[`${game.id}:${code}`] = { url, at: new Date().toISOString() }));
+      const qrSvg = await QRCode.toString(url, { type: "svg", margin: 2, errorCorrectionLevel: "M" });
+      d.log.info("rooms", kind === "host" ? "host taken over from the admin" : "co-host invite made", { game: game.id, room: code });
+      res.json({ url, ...(typeof data.expiresAt === "string" ? { expiresAt: data.expiresAt } : {}), message: r.result.message, qrSvg });
+    }),
+  );
+
+  /**
    * Box 0.15.5: a room's host link as a QR code, so staff can take over hosting on a phone
    * (scan from the iPad's Rooms page). Admin only, like the link itself.
    */

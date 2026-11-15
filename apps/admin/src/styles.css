@@ -375,3 +375,5 @@ button.tv-tile.selected { border-color: var(--primary); }
 .presets-edit { display: grid; gap: 8px; margin: 12px 0; }
 .closing-nights { display: grid; gap: 6px; margin: 8px 0; }
 .closing-night { min-width: 9em; display: inline-block; }
+.host-qr .qr-svg { display: inline-block; width: 180px; height: 180px; background: #fff; border-radius: 12px; padding: 6px; }
+.host-qr .qr-svg svg { width: 100%; height: 100%; }

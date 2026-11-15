@@ -884,3 +884,34 @@ test("SDK 0.13.2 mock box: short room links, TV power from the edited catalog, d
     game.close();
   }
 });
+
+test("SDK 0.14.0: hosting commands are standard; mock box --play-url / --no-room-links; apps aren't asked for events", async () => {
+  const { STANDARD_COMMANDS } = await import("./protocol.js");
+  for (const c of ["host_link", "cohost_link", "remove_cohost"]) assert.ok((STANDARD_COMMANDS as readonly string[]).includes(c));
+  const app = validateManifest({ id: "yt", name: "YT", kind: "app", version: "0.1.0", image: "x/yt:0.1.0", port: 3000, sdk: { version: "0.14.0", level: 3 }, routes: { player: "/" }, events: [], commands: ["media_list"] });
+  assert.ok(app.ok && !app.warnings.some((w) => /should declare the events/.test(w)));
+  const game = validateManifest({ id: "gamey", name: "G", version: "0.1.0", image: "x/g:0.1.0", port: 3000, sdk: { version: "0.14.0", level: 3 }, routes: { player: "/" }, events: [], commands: ["media_list"] });
+  assert.ok(game.ok && game.warnings.some((w) => /should declare the events/.test(w)));
+
+  const { mockBox, DEV_TOKEN } = await import("./devbox.js");
+  const log = console.log;
+  console.log = () => undefined;
+  const venueOf = async (o: { playUrl?: string; noRoomLinks?: boolean }) => {
+    const box = mockBox({ gameId: "g", displayName: "G", gameUrl: "http://127.0.0.1:9", corePort: 0, gatewayPort: 0, basePath: "/g", ...o });
+    await new Promise((r) => box.core.once("listening", r));
+    try {
+      return ((await (await fetch(`http://127.0.0.1:${(box.core.address() as AddressInfo).port}/internal/venue`, { headers: { authorization: `Bearer ${DEV_TOKEN}` } })).json()) as { venue: { playUrl: string; roomLinks?: boolean } }).venue;
+    } finally {
+      box.core.close();
+      box.gateway.close();
+    }
+  };
+  try {
+    const long = await venueOf({ playUrl: "https://play.the-longest-bar-name-in-town.example.net" });
+    assert.equal(long.playUrl, "https://play.the-longest-bar-name-in-town.example.net");
+    assert.equal(long.roomLinks, true);
+    assert.equal((await venueOf({ noRoomLinks: true })).roomLinks, undefined);
+  } finally {
+    console.log = log;
+  }
+});

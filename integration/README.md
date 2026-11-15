@@ -21,6 +21,41 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.14.0 (hosting from the box, co-hosts)
+
+- **Hosted games (a host phone runs the room): please adopt this.** Three new standard
+  commands let staff run any room from the box's Rooms page:
+  - `host_link`: staff **take over**. Make a **new** host token and answer
+    `{ ok: true, data: { url } }`. The old token stops working; whoever held the host seat
+    stays on as a **co-host** (tell their phone "staff took over hosting").
+  - `cohost_link` `{ minutes? }`: a **single-use** co-host invite that expires (default 10
+    minutes, at most 60): `{ ok: true, data: { url, expiresAt } }`. A co-host runs the game
+    (start, next round, claims…) but can't end the room or remove the host or co-hosts.
+  - `remove_cohost` `{ memberId }`: that co-host is a player again.
+
+  Declare them in `bargames.json` `"commands"`; the box offers "Take over as host" and
+  "Add a co-host" (a QR) on its Rooms page for every room of a game that declares them.
+- **GameKit 0.8.0 owns the rules**, so don't hand-roll `hostOpen` any more:
+  - `new HostSeats({ firstJoinerHosts })`, one per room: `isHostToken`, `claimForJoiner()`
+    (the first-joiner offer), `hostAttached(member)` (**any** attach to the host seat closes
+    the offer: the Bingo/BuzzBoard bug), `takeover()`, `invite()`/`redeem()` (single-use,
+    expiring), `addCohost`/`removeCohost`, `roleOf`, `canRun`.
+  - `wireBarGames(bg, rooms, { seats: { of, hostPath, cohostPath, onTakeover?, onCohostRemoved? } })`
+    answers the three commands.
+  - Also offer "Add a co-host" (a QR of `cohostPath`) on the host's own screen, and show
+    co-hosts a small role badge.
+- **`bargames check`** checks `host_link` (a new link each time) and `cohost_link`
+  (single-use invites that expire) when you declare them.
+- **Mock box:** `--play-url https://play.example.net` (a long games-list address for room
+  links) and `--no-room-links` (the fallback without short links).
+- **Validate:** apps (and integrations) at level 2+ with no events aren't warned any more.
+- **GameKit 0.8.0 JoinAddress:** `maxWidth` (default "100%"; `null` leaves it to your CSS
+  class, which an inline style used to beat).
+- **Testing on this PC:** several sessions run mock boxes and game servers side by side.
+  **Stop only your own processes**: match them by your repo's working directory or the
+  ports you started, never by name (`node`, `node server/dist/index.js`), and pick ports
+  other sessions aren't using (`--port`, `--core-port`; the mock box says when one is busy).
+
 ## What's new in SDK 0.13.2 (short room links)
 
 - **Short room links (box 0.15.6):** `play.<venue>/AB12` opens room AB12's join page, for

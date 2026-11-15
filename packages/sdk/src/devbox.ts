@@ -124,6 +124,10 @@ export interface MockBoxOptions {
    * still answers on localhost; only what the game prints and puts in QR codes changes.
    */
   publicUrl?: string;
+  /** SDK 0.14.0: the games list's address (venue.playUrl), e.g. "https://play.example.net", for long room links. */
+  playUrl?: string;
+  /** SDK 0.14.0: act like a box without short room links (venue.roomLinks off). */
+  noRoomLinks?: boolean;
 }
 
 /** The mock box's pretend venue TVs. */
@@ -488,7 +492,8 @@ export function mockBox(o: MockBoxOptions) {
       const ctx = mockContext(o.gameId, o.displayName, localUrl, { announcement: o.announcement, announcementShow: o.announcementShow, announcementPosition: o.announcementPosition, app: o.manifest ? isApp(o.manifest) : false });
       // --public-url: the game's own address is the pretend venue one; box links stay local.
       // SDK 0.13.2: short room links (the mock gateway answers them under --base).
-      if (base) ctx.venue.roomLinks = true;
+      if (base && !o.noRoomLinks) ctx.venue.roomLinks = true;
+      if (o.playUrl) ctx.venue.playUrl = o.playUrl;
       if (publicUrl !== localUrl) {
         ctx.game.publicUrl = publicUrl;
         for (const g of [...(ctx.venue.games ?? []), ...(ctx.venue.apps ?? []), ...(ctx.venue.modules ?? [])]) if (g.id === o.gameId) g.url = publicUrl;
@@ -917,6 +922,23 @@ export async function check(manifest: GameManifest, gameUrl: string, opts: { roo
       if (table) {
         const page = await callGame(gameUrl, table, undefined, "").catch(() => ({ status: 0, body: "" }));
         page.status === 200 ? pass(`table view ${table} → 200`) : fail(`table view ${table} → ${page.status}`);
+      }
+      // SDK 0.14.0: hosting from the box.
+      if (manifest.commands.includes("host_link")) {
+        const a = await callGame(gameUrl, PATHS.command, { command: "host_link", roomCode: code });
+        const b = await callGame(gameUrl, PATHS.command, { command: "host_link", roomCode: code });
+        const ua = (a.body as { ok?: boolean; data?: { url?: unknown } })?.data?.url;
+        const ub = (b.body as { ok?: boolean; data?: { url?: unknown } })?.data?.url;
+        if (typeof ua !== "string" || typeof ub !== "string") fail(`host_link → ${JSON.stringify(a.body)}`, "answer { ok: true, data: { url } } (GameKit: wireBarGames({ seats }))");
+        else ua !== ub ? pass("host_link answers a new host link each time (take-over)") : fail("host_link answered the same link twice", "a take-over must make a new host token; the old one stops working");
+      }
+      if (manifest.commands.includes("cohost_link")) {
+        const a = (await callGame(gameUrl, PATHS.command, { command: "cohost_link", roomCode: code, args: { minutes: 5 } })).body as { data?: { url?: unknown; expiresAt?: unknown } };
+        const b = (await callGame(gameUrl, PATHS.command, { command: "cohost_link", roomCode: code })).body as { data?: { url?: unknown } };
+        const exp = typeof a?.data?.expiresAt === "string" ? Date.parse(a.data.expiresAt) : NaN;
+        if (typeof a?.data?.url !== "string" || !Number.isFinite(exp)) fail(`cohost_link → ${JSON.stringify(a)}`, "answer { ok: true, data: { url, expiresAt } }");
+        else if (a.data.url === b?.data?.url) fail("cohost_link answered the same invite twice", "each invite is single-use: make a new token each time");
+        else exp - Date.now() <= 6 * 60_000 ? pass("cohost_link answers single-use invites that expire") : warn(`cohost_link ignored minutes: 5 (expires ${a.data.expiresAt})`);
       }
       if (manifest.commands.includes("end")) {
         const end = await callGame(gameUrl, PATHS.command, { command: "end", roomCode: code });

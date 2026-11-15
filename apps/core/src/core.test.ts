@@ -248,6 +248,8 @@ test("casting: new room from the admin, and casting from inside a game (gated, P
       return reply(Object.fromEntries((body.displayIds ?? []).map((id: string) => [id, { ok: true }])));
     }
     if (url === "http://game/__bargames/status") return reply({ rooms: rooms.map((code) => ({ code, kind: "venue", players: 0 })) });
+    if (url === "http://game/__bargames/command" && body.command === "host_link") return reply({ ok: true, data: { url: `/join/${body.roomCode}?host=newtok` } });
+    if (url === "http://game/__bargames/command" && body.command === "cohost_link") return reply({ ok: true, data: { url: `/join/${body.roomCode}?cohost=inv1`, expiresAt: "2030-01-01T00:10:00.000Z" } });
     if (url === "http://game/__bargames/command" && body.command === "create_room") {
       rooms.push("NEW1");
       return reply({ ok: true, data: { roomCode: "NEW1", hostUrl: "/host/NEW1?key=s3cret" } });
@@ -272,7 +274,7 @@ test("casting: new room from the admin, and casting from inside a game (gated, P
   try {
     const cookie = (await json("POST", "/api/auth/setup", { password: "correct horse" })).headers.get("set-cookie")!.split(";")[0];
     const authed = { cookie };
-    const m = { ...manifest, sdk: { version: "0.2.0", level: 3 }, commands: ["create_room", "start"] };
+    const m = { ...manifest, sdk: { version: "0.2.0", level: 3 }, commands: ["create_room", "start", "host_link", "cohost_link"] };
     assert.equal((await json("POST", "/api/games/install", { manifest: m, devTarget: "http://game" }, authed)).status, 200);
     await json("PATCH", "/api/games/bingo", { enabled: true }, authed);
 
@@ -296,6 +298,17 @@ test("casting: new room from the admin, and casting from inside a game (gated, P
     assert.equal((await roomsOf()).some((r) => r.code === "NEW1"), false);
     assert.equal((await json("GET", "/api/rooms/bingo/NEW1/host.svg", undefined, authed)).status, 404, "forgotten once the room is gone");
     rooms.push("NEW1");
+
+    // Box 0.17.0: take over any room (here ROOM1, which the box didn't make), and invite a co-host.
+    type Link = { url: string; expiresAt?: string; qrSvg: string };
+    const take = (await (await json("POST", "/api/rooms/bingo/room1/link", { kind: "host" }, authed)).json()) as Link;
+    assert.equal(take.url, "http://bingo.localhost:7080/join/ROOM1?host=newtok");
+    assert.match(take.qrSvg, /<svg/);
+    assert.equal((await roomsOf()).find((r) => r.code === "ROOM1")?.hostUrl, take.url, "the kept host link follows the take-over");
+    const co = (await (await json("POST", "/api/rooms/bingo/ROOM1/link", { kind: "cohost", minutes: 5 }, authed)).json()) as Link;
+    assert.equal(co.url, "http://bingo.localhost:7080/join/ROOM1?cohost=inv1");
+    assert.equal(co.expiresAt, "2030-01-01T00:10:00.000Z");
+    assert.equal((await json("POST", "/api/rooms/bingo/ROOM1/link", { kind: "host" })).status, 401, "admins only");
 
     // From the game: off until the venue allows it.
     const g = { authorization: `Bearer ${games.get("bingo")!.token}` };

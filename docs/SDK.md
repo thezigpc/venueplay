@@ -59,6 +59,13 @@ its own audio on the box's speakers. These are the box's jack or HDMI, Bluetooth
 and AirPlay TVs, which the venue sets up under Settings → Connected devices. Use
 `bg.audio` (or `@bargames/sdk/audio`) and `bg.fromBox(req)`. Guide: [AUDIO.md](AUDIO.md).
 
+**Hosting from the box (SDK 0.14.0):** hosted games answer the standard commands
+`host_link` (staff take over: a new host token; the old host stays on as a co-host),
+`cohost_link` `{ minutes? }` (a single-use, expiring co-host invite: `{ url, expiresAt }`) and
+`remove_cohost` `{ memberId }`. GameKit 0.8.0's `HostSeats` keeps the rules and
+`wireBarGames({ seats })` answers them; the box's Rooms page offers "Take over as host" and
+"Add a co-host" for every room. Co-hosts run the game but can't end it or remove anyone.
+
 **"Join at" addresses (SDK 0.13.1):** the client's `joinDisplay(ctx, path)` returns
 `{ url, short }`: `url` for the QR code, and `short` ("play.example.net/bingo") to print under
 it. Venue addresses have no spaces, so break `short` after "." and "/" (`<wbr>`) and shrink
