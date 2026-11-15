@@ -107,7 +107,19 @@ the same rule as the game SDK.
   screen was showing.
 - **Admin:** TVs page, "Venuebox apps" card (pair by code, rename, remove) and Identify on
   each Venuebox screen's card. Core reaches it through `/api/broker/venuebox*`.
-- Not yet: mDNS (`_venuebox._tcp`) and HLS for Roku/Apple TV.
+- **Discovery (box 0.16.2):** the broker answers mDNS (DNS-SD) on the venue LAN, so apps
+  find the box without typing an address that DHCP can change:
+  - browse **`_venuebox._tcp.local`** (a PTR query to 224.0.0.251:5353; any DNS-SD library:
+    Bonjour/`Zeroconf`, Android `NsdManager`, Roku has none, so it takes the address);
+  - the instance name is the **venue's name** (Settings → Venue), the SRV record gives port
+    **7210** and host `bargames-<id>.local`, A records give every LAN IPv4 address of the box;
+  - TXT: `v=1`, `id=<12 hex>` (stable for this box: remember the box by it, not by its IP),
+    `name=<venue name>`, `path=/venuebox`;
+  - the box announces itself at start and every 2 minutes, and answers legacy-unicast
+    queries (from a port other than 5353) directly.
+  Pairing still needs the 6-digit code; discovery only finds the box. `DISCOVERY=off` turns it
+  off. Networks with client isolation block mDNS too: keep "type the address" as the fallback.
+- Not yet: HLS for Roku/Apple TV.
 
 ## Box side (when building starts)
 

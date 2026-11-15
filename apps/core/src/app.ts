@@ -1434,6 +1434,15 @@ export function createApp(d: AppDeps) {
     return { venue: v, hosts, warnings: [...new Set(warnings)] };
   };
 
+  /**
+   * Box 0.16.2: the broker shows the venue's name to Venuebox apps and on the LAN (mDNS).
+   * Sent now, after every venue save, and each minute (the broker may have restarted).
+   */
+  const syncBoxName = () => brokerCall("PUT", "/box", { name: d.state.venue.get().name || "Bar Games box" }).catch(() => undefined);
+  void syncBoxName();
+  const boxNameTimer = setInterval(() => void syncBoxName(), 60_000);
+  boxNameTimer.unref?.();
+
   app.get("/api/venue", (_req, res) => res.json(venueView(d.state.venue.get())));
 
   app.put(
@@ -1457,6 +1466,7 @@ export function createApp(d: AppDeps) {
         throw new HttpError(400, (e as Error).message);
       }
       await d.state.venue.set(next);
+      void syncBoxName();
       if ((cur.idleModule ?? null) !== (next.idleModule ?? null)) void refreshIdleTvs(true).catch(() => undefined);
       res.json(venueView(next));
     }),

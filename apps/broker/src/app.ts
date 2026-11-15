@@ -21,7 +21,7 @@ const BACKUP_FILE = /^[a-z0-9-]+\.json$/;
 const httpErr = (status: number, message: string) => Object.assign(new Error(message), { status });
 
 /** Broker API. Only core calls it (bearer token); it never faces players. */
-export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; vizio?: VizioDriver; appletv?: AppleTvDriver; venuebox?: VenueboxHub; audio?: BoxAudio; token: string; log: Logger; dataDir?: string; restart?: () => void }) {
+export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; vizio?: VizioDriver; appletv?: AppleTvDriver; venuebox?: VenueboxHub; audio?: BoxAudio; token: string; log: Logger; dataDir?: string; restart?: () => void; setBoxName?: (name: string) => void }) {
   const app = express();
   app.disable("x-powered-by");
   // Settings restores (box 0.16.0) carry every TV pairing file; everything else is small.
@@ -75,6 +75,14 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
       setTimeout(() => d.restart?.(), 500).unref?.();
     }),
   );
+
+  /** Box 0.16.2: { name }: the venue's name, from core (Venuebox apps and LAN discovery show it). */
+  app.put("/box", (req, res) => {
+    const name = String(req.body?.name ?? "").trim().slice(0, 100);
+    if (!name) return void res.status(400).json({ error: "name required" });
+    d.setBoxName?.(name);
+    res.json({ ok: true, name });
+  });
 
   /** Host network traffic (the broker shares the host's network) and casting load, for the System page. */
   app.get(

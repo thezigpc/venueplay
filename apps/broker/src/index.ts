@@ -1,5 +1,6 @@
 import { installCrashHandlers, createLogger, envNum, JsonStore } from "@bargames/common";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBrokerApp } from "./app.js";
@@ -12,6 +13,7 @@ import { AppleTvDriver, type AppleTvAuth } from "./drivers/appletv/index.js";
 import { AtvHelper } from "./drivers/appletv/helper.js";
 import { DeviceStore, Pairings, type Device } from "./venuebox/devices.js";
 import { VenueboxHub } from "./venuebox/hub.js";
+import { advertiseVenuebox, lanAddresses } from "./venuebox/advertise.js";
 import { playable } from "./registry.js";
 import { DisplayRegistry, type DisplayRecord } from "./registry.js";
 import { AirplayStreams } from "./airplay.js";
@@ -88,6 +90,12 @@ if (mockCount) drivers.set("mock", new MockDriver(mockCount));
 
 const registry = new DisplayRegistry(new JsonStore<{ displays: DisplayRecord[] }>(path.join(dataDir, "displays.json"), { displays: [] }), drivers);
 
+// Box 0.16.2: the venue's name (core sends it: PUT /box), for Venuebox apps and discovery.
+const boxName = (() => {
+  let name = process.env.BOX_NAME ?? "Bar Games box";
+  return { get: () => name, set: (n: string) => void (name = n) };
+})();
+
 // Venuebox apps (docs/NATIVE-CLIENTS.md): pair with the box, render TV pages themselves.
 const clientPort = envNum("CLIENT_PORT", 7210);
 // On unless VENUEBOX=off (it only answers devices staff paired).
@@ -96,7 +104,7 @@ const venuebox = process.env.VENUEBOX !== "off"
       devices: new DeviceStore(new JsonStore<{ devices: Device[] }>(path.join(dataDir, "venuebox-devices.json"), { devices: [] }, 0o600)),
       pairings: new Pairings(),
       log,
-      boxName: () => process.env.BOX_NAME ?? "Bar Games box",
+      boxName: () => boxName.get(),
       displaysChanged: async (found, removed) => {
         await registry.merge(found);
         await registry.removeMany(removed);
@@ -111,13 +119,36 @@ const venuebox = process.env.VENUEBOX !== "off"
   : undefined;
 if (venuebox) drivers.set(venuebox.id, venuebox);
 
+// Box 0.16.2: Venuebox apps find the box on the LAN by mDNS (_venuebox._tcp). DISCOVERY=off
+// turns it off. The id is made once and kept, so apps recognize the box after an IP change.
+const boxId = (() => {
+  const file = path.join(dataDir, "box-id");
+  try {
+    const id = readFileSync(file, "utf8").trim();
+    if (/^[a-f0-9]{12}$/.test(id)) return id;
+  } catch {
+    /* first run */
+  }
+  const id = randomBytes(6).toString("hex");
+  try {
+    writeFileSync(file, `${id}\n`);
+  } catch {
+    /* read-only data folder: a new id each start, discovery still works */
+  }
+  return id;
+})();
+const stopAdvertising =
+  venuebox && process.env.DISCOVERY !== "off"
+    ? advertiseVenuebox({ info: () => ({ name: boxName.get(), id: boxId, port: clientPort, addresses: lanAddresses() }), log })
+    : undefined;
+
 if (venuebox) venuebox.listen(clientPort).on("listening", () => log.info("boot", "venuebox clients", { port: clientPort }));
 
 // The box's sound (Settings → Connected devices): its jack/HDMI, Bluetooth speakers, AirPlay TVs.
 const audio = audioFromEnv(registry, dataDir, log, { python: atvPython, script: atvScript });
 
 // restart: exit and let compose (restart: unless-stopped) start it with the restored files.
-const brokerApp = createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, appletv, venuebox, audio, token, log, dataDir, restart: () => process.kill(process.pid, "SIGTERM") });
+const brokerApp = createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, appletv, venuebox, audio, token, log, dataDir, setBoxName: boxName.set, restart: () => process.kill(process.pid, "SIGTERM") });
 let started = false;
 for (const host of listen.hosts) {
   brokerApp.listen(port, host, () => {
@@ -133,6 +164,7 @@ for (const host of listen.hosts) {
 }
 
 process.on("SIGTERM", () => {
+  stopAdvertising?.();
   audio?.engine.shutdown();
   atvHelper?.stop();
   void (airplay?.shutdown() ?? Promise.resolve()).finally(() => process.exit(0));
