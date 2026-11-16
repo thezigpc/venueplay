@@ -142,6 +142,10 @@ the same rule as the game SDK.
   - **Start at boot** on Android 10+ needs "Display over other apps": grant it from the app's
     panel, or with `adb shell appops set com.bargames.venuebox SYSTEM_ALERT_WINDOW allow`.
   - Tested on the Android TV 14 emulator against a box. Not yet on a real stick.
+  - **v0.2.0:** picks the TV's sharpest display mode (4K where the device draws apps at
+    4K; pages stay 1920x1080 CSS), reports the panel's real size in `w`/`h`, sends `screens`
+    when the mode changes. Tablets: landscape lock and an opt-in home-screen mode, so a
+    dedicated tablet restarts straight into the app. Not yet tested on a real 4K TV or tablet.
   - Before venues install updates, it needs one shared release signing key, kept out of
     every repo. An APK signed with a different key can't upgrade the installed app.
 
