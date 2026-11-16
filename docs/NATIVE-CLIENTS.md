@@ -90,8 +90,10 @@ Box → client:
 Client → box:
 - `hello { token, platform, model, appVersion, screens: [{ id, name, w, h, hz }], deliveries: [...] }`
   (one screen for TVs and phones; one per output on a desktop client)
-- `screens [...]`: a monitor/TV was plugged in or unplugged (desktop); the box adds the
-  new displays and marks missing ones offline
+- `screens [...]`: a monitor/TV was plugged in or unplugged, or a screen's mode changed (any
+  client; keep the same screen id for a mode change); the box adds the new displays, marks
+  missing ones offline and answers with a fresh `welcome`. `w`/`h` are the panel's physical
+  pixels (a label on the TVs page only; pages stay 1920x1080 CSS)
 - `state { screen, showing, playing | buffering | error, detail }` (feeds the TVs page and
   the startup rules' "online" check)
 - `preview { screen, jpeg }` on request (WebView clients; HLS previews come from the box)
