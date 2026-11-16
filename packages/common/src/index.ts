@@ -260,7 +260,27 @@ export interface GatewayConfig {
    * when the admin password changes or staff "sign out everywhere". Absent or 0: never.
    */
   staffNotBefore?: number;
+  /**
+   * Box 0.19.0: guest staff links still good (core drops revoked, expired and signed-out
+   * ones, so a revoke reaches the gateway at its next refresh).
+   */
+  guests?: GatewayGuest[];
 }
+
+/** A guest link the gateway honours: its cookie gives that one app's controls. */
+export interface GatewayGuest {
+  id: string;
+  gameId: string;
+  role: "host" | "cohost";
+  label: string;
+  /** ms */
+  expiresAt: number;
+  /** Where the link lands (the app's guests.path), relative to the app. */
+  landing: string;
+}
+
+/** Box 0.19.0: guest cookies are per app: `${GUEST_COOKIE_PREFIX}<gameId>`. */
+export const GUEST_COOKIE_PREFIX = "bg_guest_";
 
 /**
  * Set by the gateway (value: the gateway token) on requests it forwards to core, so

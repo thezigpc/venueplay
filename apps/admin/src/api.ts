@@ -265,6 +265,27 @@ export interface RoomSummary {
   hostName?: string;
 }
 
+/** Box 0.19.0: a guest host or co-host link. */
+export interface GuestLinkRow {
+  id: string;
+  gameId: string;
+  label: string;
+  role: "host" | "cohost";
+  parentId?: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+  active: boolean;
+}
+
+export interface GuestsOverview {
+  apps: { gameId: string; name: string; enabled: boolean; cohostsSupported: boolean; cohosts: boolean }[];
+  links: GuestLinkRow[];
+  /** Tonight's closing time, when one is set: links last until then by default. */
+  closingAt?: string;
+  defaultHours: number;
+}
+
 export interface RoomsOverview {
   at: string;
   games: { id: string; name: string; publicUrl?: string; commands: string[]; error?: string; rooms: (RoomSummary & { tvs: { id: string; name: string }[]; /** Box 0.15.5: rooms the box created. */ hostUrl?: string })[] }[];
@@ -374,7 +395,7 @@ export const api = {
   shutdown: () => call<{ ok: boolean; message?: string }>("POST", "/system/shutdown", { confirm: "shutdown" }),
   updates: () => call<Updates>("GET", "/games/updates"),
   checkUpdates: () => call<Updates>("POST", "/games/updates/check"),
-  updateGame: (id: string) => call<{ game: Game; from: string; warnings: string[] }>("POST", `/games/${encodeURIComponent(id)}/update`),
+  updateGame: (id: string, force = false) => call<{ game: Game; from: string; warnings: string[] }>("POST", `/games/${encodeURIComponent(id)}/update`, force ? { force: true } : undefined),
   install: (url: string, hostnameAlias?: string) => call<{ game: Game; upgraded: boolean; warnings: string[] }>("POST", "/games/install", { url, hostnameAlias: hostnameAlias || undefined }),
   patchGame: (id: string, patch: { enabled?: boolean; branding?: GameBranding; hostnameAlias?: string | null; ownHostname?: boolean }) => call<Game>("PATCH", `/games/${id}`, patch),
   removeGame: (id: string) => call("DELETE", `/games/${id}`),
@@ -407,6 +428,13 @@ export const api = {
   previewUrl: (id: string) => bgUrl(`/api/broker/displays/${encodeURIComponent(id)}/preview?t=${Date.now()}`),
   power: (id: string, on: boolean) => call("POST", `/broker/displays/${encodeURIComponent(id)}/power`, { on }),
   pair: (id: string, code?: string) => call<ShowResult>("POST", `/broker/displays/${encodeURIComponent(id)}/pair`, code ? { code } : {}),
+  /** Box 0.19.0: guest hosts (one app's controls for a guest). */
+  guests: () => call<GuestsOverview>("GET", "/guests"),
+  newGuest: (gameId: string, label: string, hours?: number) =>
+    call<GuestLinkRow & { url: string; qrSvg: string }>("POST", "/guests", { gameId, label, ...(hours ? { hours } : {}) }),
+  guestLink: (id: string) => call<{ url: string; qrSvg: string }>("GET", `/guests/${encodeURIComponent(id)}/link`),
+  revokeGuest: (id: string) => call("DELETE", `/guests/${encodeURIComponent(id)}`),
+  guestSettings: (gameId: string, cohosts: boolean) => call("PUT", `/guests/settings/${encodeURIComponent(gameId)}`, { cohosts }),
   /** Box 0.17.0: take over hosting, or invite a co-host; the link and its QR code (staff only). */
   roomLink: (gameId: string, code: string, kind: "host" | "cohost", minutes?: number) =>
     call<{ url: string; expiresAt?: string; message?: string; qrSvg: string }>("POST", `/rooms/${encodeURIComponent(gameId)}/${encodeURIComponent(code)}/link`, { kind, ...(minutes ? { minutes } : {}) }),

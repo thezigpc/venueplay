@@ -9,7 +9,7 @@
 import { createServer, request, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { connect } from "node:net";
 import { isApp, isIntegration, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
-import { AUDIO_PATHS, HEADERS, INTEGRATION_PATHS, MATCH_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type AudioEndReason, type AudioOutput, type AudioPlayOptions, type MatchRecord, type MatchStart, type AudioSession, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
+import { AUDIO_PATHS, GUEST_PATHS, HEADERS, INTEGRATION_PATHS, MATCH_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type AudioEndReason, type AudioOutput, type AudioPlayOptions, type MatchRecord, type MatchStart, type GuestLinkInfo, type GuestRole, type AudioSession, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
 import { DEFAULT_THEME } from "./theme.js";
 import { joinUrl, normalizeBasePath } from "./base.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -36,6 +36,12 @@ export function loadManifest(dirOrFile: string): GameManifest | undefined {
 export const MOCK_GAMES_PATH = "/__bargames/dev/games";
 /** The mock gateway's staff cookie (open PATHS.staff to set it). */
 export const MOCK_STAFF_COOKIE = "bg_staff_mock";
+/**
+ * SDK 0.16.0: the mock gateway's guest cookie. Open PATHS.guest to become a pretend guest:
+ * /__bargames/guest?name=Dana (a guest host), ?as=cohost, ?off=1 to stop; the links
+ * bg.guests.addCohost() returns work too.
+ */
+export const MOCK_GUEST_COOKIE = "bg_guest_mock";
 /** SDK 0.11.1: the pretend box admin page (venue.adminUrl on the mock box). */
 export const MOCK_ADMIN_PATH = "/__bargames/dev/admin";
 /**
@@ -347,6 +353,21 @@ export function mockBox(o: MockBoxOptions) {
   const pinReset = setInterval(() => (pinFailures = 0), 60_000);
   pinReset.unref();
   const mockAudio = new MockAudio(o.gameUrl);
+  // SDK 0.16.0: pretend guest links (the venue's "guest hosts can add a co-host" is on here).
+  const mockGuests = new Map<string, GuestLinkInfo & { revoked?: boolean }>();
+  let guestSeq = 0;
+  const guestLive = (id: string | undefined): (GuestLinkInfo & { revoked?: boolean }) | undefined => {
+    const g = id ? mockGuests.get(id) : undefined;
+    if (!g || g.revoked || Date.parse(g.expiresAt) <= Date.now()) return undefined;
+    return g.parentId && !guestLive(g.parentId) ? undefined : g;
+  };
+  const newMockGuest = (label: string, role: GuestRole, parentId?: string): GuestLinkInfo => {
+    const host = parentId ? mockGuests.get(parentId) : undefined;
+    const g: GuestLinkInfo = { id: `guest${++guestSeq}`, label, role, ...(parentId ? { parentId } : {}), createdAt: new Date().toISOString(), expiresAt: host?.expiresAt ?? new Date(Date.now() + 6 * 3600e3).toISOString() };
+    mockGuests.set(g.id, g);
+    return g;
+  };
+  const guestUrl = (id: string) => `${origin}${base ?? ""}${PATHS.guest}?t=${encodeURIComponent(id)}`;
   // SDK 0.15.0: pretend bracket matches, for tournament apps.
   const mockMatches = new Map<string, MatchRecord>();
   const finishMatch = async (rec: MatchRecord) => {
@@ -504,6 +525,32 @@ export function mockBox(o: MockBoxOptions) {
       }
       return json(404, { error: "not found" });
     }
+    if (req.url?.startsWith("/internal/guests")) {
+      if (!o.manifest?.guests) return json(403, { error: 'add "guests" to bargames.json' });
+      const url = req.url.split("?")[0];
+      if (url === GUEST_PATHS.list && req.method === "GET") return json(200, [...mockGuests.values()].filter((g) => guestLive(g.id)).map(({ revoked: _r, ...g }) => g));
+      if (url === GUEST_PATHS.cohost && req.method === "POST") {
+        if (!o.manifest.guests.cohosts) return json(403, { error: 'add "guests": { "cohosts": true } to bargames.json' });
+        const b = JSON.parse((await readBody(req)) || "{}") as { guestId?: string; label?: string };
+        const host = guestLive(b.guestId);
+        if (!host) return json(404, { error: "no such guest (or their link ended)" });
+        if (host.role !== "host") return json(403, { error: "only a guest host can add a co-host" });
+        const label = typeof b.label === "string" ? b.label.trim().slice(0, 60) : "";
+        if (!label) return json(400, { error: "label: who the co-host is" });
+        const g = newMockGuest(label, "cohost", host.id);
+        console.log(`${c.ok("guest")} ${host.label} added co-host ${label}: ${guestUrl(g.id)}`);
+        return json(200, { ...g, url: guestUrl(g.id) });
+      }
+      const one = /^\/internal\/guests\/([^/]+)$/.exec(url);
+      if (one && req.method === "DELETE") {
+        const g = mockGuests.get(decodeURIComponent(one[1]));
+        if (!g) return json(404, { error: "no such guest" });
+        g.revoked = true;
+        console.log(`${c.ok("guest")} ${g.label}'s link turned off`);
+        return json(200, { ok: true });
+      }
+      return json(404, { error: "not found" });
+    }
     if (req.url?.startsWith("/internal/matches")) {
       if (!o.manifest?.tournaments) return json(403, { error: 'add "tournaments": true to bargames.json' });
       const url = req.url.split("?")[0];
@@ -620,7 +667,14 @@ export function mockBox(o: MockBoxOptions) {
     // Staff sign-in (SDK 0.7.0): the cookie from MOCK_STAFF_PATH becomes the staff header.
     const cookies = String(req.headers.cookie ?? "").split(";").map((c) => c.trim()).filter(Boolean);
     if (cookies.includes(`${MOCK_STAFF_COOKIE}=1`)) h[HEADERS.staff] = "1";
-    const rest = cookies.filter((c) => !c.startsWith(`${MOCK_STAFF_COOKIE}=`)).join("; ");
+    // SDK 0.16.0: a pretend guest (only when the manifest declares "guests", as on a box).
+    const guest = o.manifest?.guests ? guestLive(cookies.find((c) => c.startsWith(`${MOCK_GUEST_COOKIE}=`))?.slice(MOCK_GUEST_COOKIE.length + 1)) : undefined;
+    if (guest) {
+      h[HEADERS.guest] = guest.id;
+      h[HEADERS.guestRole] = guest.role;
+      h[HEADERS.guestName] = encodeURIComponent(guest.label);
+    }
+    const rest = cookies.filter((c) => !c.startsWith(`${MOCK_STAFF_COOKIE}=`) && !c.startsWith(`${MOCK_GUEST_COOKIE}=`)).join("; ");
     if (rest) h.cookie = rest;
     else delete h.cookie;
     h["x-forwarded-proto"] = "http";
@@ -648,6 +702,34 @@ export function mockBox(o: MockBoxOptions) {
       const off = q.get("off") === "1";
       res.writeHead(303, { location: next, "set-cookie": `${MOCK_STAFF_COOKIE}=${off ? "" : "1"}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${off ? 0 : 43200}` });
       console.log(`${c.ok(off ? "staff signed out" : "staff signed in")} (requests now ${off ? "without" : "with"} ${HEADERS.staff}: 1)`);
+      return void res.end();
+    }
+    // SDK 0.16.0: pretend guest link. ?name=Dana [&as=cohost] makes one; ?t=<id> opens one
+    // (bg.guests.addCohost's url); ?off=1 stops being a guest.
+    if (staffPath === PATHS.guest || (base && staffPath === base + PATHS.guest)) {
+      const q = new URL(req.url!, "http://x").searchParams;
+      if (!o.manifest?.guests) {
+        res.writeHead(404, { "content-type": "text/plain" });
+        return void res.end('Add "guests" to bargames.json first (then restart the mock box).');
+      }
+      if (q.get("off") === "1") {
+        res.writeHead(303, { location: base ? `${base}/` : "/", "set-cookie": `${MOCK_GUEST_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` });
+        console.log(c.ok("guest signed out"));
+        return void res.end();
+      }
+      let g = q.get("t") ? guestLive(q.get("t")!) : undefined;
+      if (q.get("t") && !g) {
+        res.writeHead(403, { "content-type": "text/plain" });
+        return void res.end("This guest link has ended or was turned off.");
+      }
+      if (!g) {
+        const role: GuestRole = q.get("as") === "cohost" ? "cohost" : "host";
+        const host = role === "cohost" ? ([...mockGuests.values()].find((x) => x.role === "host" && guestLive(x.id)) ?? newMockGuest("Guest host", "host")) : undefined;
+        g = guestLive(newMockGuest(q.get("name")?.slice(0, 60) || (role === "host" ? "Guest host" : "Co-host"), role, host?.id).id)!;
+      }
+      const landing = o.manifest.guests.path ?? o.manifest.routes.host ?? "/";
+      res.writeHead(303, { location: `${base ?? ""}${landing}`, "set-cookie": `${MOCK_GUEST_COOKIE}=${g.id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=21600` });
+      console.log(`${c.ok("guest")} ${g.label} (${g.role}) signed in (requests now with ${HEADERS.guest}: ${g.id})`);
       return void res.end();
     }
     if (req.url?.split("?")[0].startsWith(MOCK_INTEGRATION_PATH)) return void integrationControl(req, res);

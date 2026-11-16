@@ -59,6 +59,17 @@ its own audio on the box's speakers. These are the box's jack or HDMI, Bluetooth
 and AirPlay TVs, which the venue sets up under Settings → Connected devices. Use
 `bg.audio` (or `@bargames/sdk/audio`) and `bg.fromBox(req)`. Guide: [AUDIO.md](AUDIO.md).
 
+**Guest hosts (SDK 0.16.0, box 0.19.0):** an app that declares
+`"guests": { "path"?: "/kj", "cohosts"?: true }` can be handed to a guest: staff make a guest
+link in the box admin (Tonight → Guest hosts, or the app's details), and the gateway gives
+that guest a cookie for this app only and tells the app `x-bargames-guest` (id),
+`x-bargames-guest-role` (`host` | `cohost`) and `x-bargames-guest-name`. Read them with
+`bg.guest(req)`; guests aren't staff. A guest host can add co-hosts with
+`bg.guests.addCohost(req, label)` when the app declares `cohosts` and the venue allowed it;
+`bg.guests.list()` and `revoke(id)` manage them. Links end at closing time (or after the
+hours staff chose), on "Turn off", or when the admin password changes; a co-host ends with
+their host. Results can mark teams: `results[].player.team: true`.
+
 **Bracket matches (SDK 0.15.0):** a game that declares `"matches": { "players": [min, max] }`
 plays one tournament match per room: `create_room` gets `args.match` (`id`, `players`, `title`),
 and the game reports `bg.reportResults({ roomCode, matchId, results })`. A tournament app

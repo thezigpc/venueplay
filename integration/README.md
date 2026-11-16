@@ -21,6 +21,31 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.16.0 (guest hosts; team results)
+
+- **Most modules: nothing to change.** Don't re-pack for this unless you want one of these.
+- **Guest hosts** (box 0.19.0), for apps a guest runs (Stage Signup's KJ, a patron
+  guest-hosting): staff make a guest link in the box admin; the guest gets **your app's
+  controls only**, nothing else on the box.
+  - Declare `"guests": { "path": "/kj", "cohosts": true }` (`path`: where the link lands,
+    default `routes.host`, else `/`; `cohosts`: you offer "Add co-host").
+  - `bg.guest(req)` → `{ id, role: "host" | "cohost", name }` or undefined. Guests are **not**
+    staff (`bg.isStaff` stays false): let them run things (the queue, next, pause), keep
+    settings for staff. Never trust it off a box (it's undefined there).
+  - `bg.guests.addCohost(req, label)` (the request's guest must be a host; the venue must
+    switch "Guest hosts can add a co-host" on for your app) → `{ id, url, … }`: show `url` as a
+    QR to the co-host only. It ends with the host's link. Co-hosts can't add anyone.
+  - `bg.guests.list()`, `bg.guests.revoke(id)` (a host removing a co-host, "I'm done").
+  - Links end at closing time (or after the hours staff picked), when staff turn them off,
+    or when the admin password changes. Check `bg.guest(req)` on every request (and on
+    socket connect); don't cache "is a guest" for the session.
+  - Mock box: `/__bargames/guest?name=Dana` makes you a pretend guest host
+    (`&as=cohost` a co-host, `?off=1` stops); `addCohost`'s url works there too.
+- **Team results:** `results[].player.team: true` when the "player" is a team (trivia), so
+  boards can keep team seasons apart.
+- **Box 0.19.0 (no SDK change):** the box refuses to update a game while one of its rooms has
+  players (staff can update anyway; `bgctl update --force`).
+
 ## What's new in SDK 0.15.0 (bracket matches: tournaments ↔ games)
 
 - **Most modules: nothing to change.** This is for two kinds of module:

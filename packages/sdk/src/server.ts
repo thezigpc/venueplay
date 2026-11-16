@@ -34,6 +34,11 @@ import {
   type MediaPlayResult,
   type PlayerProfile,
   MATCH_PATHS,
+  GUEST_PATHS,
+  type GuestCohostResult,
+  type GuestInfo,
+  type GuestLinkInfo,
+  type GuestRole,
   type MatchGame,
   type MatchRecord,
   type MatchStart,
@@ -64,6 +69,8 @@ export interface GatewayInfo {
   access?: AccessReason;
   /** Staff signed in to the box admin (SDK 0.7.0). Always false off a box. */
   staff: boolean;
+  /** SDK 0.16.0: a guest staff gave this app's controls to. Never set off a box. */
+  guest?: GuestInfo;
 }
 
 export interface BarGames {
@@ -172,6 +179,25 @@ export interface BarGames {
      * "match_result" in bargames.json "commands".
      */
     onResult(fn: (match: MatchRecord) => void | Promise<void>): void;
+  };
+  /**
+   * SDK 0.16.0: the guest (host or co-host) behind this request, when staff gave them your
+   * app's controls with a guest link (declare "guests" in bargames.json). Guests aren't
+   * staff: let them run things, keep settings for bg.isStaff. Undefined off a box.
+   */
+  guest(req: IncomingMessage): GuestInfo | undefined;
+  /** SDK 0.16.0: your app's guest links. Off a box: list() is [], the rest throws. */
+  guests: {
+    /** Guest hosts and co-hosts whose links are still good. */
+    list(): Promise<GuestLinkInfo[]>;
+    /**
+     * A guest host adds a co-host (the request's guest must be a host). Needs manifest
+     * guests.cohosts and the venue's OK for your app (box admin → the app → Guest hosts).
+     * Show the returned url as a QR to the co-host only. It ends with the host's link.
+     */
+    addCohost(req: IncomingMessage, label: string): Promise<GuestCohostResult>;
+    /** End a guest's link now (a host removing a co-host; "I'm done"). */
+    revoke(id: string): Promise<void>;
   };
   /**
    * SDK 0.13.0: true when this request comes from the box itself (it carries your
@@ -341,7 +367,19 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
       clientIp: viaGateway ? first(h[HEADERS.clientIp]) : (first(h["cf-connecting-ip"]) ?? req.socket?.remoteAddress),
       access: viaGateway ? (first(h[HEADERS.access]) as AccessReason | undefined) : undefined,
       staff: viaGateway && first(h[HEADERS.staff]) === "1",
+      ...(viaGateway && guestOf(first(h[HEADERS.guest]), first(h[HEADERS.guestRole]), first(h[HEADERS.guestName]))),
     };
+  }
+
+  function guestOf(id: string | undefined, role: string | undefined, name: string | undefined): { guest?: GuestInfo } {
+    if (!id || (role !== "host" && role !== "cohost")) return {};
+    let decoded = "";
+    try {
+      decoded = decodeURIComponent(name ?? "");
+    } catch {
+      decoded = name ?? "";
+    }
+    return { guest: { id, role: role as GuestRole, name: decoded || "Guest" } };
   }
 
   function core(method: string, p: string, body?: unknown): Promise<Response> {
@@ -459,6 +497,28 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
           await fn(match);
           return { ok: true };
         });
+      },
+    },
+    guest: (req) => gateway(req).guest,
+    guests: {
+      async list() {
+        if (!connected) return [];
+        const r = await core("GET", GUEST_PATHS.list).catch(() => undefined);
+        return r?.ok ? ((await r.json()) as GuestLinkInfo[]) : [];
+      },
+      async addCohost(req, label) {
+        if (!connected) throw new Error("not running on a Bar Games box");
+        const g = gateway(req).guest;
+        if (!g) throw new Error("only a guest host can add a co-host");
+        const r = await core("POST", GUEST_PATHS.cohost, { guestId: g.id, label });
+        const body = (await r.json().catch(() => ({}))) as GuestCohostResult & { error?: string };
+        if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+        return body;
+      },
+      async revoke(id) {
+        if (!connected) throw new Error("not running on a Bar Games box");
+        const r = await core("DELETE", GUEST_PATHS.one(id));
+        if (!r.ok && r.status !== 404) throw new Error(`HTTP ${r.status}`);
       },
     },
     fromBox: (req) => authorized(req),

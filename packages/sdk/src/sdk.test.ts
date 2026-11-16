@@ -958,3 +958,62 @@ test("SDK 0.15.0: matches/tournaments in the manifest; bg.matches against the mo
     appServer.close();
   }
 });
+
+test("SDK 0.16.0: guests in the manifest; bg.guest / bg.guests against the mock box; team results", async () => {
+  const m = validateManifest({ id: "signup", name: "Stage Signup", kind: "app", version: "0.2.0", image: "x/s:1", port: 3000, sdk: { version: "0.16.0", level: 1 }, routes: { player: "/", host: "/kj" }, guests: { cohosts: true } });
+  assert.ok(m.ok && m.manifest.guests?.cohosts === true);
+  assert.deepEqual(validateManifest({ id: "signup", name: "S", kind: "app", version: "0.2.0", image: "x/s:1", port: 3000, sdk: { version: "0.16.0", level: 1 }, routes: { player: "/" }, guests: true }).ok && "ok", "ok");
+  assert.equal(validateManifest({ id: "signup", name: "S", kind: "app", version: "0.2.0", image: "x/s:1", port: 3000, sdk: { version: "0.16.0", level: 1 }, routes: { player: "/" }, guests: { path: "kj" } }).ok, false);
+  const r: import("./protocol.js").GameResult = { results: [{ player: { name: "Quizzly Bears", team: true }, place: 1 }] };
+  assert.equal(r.results[0].player.team, true);
+
+  const { mockBox } = await import("./devbox.js");
+  let bg: ReturnType<typeof createBarGames> | undefined;
+  const appServer = createServer(async (req, res) => {
+    if (!bg) return void res.writeHead(503).end();
+    if (req.url === "/add") {
+      try {
+        const co = await bg.guests.addCohost(req, "Sam");
+        return void res.end(JSON.stringify(co));
+      } catch (e) {
+        return void res.writeHead(400).end(JSON.stringify({ error: (e as Error).message }));
+      }
+    }
+    res.end(JSON.stringify({ guest: bg.guest(req) ?? null, staff: bg.isStaff(req) }));
+  }).listen(0);
+  await new Promise((r2) => appServer.once("listening", r2));
+  const log = console.log;
+  console.log = () => undefined;
+  const box = mockBox({ gameId: "signup", displayName: "S", gameUrl: `http://127.0.0.1:${(appServer.address() as AddressInfo).port}`, corePort: 0, gatewayPort: 0, manifest: m.ok ? m.manifest : undefined });
+  await Promise.all([new Promise((r2) => box.core.once("listening", r2)), new Promise((r2) => box.gateway.once("listening", r2))]);
+  try {
+    bg = createBarGames({ coreUrl: `http://127.0.0.1:${(box.core.address() as AddressInfo).port}`, token: "dev-token", gameId: "signup" });
+    const gw = `http://127.0.0.1:${(box.gateway.address() as AddressInfo).port}`;
+    const signIn = await fetch(`${gw}/__bargames/guest?name=${encodeURIComponent("Dana – karaoke")}`, { redirect: "manual" });
+    assert.equal(signIn.status, 303);
+    assert.equal(signIn.headers.get("location"), "/kj");
+    const cookie = signIn.headers.get("set-cookie")!.split(";")[0];
+    const me = (await (await fetch(`${gw}/kj`, { headers: { cookie } })).json()) as { guest: { id: string; role: string; name: string }; staff: boolean };
+    assert.deepEqual({ role: me.guest.role, name: me.guest.name, staff: me.staff }, { role: "host", name: "Dana – karaoke", staff: false });
+    assert.equal(((await (await fetch(`${gw}/kj`)).json()) as { guest: unknown }).guest, null);
+
+    const co = (await (await fetch(`${gw}/add`, { headers: { cookie } })).json()) as { id: string; role: string; parentId: string; url: string };
+    assert.equal(co.role, "cohost");
+    assert.equal(co.parentId, me.guest.id);
+    const coIn = await fetch(co.url.replace(/^http:\/\/localhost:\d+/, gw), { redirect: "manual" });
+    const coCookie = coIn.headers.get("set-cookie")!.split(";")[0];
+    assert.equal((await fetch(`${gw}/add`, { headers: { cookie: coCookie } })).status, 400, "a co-host can't add anyone");
+    assert.equal((await bg.guests.list()).length, 2);
+    await bg.guests.revoke(me.guest.id);
+    assert.equal(((await (await fetch(`${gw}/kj`, { headers: { cookie: coCookie } })).json()) as { guest: unknown }).guest, null, "a co-host ends with their host");
+
+    const off = createBarGames({ coreUrl: "", token: "", gameId: "signup" });
+    assert.deepEqual(await off.guests.list(), []);
+  } finally {
+    console.log = log;
+    box.core.closeAllConnections?.();
+    box.core.close();
+    box.gateway.close();
+    appServer.close();
+  }
+});

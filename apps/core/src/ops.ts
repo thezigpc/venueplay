@@ -5,6 +5,7 @@
 //   bgctl status                      games, versions, and any update waiting
 //   bgctl check [game]                re-check the games' sources now
 //   bgctl update <game…> | --all      install newer versions and restart them
+//         --force                     even while a room is being played (it ends)
 //   bgctl install <repo URL> [--enable]   install a game (first time) from its GitHub repo
 //   bgctl startup                     put TVs on their startup choices now (what a reboot does)
 //         --wait <minutes>            wait for an image that's still building
@@ -42,6 +43,7 @@ const HELP = `bgctl: Bar Games box command line
   bgctl check [game]               re-check the games' sources now
   bgctl update <game...>           install newer versions and restart them
   bgctl update --all               every game with an update
+     --force                       even while a room is being played (it ends)
   bgctl install <repo URL>         install a game from its GitHub repo
      --enable                      and turn it on (start it)
   bgctl startup                    put TVs on their startup choices now (as after a reboot)
@@ -71,7 +73,7 @@ export function opsClient(baseUrl: string, token: string, doFetch: typeof fetch 
     startup: () => call<{ waiting: string[]; rules: Record<string, { mode: string; gameId?: string }> }>("POST", "/internal/ops/startup"),
     install: (url: string, enable: boolean) =>
       call<{ id: string; version: string; upgraded: boolean; enabled: boolean; warnings: string[]; game: Row }>("POST", "/internal/ops/install", { url, enable }),
-    update: (id: string) => call<{ id: string; from: string; to: string; warnings: string[] }>("POST", `/internal/ops/update/${encodeURIComponent(id)}`),
+    update: (id: string, force = false) => call<{ id: string; from: string; to: string; warnings: string[] }>("POST", `/internal/ops/update/${encodeURIComponent(id)}`, force ? { force: true } : undefined),
   };
 }
 
@@ -182,7 +184,7 @@ export async function runOps(argv: string[], client: Client, out: (line: string)
       if (u?.available) {
         if (!json) out(`${id}: updating ${row.version} → ${u.latest}…`);
         try {
-          const r = await client.update(id);
+          const r = await client.update(id, argv.includes("--force"));
           results.push({ id, ok: true, from: r.from, to: r.to, message: `updated ${r.from} → ${r.to}${r.warnings.length ? ` (${r.warnings.join("; ")})` : ""}` });
         } catch (e) {
           results.push({ id, ok: false, message: (e as Error).message });

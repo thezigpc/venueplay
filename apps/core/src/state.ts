@@ -7,6 +7,7 @@ import type { StartupRule } from "./startup.js";
 import type { ResultEntry } from "./leaderboard.js";
 import { DEFAULT_CLOSING, type ClosingSettings, type Scene, type Schedule } from "./scenes.js";
 import type { MatchRecord } from "@bargames/sdk";
+import { DEFAULT_GUESTS, type GuestStore } from "./guests.js";
 
 export interface VenueSettings {
   name: string;
@@ -172,6 +173,8 @@ export function openState(dataDir: string) {
     closing: new JsonStore<ClosingSettings>(path.join(dataDir, "closing.json"), DEFAULT_CLOSING),
     /** Box 0.18.0: bracket matches tournaments started in games (the last 500). */
     matches: new JsonStore<{ matches: MatchRecord[] }>(path.join(dataDir, "matches.json"), { matches: [] }),
+    /** Box 0.19.0: guest staff links (one app's controls for a guest host) and who may add co-hosts. */
+    guests: new JsonStore<GuestStore>(path.join(dataDir, "guests.json"), DEFAULT_GUESTS, 0o600),
     /** Box 0.16.0: one-tap announcement texts for staff. */
     announcementPresets: new JsonStore<{ presets: AnnouncementPreset[] }>(path.join(dataDir, "announcement-presets.json"), { presets: DEFAULT_ANNOUNCEMENT_PRESETS }),
   };

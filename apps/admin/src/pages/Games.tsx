@@ -1,7 +1,8 @@
 import { adminPath, isApp } from "@bargames/sdk";
 import { useState } from "react";
-import { api, type Game, type UpdateInfo } from "../api";
+import { api, ApiError, type Game, type UpdateInfo } from "../api";
 import { useAction, useLoad } from "../useLoad";
+import { GuestHostsCard } from "./GuestHosts";
 
 /** Games and apps in one list: a row each, with the rarely needed settings behind "More". */
 export function GamesPage() {
@@ -183,7 +184,15 @@ function UpdateBanner({ game, update, busy, run, rooms = 0, named = false }: { g
     const live = game.enabled ? "\n\nIt restarts, so open rooms close (players can start new ones a moment later)." : "";
     if (!window.confirm(`Update ${game.context.game.displayName} from ${update.installed} to ${update.latest}?${live}`)) return;
     run(async () => {
-      const r = await api.updateGame(game.id);
+      let r;
+      try {
+        r = await api.updateGame(game.id);
+      } catch (e) {
+        // Box 0.19.0: a room is being played. Say which, and let staff go ahead anyway.
+        if (!(e instanceof ApiError && e.status === 409 && e.message.startsWith("being played"))) throw e;
+        if (!window.confirm(`${game.context.game.displayName} is ${e.message}.\n\nUpdate now anyway?`)) return;
+        r = await api.updateGame(game.id, true);
+      }
       setDone(`Updated from ${r.from} to ${r.game.manifest.version}.${r.warnings.length ? ` ${r.warnings.join(" ")}` : ""}`);
     });
   };
@@ -324,6 +333,7 @@ function GameCard({ game, busy, run, update, embedded = false }: { game: Game; b
       </p>
       <UpdateBanner game={game} update={update} busy={busy} run={run} />
       {!embedded && adminPath(game.manifest) && <OpenSettings game={game} />}
+      {game.manifest.guests && <GuestHostsCard gameId={game.id} embedded />}
       <SecretSettings game={game} />
       {slots.has("displayName") && (
         <label>

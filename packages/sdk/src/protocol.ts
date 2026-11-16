@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.15.0";
+export const SDK_VERSION = "0.16.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -312,6 +312,45 @@ export interface MatchResultArgs {
   match: MatchRecord;
 }
 
+// ---------------------------------------------------------------- guest staff (SDK 0.16.0)
+// Staff hand a guest (a patron guest-hosting, a visiting KJ) a link to one app's controls.
+// The app declares "guests" in its manifest and tells guests apart with bg.guest(req):
+// guests run things; settings stay with staff (bg.isStaff). A guest host may add co-hosts
+// when the app declares guests.cohosts and the venue turned that on for the app.
+
+export type GuestRole = "host" | "cohost";
+
+/** Who a guest request is from (bg.guest(req)). */
+export interface GuestInfo {
+  /** The guest link's id (stable for that person until it ends). */
+  id: string;
+  role: GuestRole;
+  /** As staff (or the guest host) typed it: "Dana – karaoke". */
+  name: string;
+}
+
+/** A guest link as the box lists it (bg.guests.list()). */
+export interface GuestLinkInfo {
+  id: string;
+  label: string;
+  role: GuestRole;
+  /** A co-host's guest host. */
+  parentId?: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+/** bg.guests.addCohost(): the new co-host and the link to give them (it holds a secret: show it as a QR to the co-host only). */
+export interface GuestCohostResult extends GuestLinkInfo {
+  url: string;
+}
+
+export const GUEST_PATHS = {
+  list: "/internal/guests",
+  cohost: "/internal/guests/cohost",
+  one: (id: string) => `/internal/guests/${encodeURIComponent(id)}`,
+} as const;
+
 export const MATCH_PATHS = {
   games: "/internal/matches/games",
   start: "/internal/matches",
@@ -438,6 +477,8 @@ export const PATHS = {
   staff: "/__bargames/staff",
   /** SDK 0.11.0: the announcement and countdown only, for idle screens (no PIN; CORS). */
   live: "/__bargames/live.json",
+  /** SDK 0.16.0: a guest staff link (the gateway handles it: sets the guest cookie, then your `guests.path`). */
+  guest: "/__bargames/guest",
 } as const;
 
 /** Headers the gateway adds to every proxied request. */
@@ -447,6 +488,14 @@ export const HEADERS = {
   access: "x-bargames-access",
   /** "1": the request comes from staff signed in to the box admin (SDK 0.7.0). */
   staff: "x-bargames-staff",
+  /**
+   * SDK 0.16.0: the request comes from a guest the staff gave your app's controls to (a
+   * patron guest-hosting karaoke). The guest link's id; never staff. With guestRole and
+   * guestName (URI-encoded).
+   */
+  guest: "x-bargames-guest",
+  guestRole: "x-bargames-guest-role",
+  guestName: "x-bargames-guest-name",
 } as const;
 
 /** Why the gateway let a request in. */
@@ -479,7 +528,8 @@ export interface GameResult {
   roomCode?: string;
   /** SDK 0.15.0: the bracket match this room was made for (create_room's args.match.id). */
   matchId?: string;
-  results: { player: { name: string; profileId?: string }; place?: number; score?: number }[];
+  /** SDK 0.16.0: player.team true when the "player" is a team (trivia), so boards can keep teams apart. */
+  results: { player: { name: string; profileId?: string; team?: boolean }; place?: number; score?: number }[];
 }
 
 /** A game's board on the venue's games list and idle screen. */

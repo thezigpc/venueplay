@@ -131,6 +131,12 @@ export interface GameManifest {
   matches?: { players: [number, number] };
   /** SDK 0.15.0: an app that runs tournaments: it may start matches in games that declare "matches". */
   tournaments?: boolean;
+  /**
+   * SDK 0.16.0: staff may give guests this module's controls (bg.guest). `path`: where a guest
+   * link lands (default routes.host, else "/"). `cohosts`: the module lets a guest host add
+   * co-hosts (bg.guests.addCohost); the venue still has to allow it per app.
+   */
+  guests?: { path?: string; cohosts?: boolean };
   /** Static, non-secret environment. Keys starting with BG_ are reserved. */
   env: Record<string, string>;
   minBoxVersion?: string;
@@ -291,6 +297,17 @@ export function validateManifest(input: unknown): ManifestResult {
     else if (m.tournaments) tournaments = true;
   }
 
+  // SDK 0.16.0: guest staff links.
+  let guests: { path?: string; cohosts?: boolean } | undefined;
+  if (m.guests !== undefined) {
+    const g = m.guests === true ? {} : m.guests;
+    if (!isObj(g)) errors.push('guests: { "path"?: "/host", "cohosts"?: true }');
+    else if (g.path !== undefined && (typeof g.path !== "string" || !g.path.startsWith("/") || g.path.startsWith("//"))) errors.push('guests.path: a path like "/host"');
+    else if (g.cohosts !== undefined && typeof g.cohosts !== "boolean") errors.push("guests.cohosts: true or false");
+    else if (integration) warnings.push("guests: integrations have no pages; ignored");
+    else guests = { ...(g.path ? { path: g.path as string } : {}), ...(g.cohosts ? { cohosts: true } : {}) };
+  }
+
   if (errors.length) return { ok: false, errors, warnings };
 
   const sdk = m.sdk as { version: string };
@@ -328,6 +345,7 @@ export function validateManifest(input: unknown): ManifestResult {
     ...(audio?.play ? { audio } : {}),
     ...(matches ? { matches } : {}),
     ...(tournaments ? { tournaments } : {}),
+    ...(guests ? { guests } : {}),
   };
   return { ok: true, manifest, warnings };
 }

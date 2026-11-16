@@ -29,7 +29,7 @@ export function cleanResult(r: unknown): GameResult | string {
     const score = e.score === undefined ? undefined : Number(e.score);
     if (place !== undefined && !(Number.isInteger(place) && place >= 1 && place <= 1000)) return "place: 1-1000";
     if (score !== undefined && !Number.isFinite(score)) return "score: a number";
-    results.push({ player: { name, ...(typeof p.profileId === "string" ? { profileId: p.profileId.slice(0, 64) } : {}) }, ...(place !== undefined ? { place } : {}), ...(score !== undefined ? { score } : {}) });
+    results.push({ player: { name, ...(typeof p.profileId === "string" ? { profileId: p.profileId.slice(0, 64) } : {}), ...(p.team === true ? { team: true } : {}) }, ...(place !== undefined ? { place } : {}), ...(score !== undefined ? { score } : {}) });
   }
   return { ...(typeof v.roomCode === "string" ? { roomCode: v.roomCode.slice(0, 32) } : {}), ...(typeof v.matchId === "string" && v.matchId ? { matchId: v.matchId.slice(0, 64) } : {}), results };
 }

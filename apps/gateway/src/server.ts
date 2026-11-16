@@ -1,4 +1,4 @@
-import { ADMIN_COOKIE, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_LINK_TTL_MS, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayRoute, type Logger } from "@bargames/common";
+import { ADMIN_COOKIE, GATEWAY_PROOF_HEADER, GUEST_COOKIE_PREFIX, safeEqual, signToken, STAFF_COOKIE, STAFF_LINK_TTL_MS, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayGuest, type GatewayRoute, type Logger } from "@bargames/common";
 import { GAMES_LINK_CSS, gamesLinkHtml, HEADERS, PATHS, themeToCss, type VenueContext } from "@bargames/sdk";
 import httpProxy from "http-proxy";
 import { createHash, createHmac, randomBytes } from "node:crypto";
@@ -115,8 +115,42 @@ export function createGateway(d: GatewayDeps) {
     d.log.info("staff", "staff signed in to a game", { host: req.headers.host });
   }
 
+  /**
+   * Box 0.19.0: the guest behind a request to this app, if their cookie is signed by this box,
+   * for this app, and the link is still on core's list (not revoked or expired).
+   */
+  const guestFor = (req: IncomingMessage, route: GatewayRoute, cfg: GatewayConfig | undefined = d.config()): GatewayGuest | undefined => {
+    if (route.kind !== "game" || !route.gameId) return undefined;
+    const t = verifyToken(d.coreToken, "guest", readCookie(req.headers.cookie, GUEST_COOKIE_PREFIX + route.gameId));
+    const g = t && cfg?.guests?.find((x) => x.id === t.nonce);
+    return g && g.gameId === route.gameId && g.expiresAt > Date.now() ? g : undefined;
+  };
+
+  /**
+   * GET /__bargames/guest?t=<link>: a guest link from staff (or a guest host). Unlike staff
+   * sign-in it can be opened again until it ends (a guest changing phones), and the cookie
+   * only works for this app.
+   */
+  function handleGuest(req: IncomingMessage, res: ServerResponse, cfg: GatewayConfig, url: URL, route: GatewayRoute): void {
+    const raw = url.searchParams.get("t") ?? undefined;
+    const t = verifyToken(d.coreToken, "guest", raw);
+    const g = t && cfg.guests?.find((x) => x.id === t.nonce && x.gameId === route.gameId);
+    if (!t || !g || g.expiresAt <= Date.now()) {
+      return send(res, 403, simplePage(cfg.venue, "Link ended", "This guest link has ended or was turned off. Ask the staff for a new one."));
+    }
+    const domain = cfg.domain && cfg.domain !== "localhost" ? `; Domain=${cfg.domain}` : "";
+    const maxAge = Math.max(1, Math.floor((g.expiresAt - Date.now()) / 1000));
+    res.writeHead(303, {
+      location: underPrefix(route.path, safeReturn(g.landing)),
+      "cache-control": "no-store",
+      "set-cookie": `${GUEST_COOKIE_PREFIX}${route.gameId}=${raw}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${domain}${header(req, "cf-connecting-ip") ? "; Secure" : ""}`,
+    });
+    res.end();
+    d.log.info("guest", "guest link opened", { gameId: route.gameId, role: g.role });
+  }
+
   function pinOk(req: IncomingMessage, cfg: GatewayConfig, decision: AccessDecision, route: GatewayRoute): boolean {
-    if (!cfg.access.pinEnabled || decision.reason === "local" || route.kind === "admin" || isStaff(req)) return true;
+    if (!cfg.access.pinEnabled || decision.reason === "local" || route.kind === "admin" || isStaff(req) || guestFor(req, route, cfg)) return true;
     return readCookie(req.headers.cookie, PIN_COOKIE) === pinToken(cfg.access.pin);
   }
 
@@ -128,8 +162,17 @@ export function createGateway(d: GatewayDeps) {
     req.headers[HEADERS.via] = "1";
     // Staff: the game hears "staff", never the cookie (a game could replay it elsewhere).
     if (isStaff(req)) req.headers[HEADERS.staff] = "1";
-    // Games never see the box admin's session either (it's scoped to /admin, but be sure).
-    const cookies = route.kind === "admin" ? withoutCookie(req.headers.cookie, STAFF_COOKIE) : withoutCookie(withoutCookie(req.headers.cookie, STAFF_COOKIE), ADMIN_COOKIE);
+    // Box 0.19.0: a guest is told apart from staff, and only for the app their link is for.
+    const guest = guestFor(req, route);
+    if (guest) {
+      req.headers[HEADERS.guest] = guest.id;
+      req.headers[HEADERS.guestRole] = guest.role;
+      req.headers[HEADERS.guestName] = encodeURIComponent(guest.label);
+    }
+    // Games never see the box admin's session either (it's scoped to /admin, but be sure),
+    // nor any guest cookie (theirs could be replayed; another app's is none of their business).
+    const base = route.kind === "admin" ? withoutCookie(req.headers.cookie, STAFF_COOKIE) : withoutCookie(withoutCookie(req.headers.cookie, STAFF_COOKIE), ADMIN_COOKIE);
+    const cookies = withoutGuestCookies(base);
     if (cookies) req.headers.cookie = cookies;
     else delete req.headers.cookie;
     if (decision.clientIp) req.headers[HEADERS.clientIp] = decision.clientIp;
@@ -176,6 +219,7 @@ export function createGateway(d: GatewayDeps) {
 
     if (url.pathname === PATHS.pin && req.method === "POST") return handlePin(req, res, cfg, decision);
     if (url.pathname === PATHS.staff && req.method === "GET" && route.kind === "game") return handleStaff(req, res, cfg, url, route);
+    if (url.pathname === PATHS.guest && req.method === "GET" && route.kind === "game") return handleGuest(req, res, cfg, url, route);
     if (!pinOk(req, cfg, decision, route)) {
       if (req.method !== "GET") return send(res, 401, JSON.stringify({ error: "venue PIN required" }), "application/json");
       return send(res, 401, pinPage(cfg.venue, (route.path ?? "") + url.pathname + url.search));
@@ -402,6 +446,14 @@ function withoutCookie(header: string | undefined, name: string): string {
     .split(";")
     .map((c) => c.trim())
     .filter((c) => c && c.split("=")[0] !== name)
+    .join("; ");
+}
+
+function withoutGuestCookies(header: string): string {
+  return header
+    .split(";")
+    .map((c) => c.trim())
+    .filter((c) => c && !c.startsWith(GUEST_COOKIE_PREFIX))
     .join("; ");
 }
 

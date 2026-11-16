@@ -4,6 +4,7 @@ import { PasswordLimiter } from "./limiter.js";
 import { HostSampler } from "./systemStats.js";
 import { createBackup, packBackup, resumePendingRestore, unpackBackup, writeCoreFiles } from "./backup.js";
 import { cleanMatchStart, Matches } from "./matches.js";
+import { activeGuests, cleanGuestRequest, closingTonight, DEFAULT_GUEST_HOURS, guestActive, MAX_COHOSTS, pruneGuests, type GuestLink } from "./guests.js";
 import { cleanClosing, cleanScene, cleanSchedule, closingSchedules, closingTimeScene, dueNow, WAKE_RETRY_MS, WAKE_TRIES, type Scene, type Schedule, type TvCaps } from "./scenes.js";
 import { cleanResult, board, Leaderboards, nightStart } from "./leaderboard.js";
 import { rewardsHook } from "./rewards.js";
@@ -447,6 +448,7 @@ export function createApp(d: AppDeps) {
           countdown: d.state.countdown.get(),
           leaderboards: venueExtras().leaderboards,
           rooms: roomCache.snapshot(),
+          guests: gatewayGuests(),
         }),
       );
     }),
@@ -1779,10 +1781,17 @@ export function createApp(d: AppDeps) {
 
   /** Installs the newer version from where the game came from, and restarts it if it's on. */
   /** Installs the newer version from the game's source and restarts it if it's on (admin and bgctl). */
-  const performUpdate = async (id: string, by: string) => {
+  const performUpdate = async (id: string, by: string, force = false) => {
     const prev = d.games.get(id);
     if (!prev) throw new HttpError(404, `no game "${id}" on this box`);
     if (prev.source.kind !== "url") throw new HttpError(400, "this game wasn't installed from a URL; install the new version by hand");
+    // Box 0.19.0: an update restarts the game, and most games keep rooms in memory (a quiz's
+    // scores, a bingo card). Refuse while a room has players unless asked to go ahead anyway.
+    const playing = prev.enabled ? (roomCache.snapshot()[prev.id] ?? []).filter((r) => r.players > 0) : [];
+    if (playing.length && !force) {
+      const which = playing.map((r) => `${r.title ? `${r.title} ` : ""}(${r.code}, ${r.players} playing)`).join(", ");
+      throw new HttpError(409, `being played: ${which}. Updating restarts it and ends ${playing.length === 1 ? "that room" : "those rooms"}; try after, or update anyway`);
+    }
     const fetched = await fetchManifest(prev.source.ref, doFetch).catch((e: Error) => {
       throw new HttpError(502, e.message);
     });
@@ -1798,7 +1807,7 @@ export function createApp(d: AppDeps) {
   app.post(
     "/api/games/:id/update",
     h(async (req, res) => {
-      const r = await performUpdate(req.params.id, "admin");
+      const r = await performUpdate(req.params.id, "admin", req.body?.force === true);
       res.json({ game: await gameView(r.game), from: r.from, warnings: r.warnings });
     }),
   );
@@ -1965,7 +1974,7 @@ export function createApp(d: AppDeps) {
     "/internal/ops/update/:id",
     opsAuth,
     h(async (req, res) => {
-      const r = await performUpdate(req.params.id, "bgctl");
+      const r = await performUpdate(req.params.id, "bgctl", req.body?.force === true);
       res.json({ id: r.game.id, from: r.from, to: r.game.manifest.version, warnings: r.warnings, game: await opsRow(r.game) });
     }),
   );
@@ -2137,6 +2146,158 @@ export function createApp(d: AppDeps) {
       url.searchParams.set("t", t);
       url.searchParams.set("next", next);
       res.json({ url: url.toString(), staffAware: compareVersions(game.manifest.sdk.version, "0.7.0") >= 0 });
+    }),
+  );
+
+  // ------------------------------------------------------------ guest staff links (box 0.19.0)
+
+  /**
+   * Staff give a guest (a patron guest-hosting, a visiting KJ) one app's controls: the gateway
+   * turns the link into a cookie for that app only and tells the app x-bargames-guest. Apps
+   * opt in with manifest "guests". A guest host may add co-hosts when the app supports it and
+   * the venue switched it on for the app. Links end at closing time (or after N hours), on
+   * revoke, or when staff sign everyone out.
+   */
+  const guestsOn = (g: InstalledGame | undefined): g is InstalledGame => Boolean(g?.manifest.guests) && !isIntegration(g!.manifest);
+  const guestUrl = (game: InstalledGame, l: GuestLink) => {
+    const t = signToken(d.config.gatewayToken, "guest", new Date(l.expiresAt).getTime(), l.id);
+    const url = new URL(joinUrl(buildContext(d.state.venue.get(), game).game.publicUrl!, PATHS.guest));
+    url.searchParams.set("t", t);
+    return url.toString();
+  };
+  const guestView = (l: GuestLink) => ({ id: l.id, label: l.label, role: l.role, ...(l.parentId ? { parentId: l.parentId } : {}), createdAt: l.createdAt, expiresAt: l.expiresAt });
+  const notBefore = () => d.auth.staffNotBefore();
+  function gatewayGuests() {
+    const s = d.state.guests.get();
+    return activeGuests(s, undefined, Date.now(), notBefore()).flatMap((l) => {
+      const game = d.games.get(l.gameId);
+      if (!guestsOn(game) || !game.enabled) return [];
+      const landing = game.manifest.guests!.path ?? game.manifest.routes.host ?? "/";
+      return [{ id: l.id, gameId: l.gameId, role: l.role, label: l.label, expiresAt: new Date(l.expiresAt).getTime(), landing }];
+    });
+  }
+  const newGuest = async (link: Omit<GuestLink, "id" | "createdAt">): Promise<GuestLink> => {
+    const l: GuestLink = { id: randomBytes(9).toString("base64url"), createdAt: new Date().toISOString(), ...link };
+    await d.state.guests.update((s) => {
+      s.links = [...pruneGuests(s), l];
+    });
+    return l;
+  };
+  const revokeGuest = (id: string) =>
+    d.state.guests.update((s) => {
+      const l = s.links.find((x) => x.id === id);
+      if (l && !l.revokedAt) l.revokedAt = new Date().toISOString();
+    });
+  const qr = (url: string) => QRCode.toString(url, { type: "svg", margin: 2, errorCorrectionLevel: "M" });
+
+  /** The apps that take guests, their links (still good, or ended in the last day) and the co-host switch. */
+  app.get("/api/guests", (_req, res) => {
+    const s = d.state.guests.get();
+    const now = Date.now();
+    const apps = d.games
+      .list()
+      .filter(guestsOn)
+      .map((g) => ({
+        gameId: g.id,
+        name: buildContext(d.state.venue.get(), g).game.displayName,
+        enabled: g.enabled,
+        cohostsSupported: Boolean(g.manifest.guests!.cohosts),
+        cohosts: Boolean(s.cohosts[g.id]),
+      }));
+    const links = pruneGuests(s, now)
+      .filter((l) => apps.some((a) => a.gameId === l.gameId))
+      .map((l) => ({ ...guestView(l), gameId: l.gameId, active: guestActive(s, l, now, notBefore()), ...(l.revokedAt ? { revokedAt: l.revokedAt } : {}) }));
+    const closing = closingTonight(d.state.closing.get(), new Date(), d.state.venue.get().timezone ?? undefined);
+    res.json({ apps, links, ...(closing ? { closingAt: closing.toISOString() } : {}), defaultHours: DEFAULT_GUEST_HOURS });
+  });
+
+  /** A new guest host link: { gameId, label, hours? } (no hours: until closing time, else 6 h). */
+  app.post(
+    "/api/guests",
+    h(async (req, res) => {
+      const game = d.games.get(String(req.body?.gameId ?? ""));
+      if (!guestsOn(game)) throw new HttpError(400, "that app doesn't take guest hosts");
+      if (!game.enabled) throw new HttpError(409, "turn the app on first");
+      const r = cleanGuestRequest(req.body);
+      if (typeof r === "string") throw new HttpError(400, r);
+      const now = new Date();
+      const closing = closingTonight(d.state.closing.get(), now, d.state.venue.get().timezone ?? undefined);
+      const end = r.hours !== undefined ? new Date(now.getTime() + r.hours * 3600e3) : (closing ?? new Date(now.getTime() + DEFAULT_GUEST_HOURS * 3600e3));
+      const l = await newGuest({ gameId: game.id, label: r.label, role: "host", expiresAt: end.toISOString() });
+      const url = guestUrl(game, l);
+      d.log.info("guests", "guest host link made", { game: game.id, until: l.expiresAt });
+      res.json({ ...guestView(l), gameId: game.id, url, qrSvg: await qr(url) });
+    }),
+  );
+
+  /** A link's QR again (staff only; the link holds the secret). */
+  app.get(
+    "/api/guests/:id/link",
+    h(async (req, res) => {
+      const s = d.state.guests.get();
+      const l = s.links.find((x) => x.id === req.params.id);
+      const game = l ? d.games.get(l.gameId) : undefined;
+      if (!l || !guestsOn(game) || !guestActive(s, l, Date.now(), notBefore())) throw new HttpError(404, "no such guest link (or it ended)");
+      const url = guestUrl(game, l);
+      res.json({ url, qrSvg: await qr(url) });
+    }),
+  );
+
+  app.delete(
+    "/api/guests/:id",
+    h(async (req, res) => {
+      if (!d.state.guests.get().links.some((x) => x.id === req.params.id)) throw new HttpError(404, "no such guest link");
+      await revokeGuest(req.params.id);
+      d.log.info("guests", "guest link turned off by staff", {});
+      res.json({ ok: true });
+    }),
+  );
+
+  /** The venue's switch: may this app's guest hosts add co-hosts? { cohosts: boolean } */
+  app.put(
+    "/api/guests/settings/:gameId",
+    h(async (req, res) => {
+      const game = d.games.get(req.params.gameId);
+      if (!guestsOn(game)) throw new HttpError(404, "that app doesn't take guest hosts");
+      const on = req.body?.cohosts === true;
+      if (on && !game.manifest.guests!.cohosts) throw new HttpError(400, `${game.manifest.name} doesn't support co-hosts`);
+      await d.state.guests.update((s) => void (s.cohosts = { ...s.cohosts, [game.id]: on }));
+      res.json({ ok: true, cohosts: on });
+    }),
+  );
+
+  // Apps: their own guest links (bg.guests).
+  app.get("/internal/guests", (req, res) => {
+    const me = gameAuth(req);
+    if (!me.manifest.guests) return void res.status(403).json({ error: 'add "guests" to bargames.json' });
+    res.json(activeGuests(d.state.guests.get(), me.id, Date.now(), notBefore()).map(guestView));
+  });
+  app.post(
+    "/internal/guests/cohost",
+    h(async (req, res) => {
+      const me = gameAuth(req);
+      if (!me.manifest.guests?.cohosts) throw new HttpError(403, 'add "guests": { "cohosts": true } to bargames.json');
+      const s = d.state.guests.get();
+      if (!s.cohosts[me.id]) throw new HttpError(403, "the venue hasn't allowed guest co-hosts for this app (box admin: Guest hosts)");
+      const host = s.links.find((x) => x.id === req.body?.guestId);
+      if (!host || host.gameId !== me.id || !guestActive(s, host, Date.now(), notBefore())) throw new HttpError(404, "no such guest (or their link ended)");
+      if (host.role !== "host") throw new HttpError(403, "only a guest host can add a co-host");
+      if (activeGuests(s, me.id, Date.now(), notBefore()).filter((x) => x.parentId === host.id).length >= MAX_COHOSTS) throw new HttpError(409, `${MAX_COHOSTS} co-hosts at most`);
+      const label = typeof req.body?.label === "string" ? req.body.label.trim().slice(0, 60) : "";
+      if (!label) throw new HttpError(400, "label: who the co-host is");
+      const l = await newGuest({ gameId: me.id, label, role: "cohost", parentId: host.id, expiresAt: host.expiresAt });
+      d.log.info("guests", "guest co-host added", { game: me.id });
+      res.json({ ...guestView(l), url: guestUrl(me, l) });
+    }),
+  );
+  app.delete(
+    "/internal/guests/:id",
+    h(async (req, res) => {
+      const me = gameAuth(req);
+      const l = d.state.guests.get().links.find((x) => x.id === req.params.id);
+      if (!l || l.gameId !== me.id) throw new HttpError(404, "no such guest");
+      await revokeGuest(l.id);
+      res.json({ ok: true });
     }),
   );
 

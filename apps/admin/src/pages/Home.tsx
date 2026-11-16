@@ -3,6 +3,7 @@ import { api, type AnnouncementPreset, type StatusItem } from "../api";
 import { go, useRoute } from "../nav";
 import { useAction, useLoad } from "../useLoad";
 import { CastFlow } from "./CastFlow";
+import { GuestHostsCard } from "./GuestHosts";
 import { readPreviews, TvTile } from "./Displays";
 import { PlansCard } from "./MediaControls";
 import { RoomsPage } from "./Rooms";
@@ -38,6 +39,7 @@ export function HomePage() {
       </div>
       <StatusBar />
       <AttentionCard />
+      <GuestHostsCard />
 
       <div className="tonight">
         <div className="tonight-main">

@@ -1,4 +1,4 @@
-import type { GatewayConfig, GatewayRoute, HubGame, HubRoom } from "@bargames/common";
+import type { GatewayConfig, GatewayGuest, GatewayRoute, HubGame, HubRoom } from "@bargames/common";
 import { isApp, PROTOCOL_VERSION, withAccent, type Announcement, type Countdown, type LeaderboardSummary, type VenueContext, type VenueGameLink, type VenueInfo } from "@bargames/sdk";
 import { hostFor, publicUrl } from "./hostnames.js";
 import type { AccessSettings, InstalledGame, VenueSettings } from "./state.js";
@@ -108,6 +108,8 @@ export function buildGatewayConfig(input: {
   leaderboards?: LeaderboardSummary[];
   /** Open rooms per game id, for the games list (from the room cache). */
   rooms?: Record<string, HubRoom[]>;
+  /** Box 0.19.0: guest links still good. */
+  guests?: GatewayGuest[];
 }): GatewayConfig {
   const { venue, access, games } = input;
   const extras: VenueExtras = { games, announcement: input.announcement, countdown: input.countdown, leaderboards: input.leaderboards };
@@ -154,6 +156,7 @@ export function buildGatewayConfig(input: {
     setupRequired: input.setupRequired,
     adminUrl: adminUrl(venue),
     ...(input.staffNotBefore ? { staffNotBefore: input.staffNotBefore } : {}),
+    ...(input.guests?.length ? { guests: input.guests } : {}),
   };
 }
 

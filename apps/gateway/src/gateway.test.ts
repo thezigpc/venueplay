@@ -491,3 +491,71 @@ test("pin limiter: internet clients 10, venue clients 30, an internet-wide cap t
   for (let i = 0; i < 200; i++) n.failed(`2001:db8::${i.toString(16)}`, "venue-ip", t0);
   assert.ok((n as unknown as { buckets: Map<string, unknown> }).buckets.size <= 50);
 });
+
+test("guest links (box 0.19.0): one app's controls, told apart from staff, ended by core's list", async () => {
+  const { signToken } = await import("@bargames/common");
+  const seen: { path: string; guest?: string; role?: string; name?: string; staff?: string; cookie?: string }[] = [];
+  const upstream = createServer((req, res) => {
+    seen.push({ path: req.url!, guest: req.headers["x-bargames-guest"] as string | undefined, role: req.headers["x-bargames-guest-role"] as string | undefined, name: req.headers["x-bargames-guest-name"] as string | undefined, staff: req.headers["x-bargames-staff"] as string | undefined, cookie: req.headers.cookie });
+    res.end("ok");
+  });
+  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
+  const target = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  const exp = Date.now() + 3600e3;
+  const cfg = {
+    boxVersion: "0.19.0",
+    domain: "example.com",
+    venue: { name: "Kava", theme: DEFAULT_THEME },
+    routes: [
+      { host: "play.example.com", path: "/signup", kind: "game", gameId: "signup", target, enabled: true, injectTheme: false },
+      { host: "play.example.com", path: "/menu", kind: "game", gameId: "menu", target, enabled: true, injectTheme: false },
+    ],
+    access: { pinEnabled: true, pin: "4321", whitelist: [], autoVenueIp: true, venueCidrs: [], adminRemote: false },
+    contexts: {},
+    hub: { games: [] },
+    setupRequired: false,
+    adminUrl: "https://play.example.com/admin",
+    guests: [{ id: "g1", gameId: "signup", role: "host", label: "Dana – karaoke", expiresAt: exp, landing: "/kj" }],
+  } as unknown as GatewayConfig;
+  const gw = createGateway({ config: () => cfg, detectedCidrs: () => ["203.0.113.10/32"], secret: "core-tok", coreToken: "core-tok", log: createLogger("t", "error") });
+  await new Promise<void>((r) => gw.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(gw.address() as AddressInfo).port}`;
+  const get = (p: string, headers: Record<string, string> = {}) =>
+    new Promise<{ status: number; headers: Record<string, string | string[] | undefined> }>((resolve, reject) => {
+      const req = request(base + p, { headers: { ...headers, host: "play.example.com", "cf-connecting-ip": "8.8.8.8" } }, (res) => {
+        res.resume();
+        res.on("end", () => resolve({ status: res.statusCode!, headers: res.headers }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  try {
+    (cfg.access as { open?: boolean }).open = true; // reachable from anywhere; the PIN still applies
+    const link = signToken("core-tok", "guest", exp, "g1");
+    assert.equal((await get(`/menu/__bargames/guest?t=${encodeURIComponent(link)}`)).status, 403, "a link for another app");
+    assert.equal((await get(`/signup/__bargames/guest?t=bogus`)).status, 403);
+    const r = await get(`/signup/__bargames/guest?t=${encodeURIComponent(link)}`);
+    assert.equal(r.status, 303);
+    assert.equal(r.headers.location, "/signup/kj", "lands on the app's guests.path");
+    const setCookie = String(r.headers["set-cookie"]);
+    assert.match(setCookie, /^bg_guest_signup=guest\./);
+    assert.equal((await get(`/signup/__bargames/guest?t=${encodeURIComponent(link)}`)).status, 303, "can be opened again (a new phone)");
+    const cookie = setCookie.split(";")[0];
+
+    seen.length = 0;
+    assert.equal((await get("/signup/kj", { cookie: `${cookie}; other=1`, "x-bargames-staff": "1" })).status, 200, "no PIN for the guest on their app");
+    assert.deepEqual(seen.at(-1), { path: "/kj", guest: "g1", role: "host", name: encodeURIComponent("Dana – karaoke"), staff: undefined, cookie: "other=1" });
+    assert.equal((await get("/menu/", { cookie })).status, 401, "nothing on other apps: the PIN is still asked");
+    seen.length = 0;
+    await get("/signup/kj", { "x-bargames-guest": "g1", "x-bargames-guest-role": "host", cookie: "bg_pin=x" });
+    assert.equal(seen.length, 0, "a forged header alone gets the PIN page");
+
+    // Revoked (core drops it from the list): the cookie stops working at the next refresh.
+    cfg.guests = [];
+    assert.equal((await get("/signup/kj", { cookie })).status, 401);
+    assert.equal((await get(`/signup/__bargames/guest?t=${encodeURIComponent(link)}`)).status, 403);
+  } finally {
+    gw.close();
+    upstream.close();
+  }
+});
