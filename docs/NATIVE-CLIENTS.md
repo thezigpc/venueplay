@@ -76,8 +76,14 @@ Box → client:
 - `off { screen }`, `reload { screen }`
 - `identify { screen, label }`: flash the screen's name (find which TV is which)
 - `preview { screen, requestId }`: send a picture of the screen
-- The idle screen is an ordinary `show` (kind `native-url`, the idle page's URL); there's no
-  separate `idle` message.
+- The idle screen is an ordinary `show` (kind `native-url`); there's no separate `idle`
+  message. Its URL is usually a **`data:text/html` page**, not http(s): WebView clients must
+  load it (Android: decode and `loadDataWithBaseURL`; a long data: URL in `loadUrl` is
+  unreliable).
+- **TV pages are laid out for a 1920x1080 CSS viewport** (every box path does this: AirPlay,
+  local screens, the desktop client; 4K panels at scale 2). WebView clients must pin the
+  viewport to 1920 CSS px and scale to the panel. A TV's default density gives about 960 CSS
+  px, and pages then hit their phone layouts.
 - Planned, not built: `settings { screen, … }` (per-TV zoom/overscan/rotation from the TVs
   page). Clients ignore message types they don't know, so it can be added later.
 
@@ -123,7 +129,19 @@ the same rule as the game SDK.
     queries (from a port other than 5353) directly.
   Pairing still needs the 6-digit code; discovery only finds the box. `DISCOVERY=off` turns it
   off. Networks with client isolation block mDNS too: keep "type the address" as the fallback.
-- Not yet: HLS for Roku/Apple TV.
+- Not yet: HLS for Roku/Apple TV; a route that sends `reload`.
+
+## Clients as built
+
+- **Android / Google TV, v0.1.0 (2026-11-16):** repo `thezigpc/VenueboxAndroidClient`, APK on
+  its GitHub release (package `com.bargames.venuebox`, Android 8.0+, Leanback; debug-signed,
+  sideload only). mDNS discovery with a typed-address fallback, Keystore-encrypted token,
+  `native-url` shows (data: idle pages too), identify, preview, off, start at boot.
+  - **Start at boot** on Android 10+ needs "Display over other apps": grant it from the app's
+    panel, or with `adb shell appops set com.bargames.venuebox SYSTEM_ALERT_WINDOW allow`.
+  - Tested on the Android TV 14 emulator against a box. Not yet on a real stick.
+  - Before venues install updates, it needs one shared release signing key, kept out of
+    every repo. An APK signed with a different key can't upgrade the installed app.
 
 ## Box side (when building starts)
 
