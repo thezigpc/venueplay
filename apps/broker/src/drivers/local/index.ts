@@ -65,12 +65,23 @@ export function readConnectors(drmDir = "/sys/class/drm"): Connector[] {
 /** Black, for "off" (and while nothing is assigned). */
 export const BLACK_PAGE = "data:text/html,<html style='background:%23000;cursor:none'></html>";
 
-export function kioskArgs(url: string, profileDir: string, debugPort: number): string[] {
+/**
+ * Box 0.19.1: Chromium's device scale factor for a screen, so TV pages lay out at 1920 CSS px
+ * wide as on every other path (a 4K TV gets 2: 1920x1080 CSS drawn with 4K pixels). Screens
+ * up to 1920 wide stay at 1. `mode` is the screen's preferred mode, the one cage uses.
+ */
+export function kioskScale(mode: string | undefined): number {
+  const w = Number(mode?.split("x")[0]);
+  return w > 1920 ? Math.round((w / 1920) * 100) / 100 : 1;
+}
+
+export function kioskArgs(url: string, profileDir: string, debugPort: number, scale = 1): string[] {
   return [
     "-d", // cage: no client-side decorations
     "--",
     "chromium",
     "--ozone-platform=wayland",
+    ...(scale !== 1 ? [`--force-device-scale-factor=${scale}`] : []),
     `--remote-debugging-port=${debugPort}`,
     "--remote-debugging-address=127.0.0.1",
     "--kiosk",
@@ -185,7 +196,7 @@ export class LocalScreenDriver implements DisplayDriver {
     };
     const { mkdirSync } = await import("node:fs");
     mkdirSync(env.XDG_RUNTIME_DIR, { recursive: true, mode: 0o700 });
-    const proc = runner.spawn(`local:${c.name}`, this.o.cage ?? "cage", kioskArgs(url, `${this.runDir}/chromium`, this.debugPort), env);
+    const proc = runner.spawn(`local:${c.name}`, this.o.cage ?? "cage", kioskArgs(url, `${this.runDir}/chromium`, this.debugPort, kioskScale(c.modes[0])), env);
     this.session = { connector: c.name, proc, url };
     // Ready once DevTools answers (Chromium is up on the screen).
     for (let i = 0; i < 40; i++) {

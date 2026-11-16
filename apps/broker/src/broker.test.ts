@@ -243,6 +243,9 @@ test("local screens: connected outputs from sysfs; showing starts cage + Chromiu
   assert.equal(spawned[0].cmd, "cage");
   assert.equal(spawned[0].args.at(-1), "http://play.example.com/bingo/tv");
   assert.ok(spawned[0].args.includes("--ozone-platform=wayland"));
+  assert.ok(spawned[0].args.includes("--force-device-scale-factor=2"), "4K screen: pages at 1920x1080 CSS, drawn at 2x");
+  const { kioskScale } = await import("./drivers/local/index.js");
+  assert.deepEqual(["3840x2160", "2560x1440", "1920x1080", "1280x720", undefined].map(kioskScale), [2, 1.33, 1, 1, 1]);
   assert.equal(spawned[0].env.WLR_DRM_DEVICES, "/dev/dri/card0");
   assert.equal(spawned[0].env.LIBSEAT_BACKEND, "seatd");
   assert.equal((await drv.show(screen, { kind: "external", provider: "youtube", app: "youtube" })).ok, false);

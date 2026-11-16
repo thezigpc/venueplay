@@ -39,5 +39,9 @@ can show anything a TV can (rooms, the idle screen, scenes, startup choices).
 4. **CEC:** power, input, and "is it on" through the screen's adapter.
 5. **Status screen:** the page above, shown on any plugged-in screen with nothing assigned.
 
+**4K (box 0.19.1):** cage uses the screen's preferred mode, and Chromium gets a device scale
+factor of width/1920 when the screen is wider than 1920 (2 on a 4K TV), so TV pages lay out at
+1920x1080 CSS, as on every other path, and draw with all the screen's pixels.
+
 **Limits:** the box's Intel graphics drive about 3 screens (it depends on the model's
 ports). 4K at 60 fps on DisplayPort; older HDMI ports top out at 4K30.
