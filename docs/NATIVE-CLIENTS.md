@@ -73,9 +73,13 @@ Box → client:
 - `show { screen, url, kind: "native-url" | "hls", title }`: open a TV page (WebView) or
   play an HLS URL (player) on one screen. The box only sends delivery methods the client
   declared.
-- `idle { screen, url }`, `off { screen }`, `reload { screen }`
-- `identify { screen }`: flash the screen's name (find which TV is which)
-- `settings { screen, zoom, overscan, rotation }`: per-TV display settings from the TVs page
+- `off { screen }`, `reload { screen }`
+- `identify { screen, label }`: flash the screen's name (find which TV is which)
+- `preview { screen, requestId }`: send a picture of the screen
+- The idle screen is an ordinary `show` (kind `native-url`, the idle page's URL); there's no
+  separate `idle` message.
+- Planned, not built: `settings { screen, … }` (per-TV zoom/overscan/rotation from the TVs
+  page). Clients ignore message types they don't know, so it can be added later.
 
 Client → box:
 - `hello { token, platform, model, appVersion, screens: [{ id, name, w, h, hz }], deliveries: [...] }`
