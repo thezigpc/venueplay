@@ -112,6 +112,7 @@ test("api: setup, install, brand, events, gateway config", async () => {
     const underAdmin = await json("POST", "/api/auth/login", { password: "correct horse" }, { "x-forwarded-prefix": "/admin" });
     assert.equal(underAdmin.status, 200);
     assert.match(underAdmin.headers.get("set-cookie")!, /bg_admin=[^;]+;.*Path=\/admin\/;/);
+    assert.match(underAdmin.headers.get("set-cookie")!, /SameSite=Lax/, "Lax: iPad Safari withheld the Strict cookie");
 
     // Box 0.15.1: changing the password ends every other session, here and (through the
     // gateway's staffNotBefore) staff sign-ins in games; the browser that changed it stays in.

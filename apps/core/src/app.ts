@@ -499,7 +499,10 @@ export function createApp(d: AppDeps) {
     // Box 0.16.0: "keep me signed in" (30 days, e.g. the bar's iPad); "sign out everywhere" still ends it.
     const ttl = req.body?.remember === true ? REMEMBER_MS : 12 * 3600e3;
     // Under /admin the session cookie is scoped to it, so browsing games doesn't send it around.
-    res.cookie(ADMIN_COOKIE, d.auth.issue(Date.now(), ttl), { httpOnly: true, sameSite: "strict", secure, maxAge: ttl, path: `${adminPrefix(req)}/` });
+    // Box 0.19.2: Lax, not Strict. iPad Safari withheld the Strict cookie on the admin's own
+    // API calls when the page was opened from a link or the home screen, so a right password
+    // went nowhere. Lax still keeps it off cross-site POSTs (every admin change is a JSON POST/PUT/DELETE).
+    res.cookie(ADMIN_COOKIE, d.auth.issue(Date.now(), ttl), { httpOnly: true, sameSite: "lax", secure, maxAge: ttl, path: `${adminPrefix(req)}/` });
     // Signed in here = signed in to every game's and app's own admin (SDK 0.7.0+): the
     // gateway checks this cookie and tells games "staff", never passing the cookie on.
     const domain = staffCookieDomain(req);

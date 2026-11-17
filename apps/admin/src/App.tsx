@@ -81,6 +81,11 @@ function Login({ setup, onDone, title }: { setup: boolean; onDone: () => void; t
     if (setup && pw !== pw2) return setErr("The passwords don't match.");
     try {
       await (setup ? api.setup(pw) : api.login(pw, remember));
+      // Box 0.19.2: the password was right, but did the browser keep the sign-in cookie?
+      // (Safari with cookies blocked, or an old Strict cookie rule: it used to do nothing.)
+      const status = await api.authStatus().catch(() => undefined);
+      if (status && !status.loggedIn)
+        return setErr("The password was right, but this browser didn't keep the sign-in. On an iPad: Settings → Apps → Safari → turn off \"Block All Cookies\", then try again.");
       onDone();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "Something went wrong");
