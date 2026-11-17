@@ -137,7 +137,9 @@ export function describeTv(d: Display, media: MediaProvider[] = []): { text: str
   if (target) return { text: `${target.p.displayName}${target.t.nowPlaying?.listName ? ` · ${target.t.nowPlaying.listName}` : ""} · ${target.t.state}`, warn: false };
   if (d.stream) {
     const state = d.stream.state === "streaming" ? "" : ` · ${STREAM_LABEL[d.stream.state] ?? d.stream.state}`;
-    return { text: `${d.content?.kind === "idle" ? "Idle screen" : (d.content?.title ?? "Showing a page")}${state}`, warn: d.stream.state !== "streaming" && d.stream.state !== "connecting" };
+    // Box 0.23.1: a screen plugged into the box says what's really on it (a page opened by touch too).
+    const shown = d.driver === "local" && d.onScreen ? d.onScreen.name : d.content?.kind === "idle" ? "Idle screen" : (d.content?.title ?? "Showing a page");
+    return { text: `${shown}${state}`, warn: d.stream.state !== "streaming" && d.stream.state !== "connecting" };
   }
   // Box 0.20.0: the TV's own word on what's on it beats what the box last sent there.
   if (d.onScreen) return { text: d.onScreen.home ? "TV home screen" : `On the TV: ${d.onScreen.name}`, warn: false };

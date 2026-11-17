@@ -18,7 +18,7 @@ import { TOUCH_PAGE_SCRIPT } from "./touchPage.js";
 import path from "node:path";
 import type { Logger } from "@bargames/common";
 import type { Proc, ProcRunner } from "../../airplay.js";
-import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult } from "../../types.js";
+import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamState } from "../../types.js";
 import { NotBuiltYet } from "../../types.js";
 
 export interface Connector {
@@ -443,6 +443,31 @@ export class LocalScreenDriver implements DisplayDriver {
         };
       });
       await this.o.runner?.sleep(2000);
+    }
+  }
+
+  /**
+   * Box 0.23.1: what the screen shows, for the TVs page: the box's own kiosk, so it's
+   * "streaming" while it runs (that turns on the live preview).
+   */
+  streamState(device: DisplayDevice): StreamState | undefined {
+    const s = this.session;
+    if (!s || !s.proc.alive || `local:${s.connector}` !== device.id) return undefined;
+    return { delivery: "local" as DeliveryMethod, url: s.url, state: "streaming", needsCode: false, settings: `plugged into the box${s.touch ? " · touch" : ""}` };
+  }
+
+  /** Box 0.23.1: the page on the screen now (also one someone opened by touch): its title. */
+  async foregroundApp(device: DisplayDevice): Promise<{ id: string; name: string; home: boolean } | undefined> {
+    const s = this.session;
+    if (!s || !s.proc.alive || `local:${s.connector}` !== device.id) return undefined;
+    try {
+      const r = await fetch(`http://127.0.0.1:${this.debugPort}/json/list`, { signal: AbortSignal.timeout(1500) });
+      const page = ((await r.json()) as { type: string; title?: string; url?: string }[]).find((p) => p.type === "page");
+      if (!page?.url) return undefined;
+      if (page.url.startsWith("data:")) return { id: "box", name: page.url === BLACK_PAGE ? "Black (off)" : "Idle screen", home: false };
+      return { id: page.url, name: page.title?.trim() || new URL(page.url).host, home: false };
+    } catch {
+      return undefined;
     }
   }
 
