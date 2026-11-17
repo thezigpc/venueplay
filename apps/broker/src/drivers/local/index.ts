@@ -239,6 +239,9 @@ interface Session {
   /** Box 0.25.0: reloading an error page (Cloudflare 502, no network): the timer and the try. */
   retry?: ReturnType<typeof setTimeout>;
   attempts: number;
+  /** Box 0.26.1: when the guard last blocked a page, and a notice for the next page to show. */
+  blockedAt?: number;
+  notice?: string;
 }
 
 export class LocalScreenDriver implements DisplayDriver {
@@ -421,6 +424,16 @@ export class LocalScreenDriver implements DisplayDriver {
     const r = await call("Runtime.evaluate", { expression: `[performance.getEntriesByType("navigation")[0]?.responseStatus ?? 0, location.href]`, returnByValue: true });
     const [status, href] = ((r?.result as { value?: unknown } | undefined)?.value ?? [0, ""]) as [number, string];
     if (this.session !== s) return;
+    // Box 0.26.1: a link to another site on a touch screen lands on Chromium's "blocked" page.
+    // Go back to the page it was on (or home) and say why, rather than reloading the block.
+    if (String(href).startsWith("chrome-error://") && s.blockedAt && Date.now() - s.blockedAt < 5000) {
+      s.blockedAt = undefined;
+      const h = (await call("Page.getNavigationHistory", {})) as { currentIndex?: number; entries?: { id: number }[] } | undefined;
+      const prev = h?.entries && typeof h.currentIndex === "number" && h.currentIndex > 0 ? h.entries[h.currentIndex - 1] : undefined;
+      void call(prev ? "Page.navigateToHistoryEntry" : "Page.navigate", prev ? { entryId: prev.id } : { url: s.url });
+      s.notice = "Only the venue's own pages open on this screen.";
+      return;
+    }
     if (isErrorLoad(status, String(href))) {
       if (s.retry) return;
       const wait = retryDelay(s.attempts);
@@ -436,6 +449,10 @@ export class LocalScreenDriver implements DisplayDriver {
     if (s.retry) clearTimeout(s.retry);
     s.retry = undefined;
     s.attempts = 0;
+    if (s.notice) {
+      void call("Runtime.evaluate", { expression: noticeScript(s.notice) });
+      s.notice = undefined;
+    }
     if (s.resetHistory) {
       s.resetHistory = false;
       void call("Page.resetNavigationHistory", {});
@@ -515,7 +532,10 @@ export class LocalScreenDriver implements DisplayDriver {
           }
           if (msg.method !== "Fetch.requestPaused" || !msg.params) return;
           const ok = allowedBy(s.sites, msg.params.request.url);
-          if (!ok) this.o.log?.info("local", "blocked a page on the touch screen", { url: msg.params.request.url.slice(0, 120) });
+          if (!ok) {
+            this.o.log?.info("local", "blocked a page on the touch screen", { url: msg.params.request.url.slice(0, 120) });
+            s.blockedAt = Date.now();
+          }
           ws.send(JSON.stringify({ id: id++, method: ok ? "Fetch.continueRequest" : "Fetch.failRequest", params: ok ? { requestId: msg.params.requestId } : { requestId: msg.params.requestId, errorReason: "BlockedByClient" } }));
         };
         ws.onerror = () => undefined;
