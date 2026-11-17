@@ -2,7 +2,8 @@
 
 import { isApp } from "@bargames/sdk";
 import { useEffect, useState } from "react";
-import { api, type Closing, type Display, type Game, type Scene, type SceneAction, type Schedule } from "../api";
+import { api, type Closing, type Display, type Game, type HostMode, type Scene, type SceneAction, type SceneRun, type Schedule } from "../api";
+import { go } from "../nav";
 import { inputLabel } from "./Displays";
 import { useLoad } from "../useLoad";
 
@@ -14,16 +15,35 @@ export function ScenesCard({ games, displays }: { games: Game[]; displays: Displ
   const scenes = useLoad(api.scenes);
   const [msg, setMsg] = useState("");
   const [editing, setEditing] = useState(false);
+  const [running, setRunning] = useState<SceneRun>();
+  const [hostOffer, setHostOffer] = useState<SceneRun["host"]>();
   const list = scenes.data?.scenes ?? [];
   const preset = scenes.data?.presets.find((p) => p.id === "closing-time");
+  const finish = (r: SceneRun) => {
+    setRunning(undefined);
+    const bad = r.steps.filter((x) => !x.ok);
+    setMsg(bad.length ? `${r.name}: ${bad.length} step(s) didn't work: ${bad.map((x) => `${x.step}${x.message ? ` (${x.message})` : ""}`).join("; ")}` : `${r.name} applied.`);
+    // Box 0.20.0: this device applied it, so it gets the room's host controls.
+    if (r.host && !r.cancelled) {
+      if (r.host.mode === "open") openHost(r.host);
+      else setHostOffer(r.host);
+    }
+  };
   const apply = async (s: Scene) => {
     if (s.endRooms && !window.confirm(`${s.name}: this ends every open room. Go ahead?`)) return;
     setMsg(`Applying ${s.name}…`);
+    setHostOffer(undefined);
     try {
-      const r = await api.applyScene(s.id);
-      const bad = r.steps.filter((x) => !x.ok);
-      setMsg(bad.length ? `${s.name}: ${bad.length} step(s) didn't work: ${bad.map((x) => `${x.step}${x.message ? ` (${x.message})` : ""}`).join("; ")}` : `${s.name} applied.`);
+      let r = await api.applyScene(s.id);
+      while (!r.finished) {
+        setRunning(r);
+        setMsg("");
+        await new Promise((ok) => setTimeout(ok, 2000));
+        r = await api.sceneRun(r.id);
+      }
+      finish(r);
     } catch (e) {
+      setRunning(undefined);
       setMsg((e as Error).message);
     }
   };
@@ -70,18 +90,43 @@ export function ScenesCard({ games, displays }: { games: Game[]; displays: Displ
           ))}
         </details>
       )}
+      {running && (
+        <p className="scene-run" role="status">
+          {running.name}: step {running.done} of {running.total}
+          {running.current?.startsWith("waiting") ? ` (${running.current})` : ""}…{" "}
+          <button type="button" className="ghost" onClick={() => void api.cancelSceneRun(running.id)}>
+            Cancel the rest
+          </button>
+        </p>
+      )}
+      {hostOffer && (
+        <p>
+          <button type="button" className="primary" onClick={() => openHost(hostOffer)}>
+            Host {hostOffer.name}
+            {hostOffer.code ? ` ${hostOffer.code}` : ""}
+          </button>{" "}
+          <button type="button" className="ghost" onClick={() => setHostOffer(undefined)}>
+            Not now
+          </button>
+        </p>
+      )}
       {msg && <p className="muted">{msg}</p>}
     </section>
   );
 }
 
+/** Box 0.20.0: host controls open inside the admin, with a way back (same window, also on a home-screen iPad). */
+export function openHost(h: { name: string; code?: string; url: string }): void {
+  go("tonight", "host", h.url, `${h.name}${h.code ? ` · ${h.code}` : ""}`);
+}
+
 /** One TV's part of a scene, in the order the box runs it: power on, what it shows, power off. */
-export function tvActions(displayId: string, show: string, power: string, channel: string, appName?: (id: string) => string | undefined): SceneAction[] {
+export function tvActions(displayId: string, show: string, power: string, channel: string, appName?: (id: string) => string | undefined, host?: HostMode | ""): SceneAction[] {
   const out: SceneAction[] = [];
   if (power === "on") out.push({ displayId, do: "power", on: true });
   if (power !== "off" && show) {
     if (show === "idle" || show === "off") out.push({ displayId, do: show });
-    else if (show.startsWith("game:")) out.push({ displayId, do: "game", gameId: show.slice(5) });
+    else if (show.startsWith("game:")) out.push({ displayId, do: "game", gameId: show.slice(5), ...(host ? { host } : {}) });
     else if (show.startsWith("input:")) out.push({ displayId, do: "input", input: show.slice(6) });
     else if (show.startsWith("app:")) {
       const n = appName?.(show.slice(4));
@@ -103,6 +148,19 @@ function SceneEditor({ games, displays, scenes, onDone }: { games: Game[]; displ
   const [pick, setPick] = useState<Record<string, string>>({});
   const [power, setPower] = useState<Record<string, string>>({});
   const [channel, setChannel] = useState<Record<string, string>>({});
+  // Box 0.20.0: the order TVs run in, a pause before each, and host controls after a game.
+  const [order, setOrder] = useState<string[]>(() => displays.map((d) => d.id));
+  const [waitBefore, setWaitBefore] = useState<Record<string, number>>({});
+  const [host, setHost] = useState<Record<string, HostMode | "">>({});
+  const ordered = [...order.map((id) => displays.find((d) => d.id === id)).filter((d): d is Display => Boolean(d)), ...displays.filter((d) => !order.includes(d.id))];
+  const move = (id: string, by: number) => {
+    const ids = ordered.map((d) => d.id);
+    const i = ids.indexOf(id);
+    const j = i + by;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    setOrder(ids);
+  };
   const [apps, setApps] = useState<Record<string, { id: string; name: string }[]>>({});
   const [endRooms, setEndRooms] = useState(false);
   const [text, setText] = useState("");
@@ -118,7 +176,10 @@ function SceneEditor({ games, displays, scenes, onDone }: { games: Game[]; displ
     }
   }, [displays]);
   const save = async () => {
-    const actions = displays.flatMap((d) => tvActions(d.id, pick[d.id] ?? "", power[d.id] ?? "", channel[d.id] ?? "", (id) => apps[d.id]?.find((a) => a.id === id)?.name));
+    const actions = ordered.flatMap((d) => {
+      const steps = tvActions(d.id, pick[d.id] ?? "", power[d.id] ?? "", channel[d.id] ?? "", (id) => apps[d.id]?.find((a) => a.id === id)?.name, host[d.id] ?? "");
+      return steps.length && waitBefore[d.id] ? [{ displayId: "" as const, do: "wait" as const, seconds: waitBefore[d.id] }, ...steps] : steps;
+    });
     try {
       await api.saveScene({
         id: slug(name),
@@ -141,12 +202,34 @@ function SceneEditor({ games, displays, scenes, onDone }: { games: Game[]; displ
         Name
         <input value={name} placeholder="Game night" onChange={(e) => setName(e.target.value)} />
       </label>
-      {displays.map((d) => {
+      {ordered.map((d, idx) => {
         const caps = d.capabilities;
         const off = power[d.id] === "off";
+        const used = Boolean(pick[d.id] || power[d.id]);
         return (
           <fieldset key={d.id} className="scene-tv">
-            <legend>{d.label || d.name}</legend>
+            <legend>
+              {idx + 1}. {d.label || d.name}{" "}
+              <button type="button" className="ghost small" aria-label={`Move ${d.label || d.name} earlier`} disabled={idx === 0} onClick={() => move(d.id, -1)}>
+                ↑
+              </button>
+              <button type="button" className="ghost small" aria-label={`Move ${d.label || d.name} later`} disabled={idx === ordered.length - 1} onClick={() => move(d.id, 1)}>
+                ↓
+              </button>
+            </legend>
+            {used && idx > 0 && (
+              <label>
+                Wait first
+                <select value={waitBefore[d.id] ?? 0} onChange={(e) => setWaitBefore({ ...waitBefore, [d.id]: Number(e.target.value) })}>
+                  <option value={0}>No, go straight on</option>
+                  {[2, 5, 10, 15, 30, 60, 120, 300, 600].map((s) => (
+                    <option key={s} value={s}>
+                      {s < 60 ? `${s} seconds` : `${s / 60} minute${s === 60 ? "" : "s"}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {caps?.power && (
               <label>
                 Power
@@ -196,6 +279,16 @@ function SceneEditor({ games, displays, scenes, onDone }: { games: Game[]; displ
                 )}
               </select>
             </label>
+            {!off && pick[d.id]?.startsWith("game:") && (
+              <label>
+                Host controls
+                <select value={host[d.id] ?? ""} onChange={(e) => setHost({ ...host, [d.id]: e.target.value as HostMode | "" })}>
+                  <option value="">Don't open them</option>
+                  <option value="open">Open them on the device that runs the scene</option>
+                  <option value="ask">Ask first ("Host Bingo ABCD?")</option>
+                </select>
+              </label>
+            )}
             {!off && pick[d.id] === "channel" && (
               <label>
                 Channel
@@ -246,7 +339,7 @@ function SceneEditor({ games, displays, scenes, onDone }: { games: Game[]; displ
           )}
         </div>
       </label>
-      <p className="muted small-print">TVs left on "Leave alone" aren't touched, so a scene can skip a TV that's showing something else (an Apple TV on input 1, say).</p>
+      <p className="muted small-print">TVs left on "Leave alone" aren't touched, so a scene can skip a TV that's showing something else (an Apple TV on input 1, say). TVs run top to bottom: use ↑ ↓ and "Wait first" for "switch the TV to input 1, then cast to the Apple TV".</p>
       <div className="buttons">
         <button className="primary" disabled={!name.trim()} onClick={() => void save()}>
           Save scene

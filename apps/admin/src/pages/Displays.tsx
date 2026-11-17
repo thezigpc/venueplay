@@ -139,6 +139,8 @@ export function describeTv(d: Display, media: MediaProvider[] = []): { text: str
     const state = d.stream.state === "streaming" ? "" : ` · ${STREAM_LABEL[d.stream.state] ?? d.stream.state}`;
     return { text: `${d.content?.kind === "idle" ? "Idle screen" : (d.content?.title ?? "Showing a page")}${state}`, warn: d.stream.state !== "streaming" && d.stream.state !== "connecting" };
   }
+  // Box 0.20.0: the TV's own word on what's on it beats what the box last sent there.
+  if (d.onScreen) return { text: d.onScreen.home ? "TV home screen" : `On the TV: ${d.onScreen.name}`, warn: false };
   if (d.content?.kind === "external") return { text: d.content.title ?? d.content.app ?? "A TV app", warn: false };
   if (d.content?.kind === "idle") return { text: "Idle screen", warn: false };
   return { text: "Nothing from the box", warn: false };

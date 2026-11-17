@@ -23,6 +23,11 @@ export interface DisplayView extends DisplayRecord {
   launchable?: string[];
   health?: Health;
   stream?: StreamState;
+  /**
+   * Box 0.20.0: what the TV says is on screen (its own app or input: "Netflix", "HDMI 1",
+   * home), for TVs that can tell (Roku, Apple TV). Only with ?health=1, and only online TVs.
+   */
+  onScreen?: { id: string; name: string; home: boolean };
 }
 
 /** The screen a TV shows while it pairs: self-contained, no network needed. */
@@ -66,7 +71,8 @@ export class DisplayRegistry {
         const drv = this.drivers.get(d.driver);
         if (!drv || d.ignored) return d;
         const [capabilities, health] = await Promise.all([drv.capabilities(d).catch(() => undefined), withHealth ? drv.health(d) : undefined]);
-        return { ...d, capabilities, health, stream: drv.streamState?.(d), launchable: drv.launchableApps?.(d) ?? [] };
+        const onScreen = withHealth && health?.online ? await this.onScreen(d) : undefined;
+        return { ...d, capabilities, health, stream: drv.streamState?.(d), launchable: drv.launchableApps?.(d) ?? [], ...(onScreen ? { onScreen } : {}) };
       }),
     );
   }
@@ -173,6 +179,20 @@ export class DisplayRegistry {
   }
 
   /** DIAL screen id of an app on this TV (memory-only cache, 10 minutes). */
+  /** Box 0.20.0: what each TV says it shows, asked at most every 20 s (2 s timeout). */
+  private readonly screenCache = new Map<string, { at: number; v?: { id: string; name: string; home: boolean } }>();
+  private async onScreen(d: DisplayRecord): Promise<{ id: string; name: string; home: boolean } | undefined> {
+    const drv = this.drivers.get(d.driver);
+    if (!drv?.foregroundApp) return undefined;
+    const hit = this.screenCache.get(d.id);
+    if (hit && Date.now() - hit.at < 20_000) return hit.v;
+    const timeout = new Promise<undefined>((r) => setTimeout(() => r(undefined), 2000).unref?.());
+    const a = await Promise.race([drv.foregroundApp(d).catch(() => undefined), timeout]);
+    const v = a ? { id: a.id, name: a.name, home: a.home } : undefined;
+    this.screenCache.set(d.id, { at: Date.now(), v });
+    return v;
+  }
+
   private readonly dialCache = new Map<string, { at: number; id?: string }>();
   async dialScreenId(id: string, app: string): Promise<string | undefined> {
     const d = this.get(id);

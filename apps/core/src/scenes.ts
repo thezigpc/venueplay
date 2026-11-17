@@ -4,8 +4,17 @@
 // applied with one tap or on a schedule. A scheduled session starts a game room on TVs at a
 // time ("Bingo every day at 8 PM"), with an optional countdown before it.
 
+/**
+ * Box 0.20.0: after a game step, where its host controls go. "open": the device that
+ * applied the scene opens them; "ask": it offers a button first. Scenes run by a schedule,
+ * closing time or Home Assistant post a "Host it" item on Tonight instead.
+ */
+export type HostMode = "open" | "ask";
+
 export type SceneAction =
-  | { displayId: string; do: "game"; gameId: string }
+  | { displayId: string; do: "game"; gameId: string; host?: HostMode }
+  /** Box 0.20.0: pause before the next step ("input 1, wait 5 s, then cast"). */
+  | { displayId: ""; do: "wait"; seconds: number }
   | { displayId: string; do: "media"; gameId: string; itemId: string }
   | { displayId: string; do: "idle" }
   | { displayId: string; do: "off" }
@@ -28,6 +37,11 @@ export const TV_CHANNEL = /^\d{1,4}(\.\d{1,3})?$/;
 export const WAKE_TRIES = 5;
 export const WAKE_RETRY_MS = 3000;
 export const TV_APP_ID = /^[A-Za-z0-9_.-]{1,100}$/;
+/** Box 0.20.0: one wait step, and all of a scene's waits together. */
+export const MAX_WAIT_SECONDS = 600;
+export const MAX_TOTAL_WAIT_SECONDS = 1800;
+/** Does applying this scene take a while (waits), or hand host controls to whoever applied it? */
+export const sceneRunsLong = (s: Scene) => s.actions.some((a) => a.do === "wait");
 
 export interface Scene {
   id: string;
@@ -116,7 +130,16 @@ export function cleanScene(v: unknown, exists: { game: (id: string) => boolean; 
   if (!name) return "name required";
   if (!Array.isArray(s.actions) || s.actions.length > 64) return "actions: up to 64";
   const actions: SceneAction[] = [];
+  let waited = 0;
   for (const a of s.actions as Record<string, unknown>[]) {
+    if (a?.do === "wait") {
+      const seconds = Math.round(Number(a.seconds));
+      if (!(seconds >= 1 && seconds <= MAX_WAIT_SECONDS)) return `wait: 1-${MAX_WAIT_SECONDS} seconds (longer: a sequence, "then apply a scene N minutes later")`;
+      waited += seconds;
+      if (waited > MAX_TOTAL_WAIT_SECONDS) return `waits: ${MAX_TOTAL_WAIT_SECONDS / 60} minutes in all at most`;
+      actions.push({ displayId: "", do: "wait", seconds });
+      continue;
+    }
     const displayId = typeof a?.displayId === "string" ? a.displayId : "";
     if (!displayId || !exists.display(displayId)) return `unknown TV ${displayId}`;
     const caps = exists.caps?.(displayId) ?? {};
@@ -137,9 +160,9 @@ export function cleanScene(v: unknown, exists: { game: (id: string) => boolean; 
       if (!TV_CHANNEL.test(channel)) return "channel: like 7 or 7.1";
       actions.push({ displayId, do: "channel", channel });
     }
-    else if (a.do === "game" && typeof a.gameId === "string" && exists.game(a.gameId)) actions.push({ displayId, do: "game", gameId: a.gameId });
+    else if (a.do === "game" && typeof a.gameId === "string" && exists.game(a.gameId)) actions.push({ displayId, do: "game", gameId: a.gameId, ...(a.host === "open" || a.host === "ask" ? { host: a.host } : {}) });
     else if (a.do === "media" && typeof a.gameId === "string" && exists.game(a.gameId) && typeof a.itemId === "string" && a.itemId) actions.push({ displayId, do: "media", gameId: a.gameId, itemId: a.itemId });
-    else return `action for ${displayId}: do game | media | idle | off | power | input | app | channel`;
+    else return `action for ${displayId}: do game | media | idle | off | power | input | app | channel | wait`;
   }
   const out: Scene = { id, name, actions };
   if (s.endRooms === true) out.endRooms = true;

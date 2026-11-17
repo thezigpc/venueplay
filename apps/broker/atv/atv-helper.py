@@ -198,6 +198,17 @@ class Helper:
 
         return await self.with_device(req, get)
 
+    async def now(self, req):
+        # Box 0.20.0: the app in front. None when tvOS doesn't say (home screen, or no metadata).
+        async def get(atv):
+            try:
+                app = atv.metadata.app
+            except Exception:
+                return {"unknown": True}
+            return {"id": app.identifier, "name": app.name} if app and app.identifier else None
+
+        return await self.with_device(req, get)
+
     async def launch(self, req):
         app = str(req.get("app", ""))
         return await self.with_device(req, lambda atv: atv.apps.launch_app(app))
@@ -216,6 +227,7 @@ class Helper:
             "power": self.power,
             "state": self.state,
             "apps": self.apps,
+            "now": self.now,
             "launch": self.launch,
             "text": self.text,
         }.get(op)

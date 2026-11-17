@@ -174,8 +174,11 @@ export interface MediaProvider {
   displayName: string;
   targets: { displayId: string; label: string; state: string; nowPlaying?: { title: string; listName?: string }; itemId?: string }[];
 }
+/** Box 0.20.0: after a game step, the device that applied the scene opens its host controls ("ask": offers a button). */
+export type HostMode = "open" | "ask";
 export type SceneAction =
-  | { displayId: string; do: "game"; gameId: string }
+  | { displayId: string; do: "game"; gameId: string; host?: HostMode }
+  | { displayId: ""; do: "wait"; seconds: number }
   | { displayId: string; do: "media"; gameId: string; itemId: string }
   | { displayId: string; do: "idle" | "off" }
   | { displayId: string; do: "power"; on: boolean }
@@ -194,6 +197,19 @@ export interface Scene {
   clearAnnouncement?: boolean;
   clearCountdown?: boolean;
   next?: { sceneId: string; afterMinutes: number };
+}
+/** Box 0.20.0: a scene being applied (waits run in the background). */
+export interface SceneRun {
+  id: string;
+  sceneId: string;
+  name: string;
+  total: number;
+  done: number;
+  current?: string;
+  finished: boolean;
+  cancelled?: boolean;
+  steps: { step: string; ok: boolean; message?: string }[];
+  host?: { gameId: string; name: string; code?: string; url: string; mode: HostMode };
 }
 /** Box 0.16.0: closing time, Sunday night first; "" = not that night. */
 export interface Closing {
@@ -258,6 +274,8 @@ export interface Display {
   id: string;
   driver: string;
   name: string;
+  /** Box 0.20.0: what the TV says it shows (its own app or input), Roku and Apple TV. */
+  onScreen?: { id: string; name: string; home: boolean };
   label?: string;
   group?: string;
   model?: string;
@@ -391,7 +409,8 @@ export const api = {
   identify: (displayId: string) => call("POST", `/broker/displays/${encodeURIComponent(displayId)}/identify`),
   /** Stub: Tailscale from the venue's side (planned). */
   tailscale: () => call<{ built: boolean }>("GET", "/tailscale"),
-  attention: () => call<{ items: { source: string; sourceName: string; level: "info" | "warn" | "error"; message: string; actionPath?: string }[] }>("GET", "/attention"),
+  attention: () =>
+    call<{ items: { source: string; sourceName: string; level: "info" | "warn" | "error"; message: string; actionPath?: string; hostUrl?: string; hostKey?: string; hostName?: string }[] }>("GET", "/attention"),
   countdown: () => call<{ id: string; label: string; endsAt: string; gameId?: string; joinUrl?: string } | null>("GET", "/countdown"),
   startCountdown: (label: string, minutes: number, gameId?: string) => call("PUT", "/countdown", { label, minutes, gameId }),
   clearCountdown: () => call("DELETE", "/countdown"),
@@ -406,7 +425,10 @@ export const api = {
   scenes: () => call<{ scenes: Scene[]; presets: Scene[] }>("GET", "/scenes"),
   saveScene: (s: Scene) => call<Scene>("PUT", `/scenes/${encodeURIComponent(s.id)}`, s),
   deleteScene: (id: string) => call("DELETE", `/scenes/${encodeURIComponent(id)}`),
-  applyScene: (id: string) => call<{ steps: { step: string; ok: boolean; message?: string }[] }>("POST", `/scenes/${encodeURIComponent(id)}/apply`),
+  applyScene: (id: string) => call<SceneRun>("POST", `/scenes/${encodeURIComponent(id)}/apply`),
+  sceneRun: (id: string) => call<SceneRun>("GET", `/scenes/runs/${encodeURIComponent(id)}`),
+  cancelSceneRun: (id: string) => call("POST", `/scenes/runs/${encodeURIComponent(id)}/cancel`),
+  dismissHost: (key: string) => call("DELETE", `/scenes/hosts/${encodeURIComponent(key)}`),
   schedules: () => call<{ schedules: Schedule[]; sequences?: { from: string; sceneId: string; at: string }[] }>("GET", "/schedules"),
   // Box 0.16.0
   closing: () => call<Closing>("GET", "/closing"),

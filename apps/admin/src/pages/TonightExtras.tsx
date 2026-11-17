@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, type Game } from "../api";
+import { openHost } from "./Scenes";
 import { useLoad } from "../useLoad";
 
 /** What needs staff: games' own items (with a link into their admin) and the box's (TVs offline). */
@@ -25,7 +26,18 @@ export function AttentionCard() {
             <b>{i.sourceName}</b>
             <small>{i.message}</small>
           </div>
-          {i.source !== "_box" && (
+          {i.hostUrl ? (
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                if (i.hostKey) void api.dismissHost(i.hostKey).catch(() => undefined);
+                openHost({ name: i.hostName ?? "Host controls", url: i.hostUrl! });
+              }}
+            >
+              Host it
+            </button>
+          ) : i.source !== "_box" && (
             <button type="button" onClick={() => open(i.source, i.actionPath)}>
               Open ↗
             </button>

@@ -23,6 +23,8 @@ export function HomePage() {
   const on = (games.data ?? []).filter((g) => g.enabled);
   const playUrl = games.data?.[0]?.context.venue.playUrl;
   const casting = route.rest[0] === "cast";
+  // Box 0.20.0: a room's host controls, opened by a scene, inside the admin with a way back.
+  if (route.rest[0] === "host" && route.rest[1]) return <HostView url={route.rest[1]} title={route.rest[2] ?? "Host controls"} />;
 
   return (
     <div>
@@ -138,6 +140,25 @@ const DURATIONS = [
 ];
 
 /** A message on every game page, the players' page and idle TVs ("Last call at 1:30"). */
+/** Box 0.20.0: host controls (a game's own page) in the admin's window; Back returns to Tonight. */
+function HostView({ url, title }: { url: string; title: string }) {
+  const safe = /^https?:\/\//.test(url) ? url : "about:blank";
+  return (
+    <div className="host-view">
+      <div className="host-bar">
+        <button type="button" onClick={() => go("tonight")}>
+          ← Back to admin
+        </button>
+        <b>{title}</b>
+        <a href={safe} className="ghost">
+          Full screen
+        </a>
+      </div>
+      <iframe src={safe} title={title} allow="fullscreen; autoplay; clipboard-write" />
+    </div>
+  );
+}
+
 /** Box 0.16.0: one line on how the box is doing; each item opens the page that fixes it. */
 function StatusBar() {
   const status = useLoad(api.status, 30_000);

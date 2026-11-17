@@ -5,7 +5,7 @@ import { HostSampler } from "./systemStats.js";
 import { createBackup, packBackup, resumePendingRestore, unpackBackup, writeCoreFiles } from "./backup.js";
 import { cleanMatchStart, Matches } from "./matches.js";
 import { activeGuests, cleanGuestRequest, closingTonight, DEFAULT_GUEST_HOURS, guestActive, MAX_COHOSTS, pruneGuests, type GuestLink } from "./guests.js";
-import { cleanClosing, cleanScene, cleanSchedule, closingSchedules, closingTimeScene, dueNow, WAKE_RETRY_MS, WAKE_TRIES, type Scene, type Schedule, type TvCaps } from "./scenes.js";
+import { cleanClosing, cleanScene, cleanSchedule, closingSchedules, closingTimeScene, dueNow, sceneRunsLong, WAKE_RETRY_MS, WAKE_TRIES, type HostMode, type Scene, type Schedule, type TvCaps } from "./scenes.js";
 import { cleanResult, board, Leaderboards, nightStart } from "./leaderboard.js";
 import { rewardsHook } from "./rewards.js";
 import {
@@ -833,7 +833,7 @@ export function createApp(d: AppDeps) {
     const out = [...attention.entries()].flatMap(([source, items]) =>
       items.map((i) => ({ ...i, source, sourceName: source === "_box" ? "Box" : (names[source] ?? source) })),
     );
-    res.json({ items: out });
+    res.json({ items: [...hostReadyItems().map((i) => ({ ...i, source: "_host", sourceName: "Scene" })), ...out] });
   });
 
   /** TV health: a TV offline for more than 10 minutes becomes a box attention item. */
@@ -1025,8 +1025,66 @@ export function createApp(d: AppDeps) {
   /** Applies a scene: end rooms, announcement, countdown, then each TV. Returns what happened per step. */
   /** Box 0.16.0: sequences waiting for their next scene (scene id → when and what). */
   const pendingNext = new Map<string, { sceneId: string; at: string; timer: ReturnType<typeof setTimeout> }>();
-  const applyScene = async (scene: Scene, by = "admin", depth = 0): Promise<{ step: string; ok: boolean; message?: string }[]> => {
-    const steps = await runSceneSteps(scene);
+
+  /**
+   * Box 0.20.0: a scene being applied. Scenes with waits run in the background; the admin
+   * polls the run for progress and for the host controls a game step hands it ("host").
+   */
+  interface SceneHost {
+    gameId: string;
+    name: string;
+    code?: string;
+    url: string;
+    mode: HostMode;
+  }
+  interface SceneRun {
+    id: string;
+    sceneId: string;
+    name: string;
+    by: string;
+    total: number;
+    done: number;
+    current?: string;
+    startedAt: string;
+    finishedAt?: string;
+    cancelled?: boolean;
+    steps: { step: string; ok: boolean; message?: string }[];
+    host?: SceneHost;
+    wake?: () => void;
+  }
+  const runs = new Map<string, SceneRun>();
+  const newRun = (scene: Scene, by: string): SceneRun => {
+    for (const [id, r] of runs) if (r.finishedAt && Date.now() - Date.parse(r.finishedAt) > 10 * 60_000) runs.delete(id);
+    const run: SceneRun = { id: randomBytes(6).toString("hex"), sceneId: scene.id, name: scene.name, by, total: scene.actions.length, done: 0, startedAt: new Date().toISOString(), steps: [] };
+    runs.set(run.id, run);
+    return run;
+  };
+  const runView = ({ wake: _w, ...r }: SceneRun) => r;
+  /** Waits that "Cancel" cuts short. */
+  const pause = (run: SceneRun, seconds: number) =>
+    new Promise<void>((resolve) => {
+      const t = setTimeout(done, seconds * 1000);
+      t.unref?.();
+      function done() {
+        clearTimeout(t);
+        run.wake = undefined;
+        resolve();
+      }
+      run.wake = done;
+    });
+  /** Host controls a scene started with nobody holding the iPad (schedule, closing time, Home Assistant). */
+  const hostsReady = new Map<string, SceneHost & { at: string }>();
+  const hostReadyItems = () => {
+    for (const [k, h] of hostsReady) if (Date.now() - Date.parse(h.at) > 2 * 3600e3) hostsReady.delete(k);
+    return [...hostsReady.entries()].map(([key, h]) => ({ level: "info" as const, message: `${h.name}${h.code ? ` ${h.code}` : ""} is ready. Host it from here.`, hostUrl: h.url, hostKey: key, hostName: `${h.name}${h.code ? ` · ${h.code}` : ""}` }));
+  };
+  const applyScene = async (scene: Scene, by = "admin", depth = 0, run: SceneRun = newRun(scene, by)): Promise<{ step: string; ok: boolean; message?: string }[]> => {
+    const steps = await runSceneSteps(scene, run).finally(() => {
+      run.finishedAt = new Date().toISOString();
+      run.current = undefined;
+    });
+    // A game step's host controls: the admin that applied it opens them; anyone else gets a Tonight item.
+    if (run.host && by !== "admin") hostsReady.set(`${run.host.gameId}:${run.host.code ?? ""}`, { ...run.host, at: new Date().toISOString() });
     hub.sceneRan(scene.id, steps.every((s) => s.ok), by);
     d.log.info("scenes", "applied", { scene: scene.id, by, steps: steps.length, failed: steps.filter((s) => !s.ok).length });
     // A sequence: the next scene later. Re-applying a scene restarts its wait; 8 steps at most.
@@ -1045,8 +1103,8 @@ export function createApp(d: AppDeps) {
     return steps;
   };
   app.locals.pendingSequences = () => [...pendingNext.entries()].map(([from, p]) => ({ from, sceneId: p.sceneId, at: p.at }));
-  const runSceneSteps = async (scene: Scene) => {
-    const steps: { step: string; ok: boolean; message?: string }[] = [];
+  const runSceneSteps = async (scene: Scene, run: SceneRun) => {
+    const steps = run.steps;
     if (scene.endRooms) {
       for (const g of d.games.list().filter((x) => x.enabled && x.manifest.sdk.level >= 3 && x.manifest.commands.includes("end"))) {
         const st = await gameStatusOf(g).catch(() => undefined);
@@ -1087,6 +1145,18 @@ export function createApp(d: AppDeps) {
     /** TVs this scene just switched on: their next step retries while they wake up. */
     const waking = new Set<string>();
     for (const a of scene.actions) {
+      if (run.cancelled) {
+        steps.push({ step: "cancelled: the rest was skipped", ok: false });
+        break;
+      }
+      run.done++;
+      if (a.do === "wait") {
+        run.current = `waiting ${a.seconds} s`;
+        await pause(run, a.seconds);
+        steps.push({ step: `waited ${a.seconds} s`, ok: true });
+        continue;
+      }
+      run.current = `${a.displayId}: ${a.do}`;
       const tv = `/displays/${encodeURIComponent(a.displayId)}`;
       try {
         if (a.do === "power") {
@@ -1106,6 +1176,14 @@ export function createApp(d: AppDeps) {
           const r = await castGame(a.gameId, { displayIds: [a.displayId] }, { firstJoinerHosts: true });
           const res = r.results[a.displayId];
           steps.push({ step: `${a.displayId}: ${a.gameId}`, ok: res?.ok !== false, message: res?.message });
+          if (a.host) {
+            // Box 0.20.0: the room's host link (a new room is "first joiner hosts"); an app's host page.
+            const game = d.games.get(a.gameId);
+            const ctx = game ? buildContext(d.state.venue.get(), game) : undefined;
+            const url = r.hostUrl ?? (game && ctx?.game.publicUrl && isApp(game.manifest) && game.manifest.routes.host ? joinUrl(ctx.game.publicUrl, game.manifest.routes.host) : undefined);
+            if (url && ctx) run.host = { gameId: a.gameId, name: ctx.game.displayName, ...(r.roomCode ? { code: r.roomCode } : {}), url, mode: a.host };
+            else steps.push({ step: `${a.gameId}: host controls`, ok: false, message: "this game has no host page to open" });
+          }
         } else if (a.do === "media") {
           const r = await gameCommand(mediaApp(a.gameId), { command: "media_play", args: { displayId: a.displayId, itemId: a.itemId, takeBack: true } });
           if (r.result.ok) roomCache.boost(a.gameId);
@@ -1147,14 +1225,44 @@ export function createApp(d: AppDeps) {
       res.json({ ok: true });
     }),
   );
+  /**
+   * Box 0.20.0: answers when the scene is done, or after 10 s with the run to follow
+   * (GET /api/scenes/runs/:id) when it's still waiting. `host`: host controls to open.
+   */
   app.post(
     "/api/scenes/:id/apply",
     h(async (req, res) => {
       const scene = d.state.scenes.get().scenes.find((x) => x.id === req.params.id);
       if (!scene) throw new HttpError(404, "no such scene");
-      res.json({ steps: await applyScene(scene) });
+      const run = newRun(scene, "admin");
+      const work = applyScene(scene, "admin", 0, run).catch((err: Error) => void run.steps.push({ step: "scene", ok: false, message: err.message }));
+      // How long to hold the answer for a scene with waits (default 10 s; { waitMs } for scripts and tests).
+      const hold = typeof req.body?.waitMs === "number" ? Math.max(0, Math.min(10_000, req.body.waitMs)) : 10_000;
+      await Promise.race([work, new Promise((r) => setTimeout(r, sceneRunsLong(scene) ? hold : 120_000).unref?.())]);
+      res.json({ ...runView(run), finished: Boolean(run.finishedAt) });
     }),
   );
+  app.get("/api/scenes/runs", (_req, res) => res.json({ runs: [...runs.values()].filter((r) => !r.finishedAt).map(runView) }));
+  app.get("/api/scenes/runs/:id", (req, res) => {
+    const run = runs.get(req.params.id);
+    if (!run) return void res.status(404).json({ error: "no such run (finished more than 10 minutes ago?)" });
+    res.json({ ...runView(run), finished: Boolean(run.finishedAt) });
+  });
+  app.post("/api/scenes/runs/:id/cancel", (req, res) => {
+    const run = runs.get(req.params.id);
+    if (!run) return void res.status(404).json({ error: "no such run" });
+    if (!run.finishedAt) {
+      run.cancelled = true;
+      run.wake?.();
+      d.log.info("scenes", "cancelled", { scene: run.sceneId });
+    }
+    res.json({ ok: true });
+  });
+  /** A "Host it" item was used (or dismissed). */
+  app.delete("/api/scenes/hosts/:key", (req, res) => {
+    hostsReady.delete(req.params.key);
+    res.json({ ok: true });
+  });
 
   app.get("/api/schedules", (_req, res) => res.json({ schedules: d.state.schedules.get().schedules, sequences: app.locals.pendingSequences() }));
 
@@ -1187,6 +1295,7 @@ export function createApp(d: AppDeps) {
       const latest = await latestVersion().catch(() => undefined);
       if (latest && compareVersions(latest, d.config.boxVersion) > 0) items.push({ level: "info", text: `Box ${latest} is available`, page: "system" });
       if (ups) items.push({ level: "info", text: `${ups} game/app update${ups === 1 ? "" : "s"} available`, page: "games" });
+      for (const r of runs.values()) if (!r.finishedAt) items.push({ level: "info", text: `${r.name}: step ${r.done} of ${r.total}${r.current?.startsWith("waiting") ? ` (${r.current})` : ""}`, page: "tonight" });
       for (const p of app.locals.pendingSequences() as { sceneId: string; at: string }[]) {
         const name = d.state.scenes.get().scenes.find((s) => s.id === p.sceneId)?.name ?? p.sceneId;
         items.push({ level: "info", text: `${name} in ${Math.max(1, Math.ceil((Date.parse(p.at) - Date.now()) / 60_000))} min`, page: "scenes" });

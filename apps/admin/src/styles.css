@@ -382,3 +382,11 @@ button.tv-tile.selected { border-color: var(--primary); }
 .guest-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .guest-list .inline { align-items: center; }
 .guest-cohost { padding-left: 20px; }
+
+/* Box 0.20.0: scene progress and host controls inside the admin. */
+.scene-run { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scene-tv legend button.small { padding: 2px 8px; min-height: 0; }
+.host-view { display: flex; flex-direction: column; height: calc(100vh - 32px); gap: 8px; }
+.host-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.host-bar b { flex: 1; }
+.host-view iframe { flex: 1; width: 100%; border: 0; border-radius: 12px; background: #000; }

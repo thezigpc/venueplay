@@ -118,6 +118,15 @@ export class AppleTvDriver implements DisplayDriver {
     return { apps: apps.sort((a, b) => a.name.localeCompare(b.name)) };
   }
 
+  /** Box 0.20.0: the app in front (pyatv metadata over the paired connection); undefined if it can't say. */
+  async foregroundApp(device: DisplayDevice): Promise<{ id: string; name: string; home: boolean } | undefined> {
+    if (!this.creds(device)) return undefined;
+    const a = (await this.control(device, "now")) as { id?: string; name?: string; unknown?: boolean } | null;
+    if (a?.unknown) return undefined;
+    if (!a?.id) return { id: "home", name: "Home screen", home: true };
+    return { id: a.id, name: a.name || a.id, home: false };
+  }
+
   async launchChannel(device: DisplayDevice, appId: string): Promise<void> {
     await this.control(device, "launch", { app: appId });
   }

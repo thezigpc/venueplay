@@ -400,6 +400,50 @@ test("tv startup: a TV that moves to a new driver (AirPlay → Vizio) keeps its 
   }
 });
 
+test("scenes 0.20.0: wait steps run in order, show progress and can be cancelled", async () => {
+  const sent: string[] = [];
+  const b = await boot((url, init) => {
+    if (init?.method === "POST" && /^http:\/\/broker\/displays\/tv1\/input$/.test(url)) {
+      sent.push(`input ${(JSON.parse(String(init.body)) as { input: string }).input}`);
+      return reply({ ok: true });
+    }
+    return undefined;
+  });
+  try {
+    (b.displays[0] as Record<string, unknown>).capabilities = { delivery: ["airplay"], inputs: ["hdmi1", "hdmi2"] };
+    const put = (id: string, actions: unknown[]) => b.json("PUT", `/api/scenes/${id}`, { name: id, actions }, b.authed);
+    assert.equal((await put("bad", [{ do: "wait", seconds: 0 }])).status, 400);
+    assert.equal((await put("bad", [{ do: "wait", seconds: 601 }])).status, 400);
+    assert.equal((await put("bad", [{ do: "wait", seconds: 600 }, { do: "wait", seconds: 600 }, { do: "wait", seconds: 600 }, { do: "wait", seconds: 1 }])).status, 400, "30 minutes in all");
+    assert.equal((await put("quick", [{ displayId: "tv1", do: "input", input: "hdmi1" }, { do: "wait", seconds: 1 }, { displayId: "tv1", do: "input", input: "hdmi2" }])).status, 200);
+    const r = (await (await b.json("POST", "/api/scenes/quick/apply", undefined, b.authed)).json()) as { finished: boolean; total: number; steps: { step: string; ok: boolean }[] };
+    assert.equal(r.finished, true);
+    assert.deepEqual(r.steps.map((s) => s.step), ["tv1: input hdmi1", "waited 1 s", "tv1: input hdmi2"]);
+    assert.deepEqual(sent, ["input hdmi1", "input hdmi2"]);
+
+    // A long wait: the answer comes back while it runs; Cancel skips the rest.
+    sent.length = 0;
+    assert.equal((await put("slow", [{ do: "wait", seconds: 300 }, { displayId: "tv1", do: "input", input: "hdmi2" }])).status, 200);
+    const started = (await (await b.json("POST", "/api/scenes/slow/apply", { waitMs: 0 }, b.authed)).json()) as { id: string; finished: boolean; done: number; total: number };
+    assert.deepEqual([started.finished, started.done, started.total], [false, 1, 2]);
+    const runs = (await (await b.json("GET", "/api/scenes/runs", undefined, b.authed)).json()) as { runs: { id: string }[] };
+    assert.ok(runs.runs.some((x) => x.id === started.id));
+    const status = (await (await b.json("GET", "/api/status", undefined, b.authed)).json()) as { items: { text: string }[] };
+    assert.ok(status.items.some((i) => /^slow: step 1 of 2 \(waiting 300 s\)$/.test(i.text)), JSON.stringify(status.items));
+    assert.equal((await b.json("POST", `/api/scenes/runs/${started.id}/cancel`, undefined, b.authed)).status, 200);
+    let after = started as unknown as { finished: boolean; steps: { step: string }[] };
+    for (let i = 0; i < 50 && !after.finished; i++) {
+      await new Promise((ok) => setTimeout(ok, 20));
+      after = (await (await b.json("GET", `/api/scenes/runs/${started.id}`, undefined, b.authed)).json()) as typeof after;
+    }
+    assert.equal(after.finished, true);
+    assert.deepEqual(after.steps.map((s) => s.step), ["waited 300 s", "cancelled: the rest was skipped"]);
+    assert.deepEqual(sent, [], "the TV step after the wait never ran");
+  } finally {
+    b.close();
+  }
+});
+
 test("scenes: TV control steps (power, input, app, channel) are checked against the TV and run in order", async () => {
   const sent: { url: string; body?: unknown }[] = [];
   const b = await boot((url, init) => {
