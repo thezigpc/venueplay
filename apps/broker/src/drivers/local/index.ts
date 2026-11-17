@@ -14,6 +14,7 @@
 import { spawn as spawnChild } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { isErrorLoad, kioskScript, retryDelay } from "./kioskPage.js";
 import { TOUCH_PAGE_SCRIPT } from "./touchPage.js";
 import path from "node:path";
 import type { Logger } from "@bargames/common";
@@ -231,6 +232,13 @@ interface Session {
   /** Box 0.22.0: the touch reader for this screen, and the page's size in CSS pixels. */
   reader?: { kill(): void };
   css?: { width: number; height: number };
+  /** Box 0.25.0: points the kiosk's Home button at the page the box sent (touch screens). */
+  setHome?: (url: string) => Promise<void>;
+  /** Box 0.25.0: the box just sent a page: forget the history before it once it loads. */
+  resetHistory?: boolean;
+  /** Box 0.25.0: reloading an error page (Cloudflare 502, no network): the timer and the try. */
+  retry?: ReturnType<typeof setTimeout>;
+  attempts: number;
 }
 
 export class LocalScreenDriver implements DisplayDriver {
@@ -300,6 +308,9 @@ export class LocalScreenDriver implements DisplayDriver {
     if (s && s.proc.alive && s.connector === c.name && s.touch === touch) {
       const site = siteOf(url);
       if (site) s.sites.add(site);
+      await s.setHome?.(url);
+      this.stopRetry(s);
+      s.resetHistory = true;
       if (await this.navigate(url)) {
         s.url = url;
         return { ok: true, delivery: "local" };
@@ -325,7 +336,7 @@ export class LocalScreenDriver implements DisplayDriver {
     mkdirSync(env.XDG_RUNTIME_DIR, { recursive: true, mode: 0o700 });
     const proc = runner.spawn(`local:${c.name}`, this.o.cage ?? "cage", kioskArgs(url, `${this.runDir}/chromium`, this.debugPort, kioskScale(c.modes[0]), touch), env);
     const site = siteOf(url);
-    const session: Session = { connector: c.name, proc, url, touch, sites: new Set(site ? [site] : []) };
+    const session: Session = { connector: c.name, proc, url, touch, sites: new Set(site ? [site] : []), attempts: 0 };
     this.session = session;
     // Ready once DevTools answers (Chromium is up on the screen).
     for (let i = 0; i < 40; i++) {
@@ -335,11 +346,11 @@ export class LocalScreenDriver implements DisplayDriver {
         return { ok: false, message: `The screen didn't start: ${proc.tail().slice(-2).join(" ") || "unknown error"}` };
       }
       if (await this.pageWs()) {
-        if (touch) this.startTouch(session, c.modes[0]);
+        this.watch(session, c.modes[0]);
         return { ok: true, delivery: "local" };
       }
     }
-    if (touch) this.startTouch(session, c.modes[0]);
+    this.watch(session, c.modes[0]);
     return { ok: true, delivery: "local", message: "Starting (slow)" };
   }
 
@@ -349,9 +360,14 @@ export class LocalScreenDriver implements DisplayDriver {
     return (this.o.touchMode ?? process.env.LOCAL_TOUCH) === "native";
   }
 
-  private startTouch(s: Session, mode: string | undefined): void {
+  /**
+   * The DevTools watch on every plugged-in screen (error pages reload themselves); on a
+   * touch screen also the navigation guard, the kiosk controls and (devtools mode) the
+   * touch reader.
+   */
+  private watch(s: Session, mode: string | undefined): void {
     void this.guard(s);
-    if (this.native) return;
+    if (!s.touch || this.native) return;
     const [w, h] = (mode ?? "1920x1080").split("x").map(Number);
     const scale = kioskScale(mode);
     s.css = { width: Math.round((w || 1920) / scale), height: Math.round((h || 1080) / scale) };
@@ -389,10 +405,47 @@ export class LocalScreenDriver implements DisplayDriver {
     }
   }
 
+  private stopRetry(s: Session): void {
+    if (s.retry) clearTimeout(s.retry);
+    s.retry = undefined;
+    s.attempts = 0;
+  }
+
+  /**
+   * Box 0.25.0: after each page load, a page that didn't load (Chromium's error page, or a
+   * 5xx such as Cloudflare's 502 while a game restarts) reloads itself: 5 s, then doubling
+   * up to a minute, until it loads. A good load forgets the history before a page the box
+   * sent, so Back can't return to what was cast earlier.
+   */
+  private async afterLoad(s: Session, call: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>): Promise<void> {
+    const r = await call("Runtime.evaluate", { expression: `[performance.getEntriesByType("navigation")[0]?.responseStatus ?? 0, location.href]`, returnByValue: true });
+    const [status, href] = ((r?.result as { value?: unknown } | undefined)?.value ?? [0, ""]) as [number, string];
+    if (this.session !== s) return;
+    if (isErrorLoad(status, String(href))) {
+      if (s.retry) return;
+      const wait = retryDelay(s.attempts);
+      this.o.log?.info("local", "page didn't load; reloading", { status, url: String(href).slice(0, 120), in: wait / 1000 });
+      s.retry = setTimeout(() => {
+        s.retry = undefined;
+        s.attempts++;
+        if (this.session === s) void call("Page.reload", { ignoreCache: true });
+      }, wait);
+      s.retry.unref?.();
+      return;
+    }
+    if (s.retry) clearTimeout(s.retry);
+    s.retry = undefined;
+    s.attempts = 0;
+    if (s.resetHistory) {
+      s.resetHistory = false;
+      void call("Page.resetNavigationHistory", {});
+    }
+  }
+
   /**
    * Box 0.21.0: on a touch screen, people can only open the venue's own pages. A DevTools
    * session pauses every page load (main page and frames) and fails those on other sites.
-   * Reconnects while the kiosk runs.
+   * Reconnects while the kiosk runs. Box 0.25.0: on every plugged-in screen, for afterLoad.
    */
   private async guard(s: Session): Promise<void> {
     while (this.session === s && s.proc.alive && !s.guard) {
@@ -405,24 +458,54 @@ export class LocalScreenDriver implements DisplayDriver {
         const ws = new WebSocket(wsUrl);
         s.guard = ws;
         let id = 10;
-        s.send = (method, params) => {
-          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ id: id++, method, params }));
+        const waiting = new Map<number, (r: Record<string, unknown> | undefined) => void>();
+        const call = (method: string, params: Record<string, unknown>) =>
+          new Promise<Record<string, unknown> | undefined>((done) => {
+            if (ws.readyState !== WebSocket.OPEN) return done(undefined);
+            const n = id++;
+            const t = setTimeout(() => (waiting.delete(n), done(undefined)), 3000);
+            t.unref?.();
+            waiting.set(n, (r) => (clearTimeout(t), done(r)));
+            ws.send(JSON.stringify({ id: n, method, params }));
+          });
+        s.send = (method, params) => void call(method, params);
+        // Box 0.25.0: the kiosk controls (Back, Home, no pointer) on touch screens.
+        let kioskId: string | undefined;
+        s.setHome = async (url) => {
+          if (!s.touch) return;
+          if (kioskId) await call("Page.removeScriptToEvaluateOnNewDocument", { identifier: kioskId });
+          const r = await call("Page.addScriptToEvaluateOnNewDocument", { source: kioskScript(url) });
+          kioskId = typeof r?.identifier === "string" ? r.identifier : undefined;
         };
         ws.onopen = () => {
-          ws.send(JSON.stringify({ id: id++, method: "Fetch.enable", params: { patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }] } }));
+          if (s.touch) ws.send(JSON.stringify({ id: id++, method: "Fetch.enable", params: { patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }] } }));
           ws.send(JSON.stringify({ id: id++, method: "Page.enable", params: {} }));
+          if (s.touch) {
+            void s.setHome?.(s.url);
+            ws.send(JSON.stringify({ id: id++, method: "Runtime.evaluate", params: { expression: kioskScript(s.url) } }));
+          }
           // Box 0.22.1: dropdowns as on-page lists, in every page from now on and this one.
-          if (!this.native) {
+          if (s.touch && !this.native) {
             ws.send(JSON.stringify({ id: id++, method: "Page.addScriptToEvaluateOnNewDocument", params: { source: TOUCH_PAGE_SCRIPT } }));
             ws.send(JSON.stringify({ id: id++, method: "Runtime.evaluate", params: { expression: TOUCH_PAGE_SCRIPT } }));
           }
         };
         ws.onmessage = (ev) => {
-          const msg = JSON.parse(String(ev.data)) as { method?: string; params?: { requestId: string; request: { url: string } } };
+          const msg = JSON.parse(String(ev.data)) as { id?: number; result?: Record<string, unknown>; method?: string; params?: { requestId: string; request: { url: string } } };
+          if (msg.id !== undefined) {
+            const w = waiting.get(msg.id);
+            waiting.delete(msg.id);
+            w?.(msg.result);
+            return;
+          }
+          if (msg.method === "Page.loadEventFired") {
+            void this.afterLoad(s, call);
+            return;
+          }
           // Box 0.22.1: alert/confirm/prompt/"leave this page?" open as a separate Chromium
           // window that touch can't reach, and the page is frozen until it's answered. Answer
           // it here (the tap on the button was the decision); show an alert's text on the page.
-          if (msg.method === "Page.javascriptDialogOpening" && !this.native) {
+          if (msg.method === "Page.javascriptDialogOpening" && s.touch && !this.native) {
             const d = msg.params as unknown as { type: string; message: string; defaultPrompt?: string };
             const answer = dialogAnswer(d);
             ws.send(JSON.stringify({ id: id++, method: "Page.handleJavaScriptDialog", params: answer }));
@@ -439,6 +522,9 @@ export class LocalScreenDriver implements DisplayDriver {
         ws.onclose = () => {
           s.guard = undefined;
           s.send = undefined;
+          s.setHome = undefined;
+          for (const w of waiting.values()) w(undefined);
+          waiting.clear();
           resolve();
         };
       });
@@ -509,6 +595,7 @@ export class LocalScreenDriver implements DisplayDriver {
   async stop(device: DisplayDevice): Promise<void> {
     if (this.session && `local:${this.session.connector}` === device.id) {
       this.session.guard?.close();
+      this.stopRetry(this.session);
       this.session.reader?.kill();
       this.session.reader = undefined;
       this.session.proc.kill();

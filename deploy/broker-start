@@ -4,6 +4,9 @@
 # the container's extra groups (render, video) and no capabilities.
 set -eu
 if [ "$(id -u)" = 0 ]; then
+  # Box 0.25.0: after a power cut the container's /tmp keeps the AirPlay channels' X locks
+  # and sockets, and Xvfb then refuses that display. Nothing runs yet, so they're all stale.
+  rm -f /tmp/.X*-lock /tmp/.X11-unix/X* 2>/dev/null || true
   case ",${DRIVERS:-}," in
     *,local,*) SEATD_VTBOUND=0 seatd -u node -g node > /tmp/seatd.log 2>&1 & ;;
   esac

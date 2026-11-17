@@ -45,6 +45,14 @@ factor of width/1920 when the screen is wider than 1920 (2 on a 4K TV), so TV pa
 
 **Box 0.23.0:** the broker image is Debian 13, and cage 0.2 / wlroots 0.18 give Chromium real touch (`LOCAL_TOUCH=native`, the image's default): taps reach dropdowns and dialogs like on any tablet. The DevTools passthrough below stays as `LOCAL_TOUCH=devtools`.
 
+**Kiosk controls (box 0.25.0):** on a touch screen the pointer is hidden, and away from the page
+the box sent, Back and Home buttons sit at the bottom left (above GameKit's on-screen keyboard).
+Home goes back to what was cast to that screen; Back goes back a page, or home when there's
+nowhere to go back to. A swipe in from the left edge also goes back. Casting a new page forgets
+the history before it, so Back never returns to an earlier cast. Every plugged-in screen (touch
+or not) reloads a page that didn't load (Chromium's error page, or a 5xx such as Cloudflare's 502
+while a game restarts): after 5 s, then doubling up to a minute, until it loads.
+
 **Touch (box 0.21.0):** a touchscreen's USB cable goes into the box; its video goes in like any
 screen's. Then the TV's Setup tab has "Touch screen: people can tap it" (it names the
 touchscreen the box found).

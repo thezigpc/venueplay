@@ -259,6 +259,7 @@ test("local screens: connected outputs from sysfs; showing starts cage + Chromiu
   assert.equal((await drv.show(screen, { kind: "external", provider: "youtube", app: "youtube" })).ok, false);
   const [dp] = [{ ...screen, id: "local:DP-1" }];
   assert.equal((await drv.show(dp, { kind: "off" })).ok, false, "unplugged screen");
+  await drv.stop(screen); // ends its DevTools watch (every plugged-in screen has one since 0.25.0)
 });
 
 test("local screens 0.21.0: touchscreens found, touch flags, venue-only pages", async () => {
@@ -266,6 +267,42 @@ test("local screens 0.21.0: touchscreens found, touch flags, venue-only pages", 
   // Box 0.22.1: the page script for dropdowns parses as JavaScript.
   const { TOUCH_PAGE_SCRIPT } = await import("./drivers/local/touchPage.js");
   assert.doesNotThrow(() => new Function(TOUCH_PAGE_SCRIPT));
+  // Box 0.25.0: kiosk controls. Back and Home hide on the page the box sent and show away
+  // from it; Back with no history goes home; a swipe in from the left edge goes back.
+  const { kioskScript, retryDelay, isErrorLoad } = await import("./drivers/local/kioskPage.js");
+  const { runInNewContext } = await import("node:vm");
+  const kiosk = (href: string, historyLength: number) => {
+    const handlers: Record<string, (e: unknown) => void> = {};
+    const buttons = [0, 1].map(() => ({ on: undefined as undefined | ((e: unknown) => void), addEventListener(_t: string, f: (e: unknown) => void) { this.on = f; } }));
+    let host: { style: { display?: string; cssText?: string } } | undefined;
+    const el = () => ({ style: {} as Record<string, string>, isConnected: true, setAttribute() {}, attachShadow: () => ({ set innerHTML(_v: string) {}, querySelectorAll: () => buttons }) });
+    const w: Record<string, unknown> = {
+      location: { href },
+      history: { length: historyLength, back() { w.wentBack = true; } },
+      document: { documentElement: { appendChild: (x: typeof host) => (host = host ?? x) }, head: { appendChild() {} }, createElement: el },
+      addEventListener: (t: string, f: (e: unknown) => void) => (handlers[t] = f),
+      setInterval: () => 0,
+      innerWidth: 1920,
+      URL,
+    };
+    w.window = w;
+    w.top = w;
+    runInNewContext(kioskScript("https://play.example.com/zinger/"), w);
+    return { w, handlers, buttons, shown: () => host?.style.display };
+  };
+  assert.equal(kiosk("https://play.example.com/zinger", 1).shown(), "none", "home (trailing slash aside): no buttons");
+  const away = kiosk("https://play.example.com/zinger/room/ABCD", 1);
+  assert.equal(away.shown(), "flex");
+  away.buttons[0].on?.({ stopPropagation() {} });
+  assert.equal((away.w.location as { href: string }).href, "https://play.example.com/zinger/", "Back with nowhere to go: home");
+  const deep = kiosk("https://play.example.com/zinger/room/ABCD", 3);
+  deep.handlers.touchstart({ touches: [{ clientX: 5, clientY: 500 }] });
+  deep.handlers.touchend({ changedTouches: [{ clientX: 400, clientY: 520 }] });
+  assert.equal(deep.w.wentBack, true, "swipe from the left edge");
+  assert.deepEqual([0, 1, 2, 3, 4, 9].map(retryDelay), [5000, 10000, 20000, 40000, 60000, 60000]);
+  assert.ok(isErrorLoad(502, "https://play.example.com/"));
+  assert.ok(isErrorLoad(0, "chrome-error://chromewebdata/"));
+  assert.ok(!isErrorLoad(200, "https://play.example.com/") && !isErrorLoad(404, "https://x/") && !isErrorLoad(0, "data:text/html,x"));
   // Box 0.22.1: dialogs on a touch screen are answered for the tapper.
   assert.deepEqual(dialogAnswer({ type: "confirm" }), { accept: true });
   assert.deepEqual(dialogAnswer({ type: "beforeunload" }), { accept: true });

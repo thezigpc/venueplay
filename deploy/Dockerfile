@@ -43,9 +43,9 @@ COPY --from=build /app/apps/broker/dist ./apps/broker/dist
 COPY --from=build /app/apps/broker/package.json ./apps/broker/
 RUN mkdir -p /data && chown node:node /data
 RUN sed -i "s/Components: main/Components: main contrib non-free non-free-firmware/" /etc/apt/sources.list.d/debian.sources  && apt-get update && apt-get install -y --no-install-recommends       xvfb xdotool chromium fonts-dejavu-core fonts-liberation fonts-noto-color-emoji       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad       gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-x       intel-media-va-driver-non-free vainfo pulseaudio-utils ca-certificates cage seatd xwayland libgl1-mesa-dri  && rm -rf /var/lib/apt/lists/*
-# doubletake v0.5.0 (https://github.com/omarroth/doubletake). Pinned by checksum.
-ADD --checksum=sha256:59027455bb844f15119232600569aded721203271001591a0afc5a0d07c06b5c     https://github.com/omarroth/doubletake/releases/download/v0.5.0/doubletake /usr/local/bin/doubletake
-ADD --checksum=sha256:1cf40195f83ef4c1f885392e1b90d2ce077270b9391a38a717598170cb1aa4eb     https://github.com/omarroth/doubletake/releases/download/v0.5.0/doubletake-ctl /usr/local/bin/doubletake-ctl
+# doubletake v0.6.0 (https://github.com/omarroth/doubletake). Pinned by checksum.
+ADD --checksum=sha256:01fb6c7b9de6f3bd693a629e248fe61ceb7af06353c8f3f21cc29878d1f9f5de     https://github.com/omarroth/doubletake/releases/download/v0.6.0/doubletake /usr/local/bin/doubletake
+ADD --checksum=sha256:e5418c1730677d3f8f6480c0c5fb4b4b68a85a408b36d9d29c30c4f010608ab4     https://github.com/omarroth/doubletake/releases/download/v0.6.0/doubletake-ctl /usr/local/bin/doubletake-ctl
 # Apple TV control (Companion protocol): pyatv (MIT) in its own venv, pinned with its
 # dependencies, driven by atv-helper.py. Only the broker image carries Python.
 COPY apps/broker/atv/requirements.txt /tmp/atv-requirements.txt
