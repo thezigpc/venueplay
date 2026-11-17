@@ -46,10 +46,19 @@ factor of width/1920 when the screen is wider than 1920 (2 on a 4K TV), so TV pa
 **Touch (box 0.21.0):** a touchscreen's USB cable goes into the box; its video goes in like any
 screen's. Then the TV's Setup tab has "Touch screen: people can tap it" (it names the
 touchscreen the box found).
-- **Off (the default):** cage runs with the DRM backend only (`WLR_BACKENDS=drm`), so the
-  screen takes no input at all, even with a keyboard or touchscreen plugged in.
-- **On:** `drm,libinput`, and Chromium gets touch events, no pinch zoom, no swipe-back and no
-  pop-ups.
+- **Off (the default):** the screen takes no input at all, even with a keyboard or touchscreen
+  plugged in. cage always runs with the DRM backend only (`WLR_BACKENDS=drm`).
+- **On (box 0.22.0):** the broker runs `touch-reader.py`, which reads every touchscreen's evdev
+  node and prints touch frames. The broker turns them into DevTools
+  `Input.dispatchTouchEvent`s on the page, in its CSS pixels. Chromium also gets no pinch zoom,
+  no swipe-back and no pop-ups.
+  - **Why not cage:** cage 0.1.4 / wlroots 0.15 (Debian 12) never offers touch to Chromium
+    (wl_seat capabilities 0, "could not create touch point"), though libinput reads the
+    screen fine. Moving the broker image to Debian 13 (cage 0.2, wlroots 0.18) is the
+    long-term fix.
+  - **Dropdowns:** Chromium's `<select>` list is a separate pop-up that touch can't reach, so
+    GameKit 0.10.6 shows the choices on the page.
+  - **Container:** `broker-start` adds the `/dev/input` group to the broker process.
   - **Venue pages only:** a DevTools session fails any page load (main page or frame) outside
     the venue's own sites, meaning the domain of every page the box sent that screen.
   - **Typing:** games show GameKit 0.10.0's `<OnScreenKeyboard />`.

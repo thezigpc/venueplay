@@ -11,7 +11,9 @@
 //
 // Enable with DRIVERS=roku,airplay,local.
 
+import { spawn as spawnChild } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
+import { createInterface } from "node:readline";
 import path from "node:path";
 import type { Logger } from "@bargames/common";
 import type { Proc, ProcRunner } from "../../airplay.js";
@@ -160,6 +162,38 @@ export interface LocalOptions {
   cage?: string;
   /** Box 0.21.0: where to read the input devices (tests). */
   inputDevices?: string;
+  /**
+   * Box 0.22.0: the touch reader (touch-reader.py prints one JSON line per touch frame).
+   * Tests pass their own; absent here means the image's script under python3.
+   */
+  touchReader?: () => { lines: AsyncIterable<string>; kill(): void };
+}
+
+/** A touch frame from touch-reader.py: 0..1 across and down the screen. */
+export interface TouchFrame {
+  points: { id: number; x: number; y: number }[];
+}
+
+/**
+ * Box 0.22.0: a touch frame as a DevTools Input.dispatchTouchEvent, in the page's CSS
+ * pixels (the screen's mode divided by its scale). Chromium works out which points went
+ * down, moved or lifted from the list, so this only says whether the touch began or ended.
+ */
+export function touchEventFor(frame: TouchFrame, before: number, css: { width: number; height: number }): { type: "touchStart" | "touchMove" | "touchEnd"; touchPoints: { id: number; x: number; y: number; radiusX: number; radiusY: number; force: number }[] } | undefined {
+  const n = frame.points.length;
+  if (n === 0) return before ? { type: "touchEnd", touchPoints: [] } : undefined;
+  return {
+    type: before === 0 ? "touchStart" : "touchMove",
+    touchPoints: frame.points.map((p) => ({ id: p.id, x: Math.round(p.x * css.width * 10) / 10, y: Math.round(p.y * css.height * 10) / 10, radiusX: 8, radiusY: 8, force: 1 })),
+  };
+}
+
+const TOUCH_SCRIPT = "/usr/local/lib/bargames/touch-reader.py";
+function defaultTouchReader(log?: Logger) {
+  const child = spawnChild("python3", [TOUCH_SCRIPT], { stdio: ["ignore", "pipe", "pipe"] });
+  child.stderr.on("data", (d) => log?.warn("local", "touch reader", { err: String(d).trim().slice(0, 200) }));
+  child.on("error", (err) => log?.warn("local", "touch reader didn't start", { err: err.message }));
+  return { lines: createInterface({ input: child.stdout }), kill: () => child.kill() };
 }
 
 interface Session {
@@ -170,6 +204,11 @@ interface Session {
   /** Box 0.21.0: sites a touch screen may open, and the DevTools guard that enforces it. */
   sites: Set<string>;
   guard?: WebSocket;
+  /** Box 0.22.0: sends a DevTools command on the guard's connection. */
+  send?: (method: string, params: Record<string, unknown>) => void;
+  /** Box 0.22.0: the touch reader for this screen, and the page's size in CSS pixels. */
+  reader?: { kill(): void };
+  css?: { width: number; height: number };
 }
 
 export class LocalScreenDriver implements DisplayDriver {
@@ -254,7 +293,9 @@ export class LocalScreenDriver implements DisplayDriver {
       LIBSEAT_BACKEND: "seatd",
       WLR_LIBINPUT_NO_DEVICES: "1",
       // Box 0.21.0: input only when the venue switched touch on for this screen.
-      WLR_BACKENDS: touch ? "drm,libinput" : "drm",
+      // Box 0.22.0: cage never takes input (its touch doesn't reach Chromium on wlroots 0.15);
+      // a touch screen's touches come from touch-reader.py through DevTools instead.
+      WLR_BACKENDS: "drm",
       WLR_DRM_DEVICES: `/dev/dri/${c.card}`,
       HOME: this.runDir,
     };
@@ -272,12 +313,52 @@ export class LocalScreenDriver implements DisplayDriver {
         return { ok: false, message: `The screen didn't start: ${proc.tail().slice(-2).join(" ") || "unknown error"}` };
       }
       if (await this.pageWs()) {
-        if (touch) void this.guard(session);
+        if (touch) this.startTouch(session, c.modes[0]);
         return { ok: true, delivery: "local" };
       }
     }
-    if (touch) void this.guard(session);
+    if (touch) this.startTouch(session, c.modes[0]);
     return { ok: true, delivery: "local", message: "Starting (slow)" };
+  }
+
+  /** Box 0.22.0: the navigation guard plus the touch reader, while this kiosk runs. */
+  private startTouch(s: Session, mode: string | undefined): void {
+    void this.guard(s);
+    const [w, h] = (mode ?? "1920x1080").split("x").map(Number);
+    const scale = kioskScale(mode);
+    s.css = { width: Math.round((w || 1920) / scale), height: Math.round((h || 1080) / scale) };
+    void this.readTouches(s);
+  }
+
+  private async readTouches(s: Session): Promise<void> {
+    while (this.session === s && s.proc.alive) {
+      const reader = (this.o.touchReader ?? (() => defaultTouchReader(this.o.log)))();
+      s.reader = reader;
+      let down = 0;
+      try {
+        for await (const line of reader.lines) {
+          if (this.session !== s || !s.proc.alive) break;
+          let msg: Partial<TouchFrame> & { ready?: string[]; error?: string };
+          try {
+            msg = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (msg.ready) this.o.log?.info("local", "reading touches", { devices: msg.ready });
+          if (msg.error) this.o.log?.warn("local", "touch reader", { err: msg.error });
+          if (!Array.isArray(msg.points)) continue;
+          const ev = touchEventFor({ points: msg.points }, down, s.css ?? { width: 1920, height: 1080 });
+          down = msg.points.length;
+          if (ev) s.send?.("Input.dispatchTouchEvent", ev);
+        }
+      } catch {
+        /* the reader went away */
+      }
+      reader.kill();
+      if (s.reader === reader) s.reader = undefined;
+      if (this.session !== s || !s.proc.alive) return;
+      await this.o.runner?.sleep(5000); // unplugged, or no touchscreen yet: look again
+    }
   }
 
   /**
@@ -296,6 +377,9 @@ export class LocalScreenDriver implements DisplayDriver {
         const ws = new WebSocket(wsUrl);
         s.guard = ws;
         let id = 10;
+        s.send = (method, params) => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ id: id++, method, params }));
+        };
         ws.onopen = () => ws.send(JSON.stringify({ id: id++, method: "Fetch.enable", params: { patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }] } }));
         ws.onmessage = (ev) => {
           const msg = JSON.parse(String(ev.data)) as { method?: string; params?: { requestId: string; request: { url: string } } };
@@ -307,6 +391,7 @@ export class LocalScreenDriver implements DisplayDriver {
         ws.onerror = () => undefined;
         ws.onclose = () => {
           s.guard = undefined;
+          s.send = undefined;
           resolve();
         };
       });
@@ -352,6 +437,8 @@ export class LocalScreenDriver implements DisplayDriver {
   async stop(device: DisplayDevice): Promise<void> {
     if (this.session && `local:${this.session.connector}` === device.id) {
       this.session.guard?.close();
+      this.session.reader?.kill();
+      this.session.reader = undefined;
       this.session.proc.kill();
       this.session = undefined;
     }

@@ -256,7 +256,14 @@ test("local screens: connected outputs from sysfs; showing starts cage + Chromiu
 });
 
 test("local screens 0.21.0: touchscreens found, touch flags, venue-only pages", async () => {
-  const { touchDevices, kioskArgs, siteOf, allowedBy } = await import("./drivers/local/index.js");
+  const { touchDevices, kioskArgs, siteOf, allowedBy, touchEventFor } = await import("./drivers/local/index.js");
+  // Box 0.22.0: touch frames (0..1) → DevTools touch events in CSS pixels.
+  const css = { width: 1920, height: 1080 };
+  assert.deepEqual(touchEventFor({ points: [{ id: 3, x: 0.5, y: 0.25 }] }, 0, css), { type: "touchStart", touchPoints: [{ id: 3, x: 960, y: 270, radiusX: 8, radiusY: 8, force: 1 }] });
+  assert.equal(touchEventFor({ points: [{ id: 3, x: 0.6, y: 0.25 }] }, 1, css)?.type, "touchMove");
+  assert.equal(touchEventFor({ points: [{ id: 3, x: 0.6, y: 0.25 }, { id: 4, x: 0.1, y: 0.1 }] }, 1, css)?.type, "touchMove", "a second finger: Chromium sees it go down");
+  assert.deepEqual(touchEventFor({ points: [] }, 2, css), { type: "touchEnd", touchPoints: [] });
+  assert.equal(touchEventFor({ points: [] }, 0, css), undefined);
   const devices = [
     'I: Bus=0003 Vendor=222a Product=0001\nN: Name="ILITEK ILITEK-TP"\nB: EV=1b\nB: ABS=2608000 3',
     'I: Bus=0003\nN: Name="Logitech USB Keyboard"\nB: EV=120013',

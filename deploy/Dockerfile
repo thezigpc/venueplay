@@ -43,6 +43,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
  && rm /tmp/atv-requirements.txt
 COPY apps/broker/atv/atv-helper.py /usr/local/lib/bargames/atv-helper.py
 COPY apps/broker/atv/atv-stream.py /usr/local/lib/bargames/atv-stream.py
+# Box 0.22.0: touchscreens on plugged-in screens (evdev → DevTools touch events).
+COPY apps/broker/atv/touch-reader.py /usr/local/lib/bargames/touch-reader.py
 # Sound (Settings > Connected devices): ALSA for the box's jack/HDMI, BlueZ + BlueALSA for
 # Bluetooth speakers. bluetoothd and bluealsa run as root on the container's own D-Bus
 # (deploy/broker-start); the broker (node) drives them with bluetoothctl and aplay.

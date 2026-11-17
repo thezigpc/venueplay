@@ -17,6 +17,10 @@ if [ "$(id -u)" = 0 ]; then
     ( sleep 2; while :; do bluealsa -p a2dp-source > /tmp/bluealsa.log 2>&1; sleep 15; done ) &
   fi
   groups=$(id -G | tr ' ' ',')
+  # Box 0.22.0: the touch reader (as node) reads /dev/input: add that group, whatever its id here.
+  for ev in /dev/input/event*; do
+    [ -e "$ev" ] && groups="$groups,$(stat -c %g "$ev")" && break
+  done
   exec setpriv --reuid=1000 --regid=1000 --groups="$groups" --inh-caps=-all --bounding-set=-all env HOME=/home/node USER=node "$@"
 fi
 exec "$@"
