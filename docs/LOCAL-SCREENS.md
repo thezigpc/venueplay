@@ -43,5 +43,19 @@ can show anything a TV can (rooms, the idle screen, scenes, startup choices).
 factor of width/1920 when the screen is wider than 1920 (2 on a 4K TV), so TV pages lay out at
 1920x1080 CSS, as on every other path, and draw with all the screen's pixels.
 
+**Touch (box 0.21.0):** a touchscreen's USB cable goes into the box; its video goes in like any
+screen's. Then the TV's Setup tab has "Touch screen: people can tap it" (it names the
+touchscreen the box found).
+- **Off (the default):** cage runs with the DRM backend only (`WLR_BACKENDS=drm`), so the
+  screen takes no input at all, even with a keyboard or touchscreen plugged in.
+- **On:** `drm,libinput`, and Chromium gets touch events, no pinch zoom, no swipe-back and no
+  pop-ups.
+  - **Venue pages only:** a DevTools session fails any page load (main page or frame) outside
+    the venue's own sites, meaning the domain of every page the box sent that screen.
+  - **Typing:** games show GameKit 0.10.0's `<OnScreenKeyboard />`.
+- **Container:** the broker gets `/dev/input` (char major 13) and `/run/udev` (read-only, for
+  libinput). One touchscreen per box for now; with several screens, touch isn't matched to a
+  screen yet.
+
 **Limits:** the box's Intel graphics drive about 3 screens (it depends on the model's
 ports). 4K at 60 fps on DisplayPort; older HDMI ports top out at 4K30.

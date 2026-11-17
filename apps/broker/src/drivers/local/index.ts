@@ -75,13 +75,60 @@ export function kioskScale(mode: string | undefined): number {
   return w > 1920 ? Math.round((w / 1920) * 100) / 100 : 1;
 }
 
-export function kioskArgs(url: string, profileDir: string, debugPort: number, scale = 1): string[] {
+/**
+ * Box 0.21.0: touchscreens plugged into the box, from /proc/bus/input/devices: devices that
+ * report multi-touch positions (ABS_MT_POSITION_X, bit 53 of their ABS bits).
+ */
+export function touchDevices(text: string): string[] {
+  const out: string[] = [];
+  for (const block of text.split(/\n\s*\n/)) {
+    const name = /^N: Name="(.*)"$/m.exec(block)?.[1];
+    const abs = /^B: ABS=([0-9a-f ]+)$/m.exec(block)?.[1];
+    if (!name || !abs) continue;
+    // The bitmap is 64-bit words, most significant first: bit 53 is in the last word.
+    const words = abs.trim().split(/\s+/);
+    const low = BigInt(`0x${words[words.length - 1]}`);
+    if ((low >> 53n) & 1n) out.push(name);
+  }
+  return out;
+}
+
+/** Chromium flags for a touch screen: touch events, no pinch zoom or swipe-back, no pop-ups. */
+export const TOUCH_FLAGS = ["--touch-events=enabled", "--disable-pinch", "--overscroll-history-navigation=0", "--block-new-web-contents"];
+
+/**
+ * Box 0.21.0: the sites a touch screen may open: the venue's own (the domain of every page
+ * the box sent it, e.g. play.example.com → example.com and its subdomains; an IP as is).
+ */
+export function siteOf(url: string): string | undefined {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return undefined;
+    const host = u.hostname.toLowerCase();
+    if (/^[\d.]+$/.test(host) || host.includes(":") || !host.includes(".")) return host;
+    return host.split(".").slice(-2).join(".");
+  } catch {
+    return undefined;
+  }
+}
+export const allowedBy = (sites: Set<string>, url: string): boolean => {
+  if (!/^https?:/i.test(url)) return true; // data:, about:blank: the box's own pages
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return [...sites].some((s) => host === s || host.endsWith(`.${s}`));
+  } catch {
+    return false;
+  }
+};
+
+export function kioskArgs(url: string, profileDir: string, debugPort: number, scale = 1, touch = false): string[] {
   return [
     "-d", // cage: no client-side decorations
     "--",
     "chromium",
     "--ozone-platform=wayland",
     ...(scale !== 1 ? [`--force-device-scale-factor=${scale}`] : []),
+    ...(touch ? TOUCH_FLAGS : []),
     `--remote-debugging-port=${debugPort}`,
     "--remote-debugging-address=127.0.0.1",
     "--kiosk",
@@ -111,12 +158,18 @@ export interface LocalOptions {
   drmDir?: string;
   debugPort?: number;
   cage?: string;
+  /** Box 0.21.0: where to read the input devices (tests). */
+  inputDevices?: string;
 }
 
 interface Session {
   connector: string;
   proc: Proc;
   url: string;
+  touch: boolean;
+  /** Box 0.21.0: sites a touch screen may open, and the DevTools guard that enforces it. */
+  sites: Set<string>;
+  guard?: WebSocket;
 }
 
 export class LocalScreenDriver implements DisplayDriver {
@@ -149,7 +202,13 @@ export class LocalScreenDriver implements DisplayDriver {
 
   async capabilities(): Promise<Capabilities> {
     // Power and inputs come with an HDMI-CEC adapter (per screen); not built yet.
-    return { delivery: ["local" as DeliveryMethod], power: false, inputs: [] };
+    let devices: string[] = [];
+    try {
+      devices = touchDevices(readFileSync(this.o.inputDevices ?? "/proc/bus/input/devices", "utf8"));
+    } catch {
+      /* no /proc here (tests) */
+    }
+    return { delivery: ["local" as DeliveryMethod], power: false, inputs: [], touch: { devices } };
   }
 
   async power(): Promise<void> {
@@ -175,8 +234,11 @@ export class LocalScreenDriver implements DisplayDriver {
     const c = readConnectors(this.drmDir).find((x) => `local:${x.name}` === device.id);
     if (!c?.connected) return { ok: false, message: "That screen is unplugged or switched off." };
 
+    const touch = device.touch === true;
     const s = this.session;
-    if (s && s.proc.alive && s.connector === c.name) {
+    if (s && s.proc.alive && s.connector === c.name && s.touch === touch) {
+      const site = siteOf(url);
+      if (site) s.sites.add(site);
       if (await this.navigate(url)) {
         s.url = url;
         return { ok: true, delivery: "local" };
@@ -191,13 +253,17 @@ export class LocalScreenDriver implements DisplayDriver {
       XDG_RUNTIME_DIR: `${this.runDir}/xdg`,
       LIBSEAT_BACKEND: "seatd",
       WLR_LIBINPUT_NO_DEVICES: "1",
+      // Box 0.21.0: input only when the venue switched touch on for this screen.
+      WLR_BACKENDS: touch ? "drm,libinput" : "drm",
       WLR_DRM_DEVICES: `/dev/dri/${c.card}`,
       HOME: this.runDir,
     };
     const { mkdirSync } = await import("node:fs");
     mkdirSync(env.XDG_RUNTIME_DIR, { recursive: true, mode: 0o700 });
-    const proc = runner.spawn(`local:${c.name}`, this.o.cage ?? "cage", kioskArgs(url, `${this.runDir}/chromium`, this.debugPort, kioskScale(c.modes[0])), env);
-    this.session = { connector: c.name, proc, url };
+    const proc = runner.spawn(`local:${c.name}`, this.o.cage ?? "cage", kioskArgs(url, `${this.runDir}/chromium`, this.debugPort, kioskScale(c.modes[0]), touch), env);
+    const site = siteOf(url);
+    const session: Session = { connector: c.name, proc, url, touch, sites: new Set(site ? [site] : []) };
+    this.session = session;
     // Ready once DevTools answers (Chromium is up on the screen).
     for (let i = 0; i < 40; i++) {
       await runner.sleep(250);
@@ -205,9 +271,47 @@ export class LocalScreenDriver implements DisplayDriver {
         this.o.log?.warn("local", "kiosk exited", { connector: c.name, tail: proc.tail().slice(-8) });
         return { ok: false, message: `The screen didn't start: ${proc.tail().slice(-2).join(" ") || "unknown error"}` };
       }
-      if (await this.pageWs()) return { ok: true, delivery: "local" };
+      if (await this.pageWs()) {
+        if (touch) void this.guard(session);
+        return { ok: true, delivery: "local" };
+      }
     }
+    if (touch) void this.guard(session);
     return { ok: true, delivery: "local", message: "Starting (slow)" };
+  }
+
+  /**
+   * Box 0.21.0: on a touch screen, people can only open the venue's own pages. A DevTools
+   * session pauses every page load (main page and frames) and fails those on other sites.
+   * Reconnects while the kiosk runs.
+   */
+  private async guard(s: Session): Promise<void> {
+    while (this.session === s && s.proc.alive && !s.guard) {
+      const wsUrl = await this.pageWs();
+      if (!wsUrl) {
+        await this.o.runner?.sleep(2000);
+        continue;
+      }
+      await new Promise<void>((resolve) => {
+        const ws = new WebSocket(wsUrl);
+        s.guard = ws;
+        let id = 10;
+        ws.onopen = () => ws.send(JSON.stringify({ id: id++, method: "Fetch.enable", params: { patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }] } }));
+        ws.onmessage = (ev) => {
+          const msg = JSON.parse(String(ev.data)) as { method?: string; params?: { requestId: string; request: { url: string } } };
+          if (msg.method !== "Fetch.requestPaused" || !msg.params) return;
+          const ok = allowedBy(s.sites, msg.params.request.url);
+          if (!ok) this.o.log?.info("local", "blocked a page on the touch screen", { url: msg.params.request.url.slice(0, 120) });
+          ws.send(JSON.stringify({ id: id++, method: ok ? "Fetch.continueRequest" : "Fetch.failRequest", params: ok ? { requestId: msg.params.requestId } : { requestId: msg.params.requestId, errorReason: "BlockedByClient" } }));
+        };
+        ws.onerror = () => undefined;
+        ws.onclose = () => {
+          s.guard = undefined;
+          resolve();
+        };
+      });
+      await this.o.runner?.sleep(2000);
+    }
   }
 
   /** The page's DevTools WebSocket URL, once Chromium is up. */
@@ -247,6 +351,7 @@ export class LocalScreenDriver implements DisplayDriver {
 
   async stop(device: DisplayDevice): Promise<void> {
     if (this.session && `local:${this.session.connector}` === device.id) {
+      this.session.guard?.close();
       this.session.proc.kill();
       this.session = undefined;
     }

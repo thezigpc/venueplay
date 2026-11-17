@@ -134,16 +134,22 @@ export class DisplayRegistry {
     return replaced;
   }
 
-  async patch(id: string, patch: Partial<Pick<DisplayRecord, "label" | "group" | "delivery">> & { streamSettings?: StreamSettings | null }): Promise<DisplayRecord> {
+  async patch(id: string, patch: Partial<Pick<DisplayRecord, "label" | "group" | "delivery" | "touch">> & { streamSettings?: StreamSettings | null }): Promise<DisplayRecord> {
     const cur = this.get(id);
     if (!cur) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
     const { streamSettings, ...rest } = patch;
     const next: DisplayRecord = { ...cur, ...rest };
+    if (next.touch === false) delete next.touch;
     if (streamSettings === null) delete next.streamSettings;
     else if (streamSettings) next.streamSettings = streamSettings;
     await this.store.update((s) => {
       s.displays = s.displays.map((d) => (d.id === id ? next : d));
     });
+    // Box 0.21.0: touch on or off restarts a plugged-in screen's kiosk (its input and flags).
+    if (Boolean(cur.touch) !== Boolean(next.touch) && next.driver === "local") {
+      await this.driverFor(next).stop(next).catch(() => undefined);
+      if (next.content && playable(next.content).kind === "url") await this.show({ displayIds: [id] }, next.content).catch(() => undefined);
+    }
     // New settings take effect now on a TV that's casting: show its content again.
     if (streamSettings !== undefined && JSON.stringify(cur.streamSettings) !== JSON.stringify(next.streamSettings) && this.driverFor(next).streamState?.(next)) {
       if (next.content && playable(next.content).kind === "url") await this.show({ displayIds: [id] }, next.content).catch(() => undefined);

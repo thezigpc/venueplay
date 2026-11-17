@@ -99,9 +99,13 @@ services:
     # device rule, so a box without sound hardware still starts), Bluetooth pairings kept in
     # data/bluetooth. NET_ADMIN is for bluetoothd (root, in this container); the broker
     # process itself still drops every capability (broker-start).
-    volumes: ["./data/broker:/data", "./data/bluetooth:/var/lib/bluetooth", "/dev/snd:/dev/snd"]
+    # Box 0.21.0: touchscreens on plugged-in screens (/dev/input, char major 13, plus udev's
+    # device list for libinput). Only read when a screen's Touch is switched on.
+    volumes: ["./data/broker:/data", "./data/bluetooth:/var/lib/bluetooth", "/dev/snd:/dev/snd", "/dev/input:/dev/input", "/run/udev:/run/udev:ro"]
     devices: ["/dev/dri:/dev/dri"]
-    device_cgroup_rules: ["c 116:* rmw"]
+    device_cgroup_rules: ["c 116:* rmw", "c 13:* rmw"]
+    # Reaps exited Chromium helpers (they piled up as zombies under the broker).
+    init: true
     cap_add: [NET_ADMIN]
     group_add: ["${RENDER_GID:-991}", "${VIDEO_GID:-44}", "${AUDIO_GID:-29}"]
     shm_size: 2gb

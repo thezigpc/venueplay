@@ -164,7 +164,11 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
   app.patch(
     "/displays/:id",
     h(async (req, res) => {
-      const { label, group, delivery, streamSettings, ignored } = req.body ?? {};
+      const { label, group, delivery, streamSettings, ignored, touch } = req.body ?? {};
+      if (touch !== undefined) {
+        if (typeof touch !== "boolean") return void res.status(400).json({ error: "touch: true or false" });
+        if (one(req.params.id).driver !== "local") return void res.status(400).json({ error: "touch is for screens plugged into the box" });
+      }
       if (ignored !== undefined) {
         if (typeof ignored !== "boolean") return void res.status(400).json({ error: "ignored: true or false" });
         await d.registry.setIgnored(req.params.id, ignored);
@@ -175,7 +179,7 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
         const problem = checkStreamSettings(streamSettings);
         if (problem) return void res.status(400).json({ error: problem });
       }
-      res.json(await d.registry.patch(req.params.id, { label, group, delivery: delivery as DeliveryMethod | undefined, streamSettings: streamSettings as StreamSettings | null | undefined }));
+      res.json(await d.registry.patch(req.params.id, { label, group, delivery: delivery as DeliveryMethod | undefined, streamSettings: streamSettings as StreamSettings | null | undefined, ...(touch !== undefined ? { touch } : {}) }));
     }),
   );
 

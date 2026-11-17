@@ -54,6 +54,11 @@ export interface DisplayDevice {
   /** The venue's choice for this TV; absent: the box default (1080p, 30 fps, automatic bitrate). */
   streamSettings?: StreamSettings;
   /**
+   * Box 0.21.0, plugged-in screens: people may touch it (a touchscreen). Off: the screen
+   * takes no input at all, even with a touchscreen or keyboard plugged in.
+   */
+  touch?: boolean;
+  /**
    * Plugged-in screens (scaffolding): the HDMI-CEC adapter that controls this screen's
    * power and input, e.g. "/dev/ttyACM0" (Pulse-Eight USB-CEC). Not used yet.
    */
@@ -76,6 +81,8 @@ export interface Capabilities {
   tvChannels?: boolean;
   /** TV control (power, input, remote) needs a one-time PIN pairing (Vizio, Apple TV). */
   control?: { paired: boolean };
+  /** Box 0.21.0, plugged-in screens: touch can be switched on; `devices`: touchscreens the box sees. */
+  touch?: { devices: string[] };
 }
 
 export type DisplayContent =

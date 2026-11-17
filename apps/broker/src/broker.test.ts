@@ -244,6 +244,8 @@ test("local screens: connected outputs from sysfs; showing starts cage + Chromiu
   assert.equal(spawned[0].args.at(-1), "http://play.example.com/bingo/tv");
   assert.ok(spawned[0].args.includes("--ozone-platform=wayland"));
   assert.ok(spawned[0].args.includes("--force-device-scale-factor=2"), "4K screen: pages at 1920x1080 CSS, drawn at 2x");
+  assert.equal(spawned[0].env.WLR_BACKENDS, "drm", "touch off: no input at all");
+  assert.ok(!spawned[0].args.includes("--touch-events=enabled"));
   const { kioskScale } = await import("./drivers/local/index.js");
   assert.deepEqual(["3840x2160", "2560x1440", "1920x1080", "1280x720", undefined].map(kioskScale), [2, 1.33, 1, 1, 1]);
   assert.equal(spawned[0].env.WLR_DRM_DEVICES, "/dev/dri/card0");
@@ -251,6 +253,30 @@ test("local screens: connected outputs from sysfs; showing starts cage + Chromiu
   assert.equal((await drv.show(screen, { kind: "external", provider: "youtube", app: "youtube" })).ok, false);
   const [dp] = [{ ...screen, id: "local:DP-1" }];
   assert.equal((await drv.show(dp, { kind: "off" })).ok, false, "unplugged screen");
+});
+
+test("local screens 0.21.0: touchscreens found, touch flags, venue-only pages", async () => {
+  const { touchDevices, kioskArgs, siteOf, allowedBy } = await import("./drivers/local/index.js");
+  const devices = [
+    'I: Bus=0003 Vendor=222a Product=0001\nN: Name="ILITEK ILITEK-TP"\nB: EV=1b\nB: ABS=2608000 3',
+    'I: Bus=0003\nN: Name="Logitech USB Keyboard"\nB: EV=120013',
+    'N: Name="Some Mouse"\nB: ABS=3',
+    'N: Name="eGalax Touch"\nB: ABS=1 260800000000003',
+  ].join("\n\n");
+  // ABS_MT_POSITION_X is bit 53: 0x0020000000000000. "2608000 3" isn't it; the eGalax word is.
+  assert.deepEqual(touchDevices(devices), ["eGalax Touch"]);
+  assert.deepEqual(touchDevices('N: Name="Panel"\nB: ABS=6e18000 0\n\nN: Name="Touch"\nB: ABS=661800011000003'), ["Touch"]);
+  const args = kioskArgs("https://play.example.com/x", "/p", 1, 1, true);
+  for (const f of ["--touch-events=enabled", "--disable-pinch", "--overscroll-history-navigation=0", "--block-new-web-contents"]) assert.ok(args.includes(f), f);
+  assert.equal(siteOf("https://play.example.com/bingo/"), "example.com");
+  assert.equal(siteOf("http://192.168.1.5/admin"), "192.168.1.5");
+  assert.equal(siteOf("data:text/html,x"), undefined);
+  const sites = new Set(["example.com"]);
+  assert.ok(allowedBy(sites, "https://bingo.example.com/room/AB"));
+  assert.ok(allowedBy(sites, "https://example.com/"));
+  assert.ok(allowedBy(sites, "data:text/html,hi"));
+  assert.ok(!allowedBy(sites, "https://evil.com/"));
+  assert.ok(!allowedBy(sites, "https://notexample.com/"));
 });
 
 test("system: host network interfaces from /proc/net/dev (bridges and veths left out)", async () => {

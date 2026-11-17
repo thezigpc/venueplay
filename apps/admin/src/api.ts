@@ -281,7 +281,9 @@ export interface Display {
   model?: string;
   isTv?: boolean;
   delivery?: string;
-  capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[]; apps?: boolean; text?: boolean; tvChannels?: boolean; control?: { paired: boolean } };
+  capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[]; apps?: boolean; text?: boolean; tvChannels?: boolean; control?: { paired: boolean }; touch?: { devices: string[] } };
+  /** Box 0.21.0: a plugged-in screen people may touch. */
+  touch?: boolean;
   streamSettings?: StreamSettings;
   health?: { online: boolean; powerMode?: string; detail?: string };
   content?: { kind: string; url?: string; title?: string; app?: string; provider?: string };
@@ -482,7 +484,7 @@ export const api = {
   /** Vizio TV control: no code → the TV shows a PIN; with the PIN → paired. */
   pairControl: (id: string, code?: string) => call<ShowResult>("POST", `/broker/displays/${encodeURIComponent(id)}/pair-control`, code ? { code } : {}),
   setInput: (id: string, input: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/input`, { input }),
-  patchDisplay: (id: string, patch: { label?: string; group?: string; delivery?: string; streamSettings?: StreamSettings | null }) =>
+  patchDisplay: (id: string, patch: { label?: string; group?: string; delivery?: string; streamSettings?: StreamSettings | null; touch?: boolean }) =>
     call<Display>("PATCH", `/broker/displays/${encodeURIComponent(id)}`, patch),
   tvStartup: () => call<Record<string, StartupRule>>("GET", "/tv-startup"),
   setTvStartup: (id: string, rule: StartupRule) => call<Record<string, StartupRule>>("PUT", `/tv-startup/${encodeURIComponent(id)}`, rule),

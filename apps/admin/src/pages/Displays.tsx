@@ -263,6 +263,7 @@ function TvPanel({
   reloadMedia: () => unknown;
 }) {
   const [settings, setSettings] = useState<StreamSettings | null>(d.streamSettings ?? null);
+  const [touch, setTouch] = useState(Boolean(d.touch));
   const [label, setLabel] = useState(d.label ?? "");
   const [group, setGroup] = useState(d.group ?? "");
   const [delivery, setDelivery] = useState(d.delivery ?? "");
@@ -385,13 +386,26 @@ function TvPanel({
             </select>
           </label>
           {canPair && <StreamSettingsFields value={settings} onChange={setSettings} />}
+          {d.capabilities?.touch && (
+            <div className="touch-setting">
+              <label className="inline">
+                <input type="checkbox" checked={touch} onChange={(e) => setTouch(e.target.checked)} style={{ width: "auto" }} /> Touch screen: people can tap it
+              </label>
+              <p className="muted small-print">
+                {d.capabilities.touch.devices.length
+                  ? `Touchscreen found: ${d.capabilities.touch.devices.join(", ")}.`
+                  : "No touchscreen found yet: plug its USB cable into the box."}{" "}
+                With touch on, the screen only opens the venue's own pages, and games show their own big keyboard. Off: the screen ignores any touch, mouse or keyboard.
+              </p>
+            </div>
+          )}
           <div className="buttons">
             <button
               className="primary"
               disabled={busy}
               onClick={() =>
                 run(async () => {
-                  await api.patchDisplay(d.id, { label, group, delivery: delivery || undefined, ...(canPair ? { streamSettings: settings } : {}) });
+                  await api.patchDisplay(d.id, { label, group, delivery: delivery || undefined, ...(canPair ? { streamSettings: settings } : {}), ...(d.capabilities?.touch && touch !== Boolean(d.touch) ? { touch } : {}) });
                   setSaved("Saved.");
                 })
               }
