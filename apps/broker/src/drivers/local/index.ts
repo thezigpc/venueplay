@@ -181,6 +181,14 @@ export interface LocalOptions {
    * Tests pass their own; absent here means the image's script under python3.
    */
   touchReader?: () => { lines: AsyncIterable<string>; kill(): void };
+  /**
+   * Box 0.23.0: how touch reaches the page. "native": cage reads the touchscreen (cage 0.2 /
+   * wlroots 0.18, the Debian 13 image), so taps reach dropdowns and dialogs too. "devtools":
+   * the broker reads it and sends DevTools touch events, answers dialogs and shows dropdowns
+   * on the page (cage 0.1.4, whose touch never reaches Chromium). Default: LOCAL_TOUCH, else
+   * "devtools".
+   */
+  touchMode?: "native" | "devtools";
 }
 
 /** A touch frame from touch-reader.py: 0..1 across and down the screen. */
@@ -309,7 +317,7 @@ export class LocalScreenDriver implements DisplayDriver {
       // Box 0.21.0: input only when the venue switched touch on for this screen.
       // Box 0.22.0: cage never takes input (its touch doesn't reach Chromium on wlroots 0.15);
       // a touch screen's touches come from touch-reader.py through DevTools instead.
-      WLR_BACKENDS: "drm",
+      WLR_BACKENDS: touch && this.native ? "drm,libinput" : "drm",
       WLR_DRM_DEVICES: `/dev/dri/${c.card}`,
       HOME: this.runDir,
     };
@@ -336,8 +344,14 @@ export class LocalScreenDriver implements DisplayDriver {
   }
 
   /** Box 0.22.0: the navigation guard plus the touch reader, while this kiosk runs. */
+  /** Box 0.23.0: cage takes the touchscreen itself (see LocalOptions.touchMode). */
+  private get native(): boolean {
+    return (this.o.touchMode ?? process.env.LOCAL_TOUCH) === "native";
+  }
+
   private startTouch(s: Session, mode: string | undefined): void {
     void this.guard(s);
+    if (this.native) return;
     const [w, h] = (mode ?? "1920x1080").split("x").map(Number);
     const scale = kioskScale(mode);
     s.css = { width: Math.round((w || 1920) / scale), height: Math.round((h || 1080) / scale) };
@@ -398,15 +412,17 @@ export class LocalScreenDriver implements DisplayDriver {
           ws.send(JSON.stringify({ id: id++, method: "Fetch.enable", params: { patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }] } }));
           ws.send(JSON.stringify({ id: id++, method: "Page.enable", params: {} }));
           // Box 0.22.1: dropdowns as on-page lists, in every page from now on and this one.
-          ws.send(JSON.stringify({ id: id++, method: "Page.addScriptToEvaluateOnNewDocument", params: { source: TOUCH_PAGE_SCRIPT } }));
-          ws.send(JSON.stringify({ id: id++, method: "Runtime.evaluate", params: { expression: TOUCH_PAGE_SCRIPT } }));
+          if (!this.native) {
+            ws.send(JSON.stringify({ id: id++, method: "Page.addScriptToEvaluateOnNewDocument", params: { source: TOUCH_PAGE_SCRIPT } }));
+            ws.send(JSON.stringify({ id: id++, method: "Runtime.evaluate", params: { expression: TOUCH_PAGE_SCRIPT } }));
+          }
         };
         ws.onmessage = (ev) => {
           const msg = JSON.parse(String(ev.data)) as { method?: string; params?: { requestId: string; request: { url: string } } };
           // Box 0.22.1: alert/confirm/prompt/"leave this page?" open as a separate Chromium
           // window that touch can't reach, and the page is frozen until it's answered. Answer
           // it here (the tap on the button was the decision); show an alert's text on the page.
-          if (msg.method === "Page.javascriptDialogOpening") {
+          if (msg.method === "Page.javascriptDialogOpening" && !this.native) {
             const d = msg.params as unknown as { type: string; message: string; defaultPrompt?: string };
             const answer = dialogAnswer(d);
             ws.send(JSON.stringify({ id: id++, method: "Page.handleJavaScriptDialog", params: answer }));

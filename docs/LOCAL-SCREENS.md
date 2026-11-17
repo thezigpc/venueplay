@@ -43,6 +43,8 @@ can show anything a TV can (rooms, the idle screen, scenes, startup choices).
 factor of width/1920 when the screen is wider than 1920 (2 on a 4K TV), so TV pages lay out at
 1920x1080 CSS, as on every other path, and draw with all the screen's pixels.
 
+**Box 0.23.0:** the broker image is Debian 13, and cage 0.2 / wlroots 0.18 give Chromium real touch (`LOCAL_TOUCH=native`, the image's default): taps reach dropdowns and dialogs like on any tablet. The DevTools passthrough below stays as `LOCAL_TOUCH=devtools`.
+
 **Touch (box 0.21.0):** a touchscreen's USB cable goes into the box; its video goes in like any
 screen's. Then the TV's Setup tab has "Touch screen: people can tap it" (it names the
 touchscreen the box found).

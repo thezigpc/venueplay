@@ -29,8 +29,19 @@ CMD ["node", "apps/core/dist/index.js"]
 #   Xvfb (virtual display) -> Chromium (kiosk, the game's TV view) -> doubletake
 #   (AirPlay mirroring sender, LGPL-3.0, prebuilt static binary) encoding H.264 with
 #   GStreamer + Intel VA-API (QuickSync; intel-media-va-driver-non-free).
-FROM app AS broker
-USER root
+# Box 0.23.0: on Debian 13 (trixie): cage 0.2 / wlroots 0.18 give plugged-in screens real
+# touch (cage 0.1.4 on Debian 12 never offered it to Chromium). Core and gateway stay on the
+# plain node image.
+FROM node:22-trixie-slim AS broker
+WORKDIR /app
+ARG BOX_VERSION=dev
+ENV NODE_ENV=production BARGAMES_VERSION=$BOX_VERSION LOCAL_TOUCH=native
+COPY --from=build /app/package.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages ./packages
+COPY --from=build /app/apps/broker/dist ./apps/broker/dist
+COPY --from=build /app/apps/broker/package.json ./apps/broker/
+RUN mkdir -p /data && chown node:node /data
 RUN sed -i "s/Components: main/Components: main contrib non-free non-free-firmware/" /etc/apt/sources.list.d/debian.sources  && apt-get update && apt-get install -y --no-install-recommends       xvfb xdotool chromium fonts-dejavu-core fonts-liberation fonts-noto-color-emoji       gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad       gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-x       intel-media-va-driver-non-free vainfo pulseaudio-utils ca-certificates cage seatd xwayland libgl1-mesa-dri  && rm -rf /var/lib/apt/lists/*
 # doubletake v0.5.0 (https://github.com/omarroth/doubletake). Pinned by checksum.
 ADD --checksum=sha256:59027455bb844f15119232600569aded721203271001591a0afc5a0d07c06b5c     https://github.com/omarroth/doubletake/releases/download/v0.5.0/doubletake /usr/local/bin/doubletake

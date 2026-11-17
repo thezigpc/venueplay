@@ -245,6 +245,12 @@ test("local screens: connected outputs from sysfs; showing starts cage + Chromiu
   assert.ok(spawned[0].args.includes("--ozone-platform=wayland"));
   assert.ok(spawned[0].args.includes("--force-device-scale-factor=2"), "4K screen: pages at 1920x1080 CSS, drawn at 2x");
   assert.equal(spawned[0].env.WLR_BACKENDS, "drm", "touch off: no input at all");
+  // Box 0.23.0: native touch (Debian 13's cage) reads the touchscreen through libinput.
+  const spawned2: typeof spawned = [];
+  const native = new LocalScreenDriver({ drmDir: drm, runner: { ...runner, spawn: (name: string, cmd: string, args: string[], env: Record<string, string>) => (spawned2.push({ cmd, args, env } as (typeof spawned)[number]), runner.spawn(name, cmd, args, env)) } as typeof runner, runDir: mkdtempSync(path.join(tmpdir(), "bg-local-")), debugPort: 1, touchMode: "native", touchReader: () => ({ lines: (async function* () {})(), kill: () => undefined }) });
+  await native.show({ ...screen, touch: true }, { kind: "url", url: "http://play.example.com/bingo/tv" });
+  assert.equal(spawned2[0].env.WLR_BACKENDS, "drm,libinput");
+  await native.stop({ ...screen, touch: true }); // ends its navigation guard
   assert.ok(!spawned[0].args.includes("--touch-events=enabled"));
   const { kioskScale } = await import("./drivers/local/index.js");
   assert.deepEqual(["3840x2160", "2560x1440", "1920x1080", "1280x720", undefined].map(kioskScale), [2, 1.33, 1, 1, 1]);
