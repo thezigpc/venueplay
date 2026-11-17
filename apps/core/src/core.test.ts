@@ -113,6 +113,13 @@ test("api: setup, install, brand, events, gateway config", async () => {
     assert.equal(underAdmin.status, 200);
     assert.match(underAdmin.headers.get("set-cookie")!, /bg_admin=[^;]+;.*Path=\/admin\/;/);
     assert.match(underAdmin.headers.get("set-cookie")!, /SameSite=Lax/, "Lax: iPad Safari withheld the Strict cookie");
+    // Box 0.19.3: the same session in a header (or ?bg_session= on GETs, for <img>), for browsers that drop the cookie.
+    const { session } = (await underAdmin.json()) as { session?: string };
+    assert.ok(session);
+    assert.equal((await json("GET", "/api/games", undefined, { "x-bargames-admin-session": session! })).status, 200);
+    assert.equal((await json("GET", `/api/games?bg_session=${encodeURIComponent(session!)}`)).status, 200);
+    assert.equal((await json("GET", "/api/games", undefined, { "x-bargames-admin-session": "nope" })).status, 401);
+    assert.equal((await json("POST", `/api/games/x/enable?bg_session=${encodeURIComponent(session!)}`, {})).status, 401, "not on changes");
 
     // Box 0.15.1: changing the password ends every other session, here and (through the
     // gateway's staffNotBefore) staff sign-ins in games; the browser that changed it stays in.

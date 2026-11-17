@@ -10,10 +10,48 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Box 0.19.3: the admin session for a browser that won't keep the sign-in cookie (an iPad:
+ * right password, then signed out again). Only used then; normally the httpOnly cookie does it.
+ */
+const SESSION_KEY = "bg_admin_session";
+const store = (): Storage | undefined => {
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+};
+let fallbackSession: string | undefined = (() => {
+  try {
+    return store()?.getItem(SESSION_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+})();
+export function setFallbackSession(session: string | undefined): void {
+  fallbackSession = session || undefined;
+  try {
+    if (fallbackSession) store()?.setItem(SESSION_KEY, fallbackSession);
+    else store()?.removeItem(SESSION_KEY);
+  } catch {
+    /* private mode: kept for this page only */
+  }
+}
+export const usingFallbackSession = () => Boolean(fallbackSession);
+/** An /api URL for an <img> (it can't send the header). */
+function imgUrl(path: string): string {
+  const u = bgUrl(`/api${path}`);
+  return fallbackSession ? `${u}${u.includes("?") ? "&" : "?"}bg_session=${encodeURIComponent(fallbackSession)}` : u;
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (body) headers["content-type"] = "application/json";
+  if (fallbackSession) headers["x-bargames-admin-session"] = fallbackSession;
   const res = await fetch(bgUrl(`/api${path}`), {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
+    headers,
     body: body ? JSON.stringify(body) : undefined,
     credentials: "same-origin",
   });
@@ -324,10 +362,18 @@ export interface Announcement {
 export const api = {
   authStatus: () => call<{ setup: boolean; loggedIn: boolean; canSetup: boolean; title?: string }>("GET", "/auth/status"),
   setup: (password: string) => call("POST", "/auth/setup", { password }),
-  login: (password: string, remember = false) => call("POST", "/auth/login", { password, remember }),
-  logout: () => call("POST", "/auth/logout"),
-  changePassword: (current: string, next: string) => call<{ ok: boolean }>("POST", "/auth/password", { current, next }),
-  logoutEverywhere: () => call<{ ok: boolean }>("POST", "/auth/logout-everywhere", {}),
+  login: (password: string, remember = false) => call<{ ok: boolean; session?: string }>("POST", "/auth/login", { password, remember }),
+  logout: () => call("POST", "/auth/logout").finally(() => setFallbackSession(undefined)),
+  changePassword: (current: string, next: string) =>
+    call<{ ok: boolean; session?: string }>("POST", "/auth/password", { current, next }).then((r) => {
+      if (usingFallbackSession() && r.session) setFallbackSession(r.session);
+      return r;
+    }),
+  logoutEverywhere: () =>
+    call<{ ok: boolean; session?: string }>("POST", "/auth/logout-everywhere", {}).then((r) => {
+      if (usingFallbackSession() && r.session) setFallbackSession(r.session);
+      return r;
+    }),
   system: () => call<{ version: string; runtime: string; broker: boolean }>("GET", "/system"),
   venue: () => call<VenueView>("GET", "/venue"),
   saveVenue: (v: Partial<Venue>) => call<VenueView>("PUT", "/venue", v),
@@ -422,10 +468,10 @@ export const api = {
   key: (id: string, key: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/key`, { key }),
   tvApps: (id: string) => call<{ apps: { id: string; name: string }[]; active?: string }>("GET", `/broker/displays/${encodeURIComponent(id)}/apps`),
   launchTvApp: (id: string, appId: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/apps/${encodeURIComponent(appId)}/launch`),
-  tvAppIconUrl: (id: string, appId: string) => bgUrl(`/api/broker/displays/${encodeURIComponent(id)}/apps/${encodeURIComponent(appId)}/icon`),
+  tvAppIconUrl: (id: string, appId: string) => imgUrl(`/broker/displays/${encodeURIComponent(id)}/apps/${encodeURIComponent(appId)}/icon`),
   typeText: (id: string, text: string) => call("POST", `/broker/displays/${encodeURIComponent(id)}/text`, { text }),
   /** For <img src>: changes every call so the browser fetches a fresh picture. */
-  previewUrl: (id: string) => bgUrl(`/api/broker/displays/${encodeURIComponent(id)}/preview?t=${Date.now()}`),
+  previewUrl: (id: string) => imgUrl(`/broker/displays/${encodeURIComponent(id)}/preview?t=${Date.now()}`),
   power: (id: string, on: boolean) => call("POST", `/broker/displays/${encodeURIComponent(id)}/power`, { on }),
   pair: (id: string, code?: string) => call<ShowResult>("POST", `/broker/displays/${encodeURIComponent(id)}/pair`, code ? { code } : {}),
   /** Box 0.19.0: guest hosts (one app's controls for a guest). */
@@ -441,7 +487,7 @@ export const api = {
   command: (id: string, body: { command: string; roomCode?: string; args?: Record<string, unknown> }) =>
     call<{ ok: boolean; message?: string; data?: unknown }>("POST", `/games/${encodeURIComponent(id)}/command`, body),
   rooms: () => call<RoomsOverview>("GET", "/rooms"),
-  hostQrUrl: (gameId: string, code: string) => bgUrl(`/api/rooms/${encodeURIComponent(gameId)}/${encodeURIComponent(code)}/host.svg`),
+  hostQrUrl: (gameId: string, code: string) => imgUrl(`/rooms/${encodeURIComponent(gameId)}/${encodeURIComponent(code)}/host.svg`),
   announcement: () => call<Announcement | null>("GET", "/announcement"),
   announce: (text: string, minutes?: number, where: { show?: "everywhere" | "phones" | "tvs"; position?: "top" | "bottom" } = {}) => call<Announcement>("PUT", "/announcement", { text, minutes, ...where }),
   clearAnnouncement: () => call<null>("DELETE", "/announcement"),
@@ -452,7 +498,7 @@ export const api = {
   integrationAction: (id: string, action: string) => call<{ ok: boolean }>("POST", `/integrations/${encodeURIComponent(id)}/actions/${encodeURIComponent(action)}`, {}),
   approveIntegration: (id: string) => call<Integration>("POST", `/integrations/${encodeURIComponent(id)}/approve`, {}),
   integrationSettings: (id: string, values: Record<string, string | null>) => call<Integration>("PUT", `/integrations/${encodeURIComponent(id)}/settings`, { values }),
-  integrationQrUrl: (id: string, at?: string) => bgUrl(`/api/integrations/${encodeURIComponent(id)}/pairing.svg${at ? `?at=${encodeURIComponent(at)}` : ""}`),
+  integrationQrUrl: (id: string, at?: string) => imgUrl(`/integrations/${encodeURIComponent(id)}/pairing.svg${at ? `?at=${encodeURIComponent(at)}` : ""}`),
   // Connected devices (box 0.15.0): sound outputs and Bluetooth speakers, kept by the broker.
   audio: () => call<AudioState>("GET", "/broker/audio"),
   audioOutput: (id: string, patch: { label?: string | null; volume?: number; default?: true }) => call<AudioOutputView>("PATCH", `/broker/audio/outputs/${encodeURIComponent(id)}`, patch),

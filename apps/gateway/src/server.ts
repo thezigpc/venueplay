@@ -175,6 +175,8 @@ export function createGateway(d: GatewayDeps) {
     const cookies = withoutGuestCookies(base);
     if (cookies) req.headers.cookie = cookies;
     else delete req.headers.cookie;
+    // Box 0.19.3: the admin session can also come as a header (browsers that drop the cookie); games never get it.
+    if (route.kind !== "admin") delete req.headers["x-bargames-admin-session"];
     if (decision.clientIp) req.headers[HEADERS.clientIp] = decision.clientIp;
     if (decision.reason) req.headers[HEADERS.access] = decision.reason;
     req.headers["x-forwarded-proto"] = header(req, "cf-connecting-ip") ? "https" : "http";

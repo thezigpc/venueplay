@@ -39,6 +39,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isIP } from "node:net";
 import { ADMIN_COOKIE, AdminAuth, readCookie, REMEMBER_MS } from "./auth.js";
+/** Box 0.19.3: the admin session in a header, for browsers that drop the cookie. */
+const ADMIN_SESSION_HEADER = "x-bargames-admin-session";
 import type { CloudflareService } from "./cloudflare/service.js";
 import type { EventBus } from "./events.js";
 import { GameRegistry, HttpError } from "./games.js";
@@ -468,9 +470,23 @@ export function createApp(d: AppDeps) {
     return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
   };
 
+  /**
+   * Box 0.19.3: the admin session, from the cookie or, for a browser that won't keep it (an
+   * iPad at the venue: right password, then signed out again), the same token sent by the
+   * admin page in a header. Image URLs (previews, QR codes) can't send headers, so GETs also
+   * take it as ?bg_session=.
+   */
+  const adminSession = (req: Request): string | undefined => {
+    const header = req.headers[ADMIN_SESSION_HEADER];
+    if (typeof header === "string" && header) return header;
+    const q = req.method === "GET" ? req.query?.bg_session : undefined;
+    if (typeof q === "string" && q) return q;
+    return readCookie(req.headers.cookie, ADMIN_COOKIE);
+  };
+
   app.get("/api/auth/status", (req, res) => {
     // title: the venue's own name for this admin (shown on the sign-in screen too, so it's public).
-    res.json({ setup: d.auth.isSetup(), loggedIn: d.auth.check(readCookie(req.headers.cookie, ADMIN_COOKIE)), canSetup: fromLan(req), title: d.state.venue.get().adminTitle || undefined });
+    res.json({ setup: d.auth.isSetup(), loggedIn: d.auth.check(adminSession(req)), canSetup: fromLan(req), title: d.state.venue.get().adminTitle || undefined });
   });
 
   /** The client's address: the gateway's word when it proves itself, else the socket. */
@@ -494,7 +510,7 @@ export function createApp(d: AppDeps) {
   /** The admin's path prefix ("/admin" on the games list's hostname), from the gateway; "" at a hostname's root. */
   const adminPrefix = (req: Request) => normalizeBasePath(String(req.headers["x-forwarded-prefix"] ?? ""));
 
-  const login = (req: Request, res: Response) => {
+  const login = (req: Request, res: Response): string => {
     const secure = req.headers["x-forwarded-proto"] === "https";
     // Box 0.16.0: "keep me signed in" (30 days, e.g. the bar's iPad); "sign out everywhere" still ends it.
     const ttl = req.body?.remember === true ? REMEMBER_MS : 12 * 3600e3;
@@ -502,7 +518,8 @@ export function createApp(d: AppDeps) {
     // Box 0.19.2: Lax, not Strict. iPad Safari withheld the Strict cookie on the admin's own
     // API calls when the page was opened from a link or the home screen, so a right password
     // went nowhere. Lax still keeps it off cross-site POSTs (every admin change is a JSON POST/PUT/DELETE).
-    res.cookie(ADMIN_COOKIE, d.auth.issue(Date.now(), ttl), { httpOnly: true, sameSite: "lax", secure, maxAge: ttl, path: `${adminPrefix(req)}/` });
+    const session = d.auth.issue(Date.now(), ttl);
+    res.cookie(ADMIN_COOKIE, session, { httpOnly: true, sameSite: "lax", secure, maxAge: ttl, path: `${adminPrefix(req)}/` });
     // Signed in here = signed in to every game's and app's own admin (SDK 0.7.0+): the
     // gateway checks this cookie and tells games "staff", never passing the cookie on.
     const domain = staffCookieDomain(req);
@@ -510,6 +527,7 @@ export function createApp(d: AppDeps) {
       const token = signToken(d.config.gatewayToken, "staff", Date.now() + STAFF_TTL_MS, randomBytes(8).toString("base64url"));
       res.cookie(STAFF_COOKIE, token, { httpOnly: true, sameSite: "lax", secure, maxAge: STAFF_TTL_MS, path: "/", domain, encode: String });
     }
+    return session;
   };
 
   app.post(
@@ -520,8 +538,7 @@ export function createApp(d: AppDeps) {
       await d.auth.setPassword(String(req.body?.password ?? "")).catch((e: Error) => {
         throw new HttpError(400, e.message);
       });
-      login(req, res);
-      res.json({ ok: true });
+      res.json({ ok: true, session: login(req, res) });
     }),
   );
 
@@ -535,8 +552,7 @@ export function createApp(d: AppDeps) {
       return void res.status(401).json({ error: "wrong password" });
     }
     passwords.succeeded(ip);
-    login(req, res);
-    res.json({ ok: true });
+    res.json({ ok: true, session: login(req, res) });
   });
 
   app.post("/api/auth/logout", (req, res) => {
@@ -573,7 +589,7 @@ export function createApp(d: AppDeps) {
   );
 
   app.use("/api", (req, _res, next) => {
-    if (!d.auth.check(readCookie(req.headers.cookie, ADMIN_COOKIE))) return next(new HttpError(401, "login required"));
+    if (!d.auth.check(adminSession(req))) return next(new HttpError(401, "login required"));
     next();
   });
 
@@ -599,9 +615,9 @@ export function createApp(d: AppDeps) {
       await d.auth.setPassword(next).catch((e: Error) => {
         throw new HttpError(400, e.message);
       });
-      login(req, res);
+      const session = login(req, res);
       d.log.info("auth", "admin password changed; all other sessions ended", { by: ip });
-      res.json({ ok: true });
+      res.json({ ok: true, session });
     }),
   );
 
@@ -610,9 +626,9 @@ export function createApp(d: AppDeps) {
     "/api/auth/logout-everywhere",
     h(async (req, res) => {
       await d.auth.revokeAll();
-      login(req, res);
+      const session = login(req, res);
       d.log.info("auth", "all other sessions ended", { by: clientIpOf(req) });
-      res.json({ ok: true });
+      res.json({ ok: true, session });
     }),
   );
 

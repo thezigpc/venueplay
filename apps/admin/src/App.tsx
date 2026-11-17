@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError } from "./api";
+import { api, ApiError, setFallbackSession } from "./api";
 import { go, useRoute, type Section } from "./nav";
 import { DisplaysPage } from "./pages/Displays";
 import { GamesPage } from "./pages/Games";
@@ -80,12 +80,19 @@ function Login({ setup, onDone, title }: { setup: boolean; onDone: () => void; t
     if (setup && pw.length < 8) return setErr("Use at least 8 characters.");
     if (setup && pw !== pw2) return setErr("The passwords don't match.");
     try {
-      await (setup ? api.setup(pw) : api.login(pw, remember));
-      // Box 0.19.2: the password was right, but did the browser keep the sign-in cookie?
-      // (Safari with cookies blocked, or an old Strict cookie rule: it used to do nothing.)
-      const status = await api.authStatus().catch(() => undefined);
-      if (status && !status.loggedIn)
-        return setErr("The password was right, but this browser didn't keep the sign-in. On an iPad: Settings → Apps → Safari → turn off \"Block All Cookies\", then try again.");
+      setFallbackSession(undefined);
+      const r = (await (setup ? api.setup(pw) : api.login(pw, remember))) as { session?: string } | undefined;
+      // Box 0.19.2/0.19.3: the password was right, but did the browser keep the sign-in cookie?
+      // Some iPads don't: then the page keeps the session itself and sends it in a header.
+      let status = await api.authStatus().catch(() => undefined);
+      if (status && !status.loggedIn && r?.session) {
+        setFallbackSession(r.session);
+        status = await api.authStatus().catch(() => undefined);
+      }
+      if (status && !status.loggedIn) {
+        setFallbackSession(undefined);
+        return setErr("The password was right, but this browser didn't keep the sign-in. Try another browser on this device, or ask for help.");
+      }
       onDone();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "Something went wrong");
