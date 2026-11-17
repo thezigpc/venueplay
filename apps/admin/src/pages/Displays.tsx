@@ -472,8 +472,25 @@ function ShowOnTv({ d, games, reload }: { d: Display; games: Game[]; reload: () 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const castable = games.filter((g) => g.enabled && g.manifest.routes.table && (isApp(g.manifest) || g.manifest.commands.includes("create_room")));
-  if (!castable.length) return null;
+  // Box 0.24.0: players' pages, for touch screens used as kiosks or host screens.
+  const pages = games.filter((g) => g.enabled && !isApp(g.manifest) && g.manifest.routes.player);
+  if (!castable.length && !pages.length) return null;
   const show = async () => {
+    if (pick === "page:players" || pick.startsWith("page:game:")) {
+      setBusy(true);
+      setMsg("");
+      try {
+        const r = await api.castPage(pick === "page:players" ? { page: "players", displayIds: [d.id] } : { page: "game", gameId: pick.slice(10), displayIds: [d.id] });
+        const res = r.results[d.id];
+        setMsg(res && !res.ok ? (res.message ?? "The TV didn't start.") : d.touch ? "On the screen. People can tap it to join or host." : "On the TV. Switch Touch on (Setup) if people should tap it.");
+      } catch (e) {
+        setMsg((e as Error).message);
+      } finally {
+        setBusy(false);
+        void reload();
+      }
+      return;
+    }
     const g = castable.find((x) => x.id === pick);
     if (!g) return;
     setBusy(true);
@@ -502,12 +519,22 @@ function ShowOnTv({ d, games, reload }: { d: Display; games: Game[]; reload: () 
         <span className="inline">
           <select value={pick} onChange={(e) => setPick(e.target.value)}>
             <option value="">Pick a game or app…</option>
-            {castable.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.context.game.displayName}
-                {isApp(g.manifest) ? "" : " (new room)"}
-              </option>
-            ))}
+            <optgroup label="On the TV">
+              {castable.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.context.game.displayName}
+                  {isApp(g.manifest) ? "" : " (new room)"}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Players' pages (touch screens: kiosk, host screen)">
+              <option value="page:players">Players' page (all games)</option>
+              {pages.map((g) => (
+                <option key={g.id} value={`page:game:${g.id}`}>
+                  {g.context.game.displayName}: start page (join, host on this screen)
+                </option>
+              ))}
+            </optgroup>
           </select>
           <button className="primary" type="button" disabled={!pick || busy} onClick={() => void show()}>
             Show

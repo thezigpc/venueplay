@@ -537,6 +537,9 @@ export const api = {
     call("PUT", `/games/${encodeURIComponent(gameId)}/secrets/${encodeURIComponent(name)}`, { value }),
   staffLink: (gameId: string, path?: string) =>
     call<{ url: string; staffAware: boolean }>("GET", `/staff-link?gameId=${encodeURIComponent(gameId)}${path ? `&path=${encodeURIComponent(path)}` : ""}`),
+  /** Box 0.24.0: the players' page or a game's own start page on TVs (kiosks, host screens). */
+  castPage: (body: { page: "players" | "game"; gameId?: string; displayIds?: string[]; group?: string }) =>
+    call<{ url: string; results: Record<string, ShowResult> }>("POST", "/cast/page", body),
   cast: (body: { gameId: string; roomCode?: string; displayIds?: string[]; group?: string; firstJoinerHosts?: boolean }) =>
     call<{ roomCode?: string; created?: boolean; hostUrl?: string; url: string; results: Record<string, ShowResult> }>("POST", "/cast", body),
   castSettings: () => call<CastSettings>("GET", "/cast-settings"),

@@ -2482,6 +2482,38 @@ export function createApp(d: AppDeps) {
     }),
   );
 
+  /**
+   * Box 0.24.0: a players' page on a TV, for touch screens used as kiosks or host screens.
+   * { page: "players" } the games list (play.<venue>); { page: "game", gameId } a game's own
+   * start page (join, "Host on this screen"). No room is created; people pick on the screen.
+   */
+  app.post(
+    "/api/cast/page",
+    h(async (req, res) => {
+      const { page, gameId, displayIds, group } = (req.body ?? {}) as { page?: string; gameId?: string; displayIds?: string[]; group?: string };
+      const target = Array.isArray(displayIds) && displayIds.length ? { displayIds: displayIds.map(String) } : typeof group === "string" && group ? { group } : undefined;
+      if (!target) throw new HttpError(400, "pick the TVs (displayIds or group)");
+      let url: string | undefined;
+      let title: string;
+      if (page === "players") {
+        url = venueInfo(d.state.venue.get()).playUrl;
+        title = "Players' page";
+        if (!url) throw new HttpError(400, "set the venue's web address first (Settings → Venue)");
+      } else if (page === "game") {
+        const game = d.games.get(String(gameId ?? ""));
+        if (!game) throw new HttpError(404, "no such game");
+        if (!game.enabled) throw new HttpError(400, "that game is turned off");
+        const ctx = buildContext(d.state.venue.get(), game);
+        url = ctx.game.publicUrl ? joinUrl(ctx.game.publicUrl, game.manifest.routes.player ?? "/") : undefined;
+        title = ctx.game.displayName;
+        if (!url) throw new HttpError(400, "the game has no public address yet");
+      } else throw new HttpError(400, 'page: "players" or "game"');
+      const results = (await brokerCall("POST", "/show", { ...target, content: { kind: "url", url, title } })) as Record<string, { ok: boolean; message?: string }>;
+      d.log.info("cast", "page shown", { page, game: gameId, displays: Object.keys(results).length });
+      res.json({ url, results });
+    }),
+  );
+
   app.post(
     "/api/cast",
     h(async (req, res) => {
