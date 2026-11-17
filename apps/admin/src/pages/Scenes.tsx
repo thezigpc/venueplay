@@ -1,8 +1,9 @@
 // Scenes ("Game night", "Closing time") and scheduled sessions (SDK 0.9.0 box features).
+// Box 0.26.0: a scene is a list of steps; a TV step acts on several TVs at once.
 
 import { isApp } from "@bargames/sdk";
 import { useEffect, useState } from "react";
-import { api, type Closing, type Display, type Game, type HostMode, type Scene, type SceneAction, type SceneRun, type Schedule } from "../api";
+import { api, type Closing, type Display, type Game, type HostMode, type Scene, type SceneRun, type SceneStep, type Schedule } from "../api";
 import { go } from "../nav";
 import { inputLabel } from "./Displays";
 import { useLoad } from "../useLoad";
@@ -10,15 +11,161 @@ import { useLoad } from "../useLoad";
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "scene";
 
+type TvStep = Extract<SceneStep, { tvs: string[] }>;
+const isTvStep = (s: SceneStep): s is TvStep => "tvs" in s;
+const endsRooms = (s: Scene) => s.steps.some((x) => x.do === "endRooms");
+const tvName = (displays: Display[], id: string) => {
+  const d = displays.find((x) => x.id === id);
+  return d ? d.label || d.name : id;
+};
+const duration = (s: number) => (s < 60 ? `${s} s` : s % 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s / 60} min`);
+const WAITS = [1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600];
+
+/** Which TVs can take a step (power needs the TV's remote, an input needs that input…). */
+function canTake(d: Display, step: SceneStep): boolean {
+  const c = d.capabilities;
+  if (step.do === "power") return Boolean(c?.power);
+  if (step.do === "input") return Boolean(c?.inputs.includes(step.input));
+  if (step.do === "app") return Boolean(c?.apps);
+  if (step.do === "channel") return Boolean(c?.tvChannels);
+  return isTvStep(step);
+}
+
+/** One line per step, for the list and the summary. */
+export function describeStep(step: SceneStep, displays: Display[], games: Game[]): string {
+  const gameName = (id: string) => games.find((g) => g.id === id)?.context.game.displayName ?? id;
+  const on = isTvStep(step) ? (step.tvs.length ? step.tvs.map((t) => tvName(displays, t)).join(", ") : "no TVs yet") : "";
+  switch (step.do) {
+    case "wait":
+      return `Wait ${duration(step.seconds)}`;
+    case "power":
+      return `Turn ${step.on ? "on" : "off"}: ${on}`;
+    case "input":
+      return `Switch to ${inputLabel(step.input, displays.find((d) => step.tvs.includes(d.id))?.driver)}: ${on}`;
+    case "app":
+      return `Open ${step.appName ?? step.appId}: ${on}`;
+    case "channel":
+      return `Channel ${step.channel}: ${on}`;
+    case "game":
+      return `${gameName(step.gameId)}${step.tvs.length > 1 ? " (one room on all)" : ""}${step.host ? ", host controls" : ""}: ${on}`;
+    case "media":
+      return `${gameName(step.gameId)} list: ${on}`;
+    case "idle":
+      return `Idle screen: ${on}`;
+    case "off":
+      return `Stop casting: ${on}`;
+    case "endRooms":
+      return "End every open room";
+    case "announce":
+      return `Announcement: "${step.text}"${step.minutes ? ` for ${step.minutes} min` : ""}`;
+    case "clearAnnouncement":
+      return "Take the announcement down";
+    case "countdown":
+      return `Countdown: ${step.label}, ${step.minutes} min`;
+    case "clearCountdown":
+      return "Clear the countdown";
+    case "stopSound":
+      return "Stop all sound (music, apps)";
+  }
+}
+
+/** "4 steps · 15 s of waits · 3 TVs". */
+export function sceneSummary(s: Scene): string {
+  const waits = s.steps.reduce((t, x) => t + (x.do === "wait" ? x.seconds : 0), 0);
+  const tvs = new Set(s.steps.flatMap((x) => (isTvStep(x) ? x.tvs : [])));
+  return [`${s.steps.length} step${s.steps.length === 1 ? "" : "s"}`, waits ? `${duration(waits)} of waits` : "", tvs.size ? `${tvs.size} TV${tvs.size === 1 ? "" : "s"}` : "no TVs", s.next ? "then another scene" : ""].filter(Boolean).join(" · ");
+}
+
+const ADD: { kind: string; label: string }[] = [
+  { kind: "power-on", label: "Turn TVs on" },
+  { kind: "power-off", label: "Turn TVs off" },
+  { kind: "input", label: "Switch the TV input" },
+  { kind: "game", label: "Show a game or app (from the box)" },
+  { kind: "idle", label: "Idle screen" },
+  { kind: "off", label: "Stop casting" },
+  { kind: "app", label: "Open an app on the TV (Roku, Apple TV)" },
+  { kind: "channel", label: "TV channel (antenna)" },
+  { kind: "wait", label: "Wait" },
+  { kind: "announce", label: "Post an announcement" },
+  { kind: "clearAnnouncement", label: "Take the announcement down" },
+  { kind: "countdown", label: "Start a countdown" },
+  { kind: "clearCountdown", label: "Clear the countdown" },
+  { kind: "endRooms", label: "End every open room" },
+  { kind: "stopSound", label: "Stop all sound" },
+];
+
+function newStep(kind: string, displays: Display[], castable: Game[]): SceneStep {
+  const inputs = displays.flatMap((d) => d.capabilities?.inputs ?? []);
+  switch (kind) {
+    case "power-on":
+    case "power-off":
+      return { do: "power", on: kind === "power-on", tvs: displays.filter((d) => d.capabilities?.power).map((d) => d.id) };
+    case "input":
+      return { do: "input", input: inputs[0] ?? "hdmi1", tvs: [] };
+    case "game":
+      return { do: "game", gameId: castable[0]?.id ?? "", tvs: [] };
+    case "idle":
+    case "off":
+      return { do: kind, tvs: [] };
+    case "app":
+      return { do: "app", appId: "", tvs: [] };
+    case "channel":
+      return { do: "channel", channel: "", tvs: [] };
+    case "wait":
+      return { do: "wait", seconds: 5 };
+    case "announce":
+      return { do: "announce", text: "" };
+    case "countdown":
+      return { do: "countdown", label: "Starting soon", minutes: 5 };
+    default:
+      return { do: kind as "endRooms" | "clearAnnouncement" | "clearCountdown" | "stopSound" };
+  }
+}
+
+/** What's missing before a step can be saved ("" when it's fine). */
+function stepProblem(step: SceneStep): string {
+  if (isTvStep(step) && !step.tvs.length) return "Pick at least one TV.";
+  if (step.do === "game" && !step.gameId) return "Pick a game or app.";
+  if (step.do === "app" && !step.appId) return "Pick an app.";
+  if (step.do === "channel" && !/^\d{1,4}(\.\d{1,3})?$/.test(step.channel)) return "A channel number, like 7 or 7.1.";
+  if (step.do === "announce" && !step.text.trim()) return "Write the announcement.";
+  if (step.do === "countdown" && !step.label.trim()) return "Give the countdown a label.";
+  return "";
+}
+
+/** Starting points for a new scene. */
+function templates(displays: Display[], castable: Game[], preset?: Scene): { id: string; label: string; scene: () => Scene }[] {
+  const power = displays.filter((d) => d.capabilities?.power).map((d) => d.id);
+  const all = displays.map((d) => d.id);
+  const firstGame = castable.find((g) => !isApp(g.manifest)) ?? castable[0];
+  return [
+    { id: "blank", label: "Blank", scene: () => ({ id: "", name: "", steps: [] }) },
+    ...(power.length ? [{ id: "on", label: "Turn every TV on", scene: () => ({ id: "", name: "TVs on", steps: [{ do: "power", on: true, tvs: power }] as SceneStep[] }) }] : []),
+    {
+      id: "night",
+      label: "Game night: TVs on, wait, then a game",
+      scene: () => ({
+        id: "",
+        name: "Game night",
+        steps: [...(power.length ? ([{ do: "power", on: true, tvs: power }, { do: "wait", seconds: 10 }] as SceneStep[]) : []), { do: "game", gameId: firstGame?.id ?? "", tvs: all }],
+      }),
+    },
+    ...(power.length ? [{ id: "off", label: "Turn every TV off", scene: () => ({ id: "", name: "TVs off", steps: [{ do: "power", on: false, tvs: power }] as SceneStep[] }) }] : []),
+    ...(preset ? [{ id: "closing", label: "Closing time (ends rooms, stops the music, says goodnight)", scene: () => ({ ...preset, id: "", steps: structuredClone(preset.steps) }) }] : []),
+  ];
+}
+
 /** Saved TV layouts, applied with one tap. "Closing time" is a built-in preset. */
-export function ScenesCard({ games, displays }: { games: Game[]; displays: Display[] }) {
+export function ScenesCard({ games, displays: allDisplays }: { games: Game[]; displays: Display[] }) {
+  const displays = allDisplays.filter((d) => !d.ignored);
   const scenes = useLoad(api.scenes);
   const [msg, setMsg] = useState("");
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState<{ scene: Scene; isNew: boolean }>();
   const [running, setRunning] = useState<SceneRun>();
   const [hostOffer, setHostOffer] = useState<SceneRun["host"]>();
   const list = scenes.data?.scenes ?? [];
   const preset = scenes.data?.presets.find((p) => p.id === "closing-time");
+  const castable = games.filter((g) => g.enabled && g.manifest.routes.table);
   const finish = (r: SceneRun) => {
     setRunning(undefined);
     const bad = r.steps.filter((x) => !x.ok);
@@ -30,7 +177,7 @@ export function ScenesCard({ games, displays }: { games: Game[]; displays: Displ
     }
   };
   const apply = async (s: Scene) => {
-    if (s.endRooms && !window.confirm(`${s.name}: this ends every open room. Go ahead?`)) return;
+    if (endsRooms(s) && !window.confirm(`${s.name}: this ends every open room. Go ahead?`)) return;
     setMsg(`Applying ${s.name}…`);
     setHostOffer(undefined);
     try {
@@ -47,48 +194,60 @@ export function ScenesCard({ games, displays }: { games: Game[]; displays: Displ
       setMsg((e as Error).message);
     }
   };
+  const startNew = (templateId: string) => {
+    const t = templates(displays, castable, preset).find((x) => x.id === templateId);
+    if (t) setEditing({ scene: t.scene(), isNew: true });
+  };
   return (
     <section className="card">
       <h2>Scenes</h2>
       <p className="muted">Saved TV setups, applied in one tap.</p>
-      <div className="buttons">
-        {list.map((s) => (
-          <button key={s.id} className={s.id === "closing-time" ? "danger" : "primary"} onClick={() => void apply(s)}>
-            {s.name}
-          </button>
-        ))}
-      </div>
-      {preset && !list.some((s) => s.id === "closing-time") && (
-        <p>
-          <button className="ghost" onClick={() => void api.saveScene(preset).then(() => scenes.reload())}>
-            + Add "Closing time" (ends rooms, stops the music, says goodnight; leaves the TVs alone)
-          </button>
-        </p>
+      {!editing && (
+        <div className="scene-list">
+          {list.map((s) => (
+            <div key={s.id} className="scene-row">
+              <button className={endsRooms(s) ? "danger" : "primary"} onClick={() => void apply(s)}>
+                {s.name}
+              </button>
+              <span className="muted small-print">{sceneSummary(s)}</span>
+              <span className="scene-row-tools">
+                <button type="button" className="ghost small" onClick={() => setEditing({ scene: structuredClone(s), isNew: false })}>
+                  Edit
+                </button>
+                <button type="button" className="ghost small" onClick={() => setEditing({ scene: { ...structuredClone(s), id: "", name: `${s.name} copy`.slice(0, 40) }, isNew: true })}>
+                  Copy
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
       )}
-      {!editing ? (
-        <button className="ghost" onClick={() => setEditing(true)}>
-          + New scene
-        </button>
-      ) : (
+      {editing ? (
         <SceneEditor
+          key={editing.scene.id || "new"}
+          initial={editing.scene}
+          isNew={editing.isNew}
           games={games}
           displays={displays}
           scenes={list}
-          onDone={() => {
-            setEditing(false);
+          onDone={(saved, run) => {
+            setEditing(undefined);
             void scenes.reload();
+            if (saved && run) void apply(saved);
           }}
         />
-      )}
-      {list.length > 0 && (
-        <details>
-          <summary>Delete a scene</summary>
-          {list.map((s) => (
-            <button key={s.id} className="danger" onClick={() => window.confirm(`Delete ${s.name}?`) && void api.deleteScene(s.id).then(() => scenes.reload())}>
-              {s.name}
-            </button>
-          ))}
-        </details>
+      ) : (
+        <label className="inline">
+          <span>+ New scene</span>
+          <select value="" onChange={(e) => startNew(e.target.value)} aria-label="Start a new scene from">
+            <option value="">Start from…</option>
+            {templates(displays, castable, list.some((s) => s.id === "closing-time") ? undefined : preset).map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
       {running && (
         <p className="scene-run" role="status">
@@ -120,51 +279,14 @@ export function openHost(h: { name: string; code?: string; url: string }): void 
   go("tonight", "host", h.url, `${h.name}${h.code ? ` · ${h.code}` : ""}`);
 }
 
-/** One TV's part of a scene, in the order the box runs it: power on, what it shows, power off. */
-export function tvActions(displayId: string, show: string, power: string, channel: string, appName?: (id: string) => string | undefined, host?: HostMode | ""): SceneAction[] {
-  const out: SceneAction[] = [];
-  if (power === "on") out.push({ displayId, do: "power", on: true });
-  if (power !== "off" && show) {
-    if (show === "idle" || show === "off") out.push({ displayId, do: show });
-    else if (show.startsWith("game:")) out.push({ displayId, do: "game", gameId: show.slice(5), ...(host ? { host } : {}) });
-    else if (show.startsWith("input:")) out.push({ displayId, do: "input", input: show.slice(6) });
-    else if (show.startsWith("app:")) {
-      const n = appName?.(show.slice(4));
-      out.push({ displayId, do: "app", appId: show.slice(4), ...(n ? { appName: n } : {}) });
-    } else if (show === "channel" && channel.trim()) out.push({ displayId, do: "channel", channel: channel.trim() });
-  }
-  if (power === "off") out.push({ displayId, do: "power", on: false });
-  return out;
-}
-
-function SceneEditor({ games, displays, scenes, onDone }: { games: Game[]; displays: Display[]; scenes: Scene[]; onDone: () => void }) {
-  // Box 0.16.0 extras and sequences.
-  const [stopSound, setStopSound] = useState(false);
-  const [clearAnn, setClearAnn] = useState(false);
-  const [clearCd, setClearCd] = useState(false);
-  const [nextId, setNextId] = useState("");
-  const [nextMin, setNextMin] = useState(15);
-  const [name, setName] = useState("");
-  const [pick, setPick] = useState<Record<string, string>>({});
-  const [power, setPower] = useState<Record<string, string>>({});
-  const [channel, setChannel] = useState<Record<string, string>>({});
-  // Box 0.20.0: the order TVs run in, a pause before each, and host controls after a game.
-  const [order, setOrder] = useState<string[]>(() => displays.map((d) => d.id));
-  const [waitBefore, setWaitBefore] = useState<Record<string, number>>({});
-  const [host, setHost] = useState<Record<string, HostMode | "">>({});
-  const ordered = [...order.map((id) => displays.find((d) => d.id === id)).filter((d): d is Display => Boolean(d)), ...displays.filter((d) => !order.includes(d.id))];
-  const move = (id: string, by: number) => {
-    const ids = ordered.map((d) => d.id);
-    const i = ids.indexOf(id);
-    const j = i + by;
-    if (i < 0 || j < 0 || j >= ids.length) return;
-    [ids[i], ids[j]] = [ids[j], ids[i]];
-    setOrder(ids);
-  };
+function SceneEditor({ initial, isNew, games, displays, scenes, onDone }: { initial: Scene; isNew: boolean; games: Game[]; displays: Display[]; scenes: Scene[]; onDone: (saved?: Scene, run?: boolean) => void }) {
+  const [name, setName] = useState(initial.name);
+  const [steps, setSteps] = useState<SceneStep[]>(initial.steps);
+  const [nextId, setNextId] = useState(initial.next?.sceneId ?? "");
+  const [nextMin, setNextMin] = useState(initial.next?.afterMinutes ?? 15);
   const [apps, setApps] = useState<Record<string, { id: string; name: string }[]>>({});
-  const [endRooms, setEndRooms] = useState(false);
-  const [text, setText] = useState("");
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
   const castable = games.filter((g) => g.enabled && g.manifest.routes.table);
   // The TVs' own apps (Roku channels, Apple TV apps), for "open an app" steps.
   useEffect(() => {
@@ -175,162 +297,92 @@ function SceneEditor({ games, displays, scenes, onDone }: { games: Game[]; displ
       );
     }
   }, [displays]);
-  const save = async () => {
-    const actions = ordered.flatMap((d) => {
-      const steps = tvActions(d.id, pick[d.id] ?? "", power[d.id] ?? "", channel[d.id] ?? "", (id) => apps[d.id]?.find((a) => a.id === id)?.name, host[d.id] ?? "");
-      return steps.length && waitBefore[d.id] ? [{ displayId: "" as const, do: "wait" as const, seconds: waitBefore[d.id] }, ...steps] : steps;
-    });
+  const change = (i: number, step: SceneStep) => setSteps(steps.map((s, j) => (j === i ? step : s)));
+  const move = (i: number, by: number) => {
+    const j = i + by;
+    if (j < 0 || j >= steps.length) return;
+    const next = [...steps];
+    [next[i], next[j]] = [next[j], next[i]];
+    setSteps(next);
+  };
+  const problems = steps.map(stepProblem);
+  const id = isNew ? (() => {
+    const base = slug(name);
+    let out = base;
+    for (let n = 2; scenes.some((s) => s.id === out); n++) out = `${base.slice(0, 36)}-${n}`;
+    return out;
+  })() : initial.id;
+  const save = async (run: boolean) => {
+    setErr("");
+    setBusy(true);
     try {
-      await api.saveScene({
-        id: slug(name),
-        name,
-        actions,
-        ...(endRooms ? { endRooms: true } : {}),
-        ...(text.trim() ? { announcement: { text: text.trim() } } : clearAnn ? { clearAnnouncement: true } : {}),
-        ...(stopSound ? { stopSound: true } : {}),
-        ...(clearCd ? { clearCountdown: true } : {}),
-        ...(nextId ? { next: { sceneId: nextId, afterMinutes: nextMin } } : {}),
-      } as Scene);
-      onDone();
+      const saved = await api.saveScene({ id, name: name.trim(), steps, ...(nextId ? { next: { sceneId: nextId, afterMinutes: nextMin } } : {}) });
+      onDone(saved, run);
     } catch (e) {
       setErr((e as Error).message);
+    } finally {
+      setBusy(false);
     }
   };
+  const draft: Scene = { id, name, steps, ...(nextId ? { next: { sceneId: nextId, afterMinutes: nextMin } } : {}) };
   return (
-    <div className="media">
+    <div className="media scene-editor">
+      <h3>{isNew ? "New scene" : `Edit ${initial.name}`}</h3>
       <label>
         Name
-        <input value={name} placeholder="Game night" onChange={(e) => setName(e.target.value)} />
+        <input value={name} placeholder="Game night" maxLength={40} onChange={(e) => setName(e.target.value)} />
       </label>
-      {ordered.map((d, idx) => {
-        const caps = d.capabilities;
-        const off = power[d.id] === "off";
-        const used = Boolean(pick[d.id] || power[d.id]);
-        return (
-          <fieldset key={d.id} className="scene-tv">
-            <legend>
-              {idx + 1}. {d.label || d.name}{" "}
-              <button type="button" className="ghost small" aria-label={`Move ${d.label || d.name} earlier`} disabled={idx === 0} onClick={() => move(d.id, -1)}>
-                ↑
-              </button>
-              <button type="button" className="ghost small" aria-label={`Move ${d.label || d.name} later`} disabled={idx === ordered.length - 1} onClick={() => move(d.id, 1)}>
-                ↓
-              </button>
-            </legend>
-            {used && idx > 0 && (
-              <label>
-                Wait first
-                <select value={waitBefore[d.id] ?? 0} onChange={(e) => setWaitBefore({ ...waitBefore, [d.id]: Number(e.target.value) })}>
-                  <option value={0}>No, go straight on</option>
-                  {[2, 5, 10, 15, 30, 60, 120, 300, 600].map((s) => (
-                    <option key={s} value={s}>
-                      {s < 60 ? `${s} seconds` : `${s / 60} minute${s === 60 ? "" : "s"}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {caps?.power && (
-              <label>
-                Power
-                <select value={power[d.id] ?? ""} onChange={(e) => setPower({ ...power, [d.id]: e.target.value })}>
-                  <option value="">Leave as it is</option>
-                  <option value="on">Turn on first</option>
-                  <option value="off">Turn off</option>
-                </select>
-              </label>
-            )}
-            <label>
-              What it shows
-              <select value={off ? "" : (pick[d.id] ?? "")} disabled={off} onChange={(e) => setPick({ ...pick, [d.id]: e.target.value })}>
-                <option value="">Leave alone</option>
-                <optgroup label="From the box">
-                  {castable.map((g) => (
-                    <option key={g.id} value={`game:${g.id}`}>
-                      {g.context.game.displayName}
-                      {isApp(g.manifest) ? "" : " (new room)"}
-                    </option>
-                  ))}
-                  <option value="idle">Idle screen</option>
-                  <option value="off">Stop casting</option>
-                </optgroup>
-                {(caps?.inputs.length ?? 0) > 0 && (
-                  <optgroup label="TV input">
-                    {caps!.inputs.map((i) => (
-                      <option key={i} value={`input:${i}`}>
-                        {inputLabel(i, d.driver)}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {caps?.tvChannels && (
-                  <optgroup label="TV channel (antenna)">
-                    <option value="channel">A channel number…</option>
-                  </optgroup>
-                )}
-                {caps?.apps && (apps[d.id]?.length ?? 0) > 0 && (
-                  <optgroup label={d.driver === "roku" ? "Roku channel (app)" : "App on the TV"}>
-                    {apps[d.id]!.map((a) => (
-                      <option key={a.id} value={`app:${a.id}`}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-            </label>
-            {!off && pick[d.id]?.startsWith("game:") && (
-              <label>
-                Host controls
-                <select value={host[d.id] ?? ""} onChange={(e) => setHost({ ...host, [d.id]: e.target.value as HostMode | "" })}>
-                  <option value="">Don't open them</option>
-                  <option value="open">Open them on the device that runs the scene</option>
-                  <option value="ask">Ask first ("Host Bingo ABCD?")</option>
-                </select>
-              </label>
-            )}
-            {!off && pick[d.id] === "channel" && (
-              <label>
-                Channel
-                <input inputMode="decimal" placeholder="e.g. 7.1" value={channel[d.id] ?? ""} onChange={(e) => setChannel({ ...channel, [d.id]: e.target.value.replace(/[^\d.]/g, "").slice(0, 8) })} />
-              </label>
-            )}
-            {caps?.control && !caps.control.paired && <p className="muted small-print">Pair its TV control (TV panel &gt; Setup) to add power, inputs or apps here.</p>}
-          </fieldset>
-        );
-      })}
-      <label className="inline">
-        <input type="checkbox" checked={endRooms} onChange={(e) => setEndRooms(e.target.checked)} style={{ width: "auto" }} /> End every open room first
-      </label>
-      <label className="inline">
-        <input type="checkbox" checked={stopSound} onChange={(e) => setStopSound(e.target.checked)} style={{ width: "auto" }} /> Stop all sound (music, apps)
-      </label>
+      <p className="muted small-print">{sceneSummary(draft)}. Steps run top to bottom; a step's TVs all go at once.</p>
+      <ol className="scene-steps">
+        {steps.map((step, i) => (
+          <li key={i} className="scene-step">
+            <div className="scene-step-head">
+              <strong>{describeStep(step, displays, games)}</strong>
+              <span className="scene-row-tools">
+                <button type="button" className="ghost small" aria-label={`Move step ${i + 1} up`} disabled={i === 0} onClick={() => move(i, -1)}>
+                  ↑
+                </button>
+                <button type="button" className="ghost small" aria-label={`Move step ${i + 1} down`} disabled={i === steps.length - 1} onClick={() => move(i, 1)}>
+                  ↓
+                </button>
+                <button type="button" className="ghost small" aria-label={`Remove step ${i + 1}`} onClick={() => setSteps(steps.filter((_, j) => j !== i))}>
+                  ✕
+                </button>
+              </span>
+            </div>
+            <StepFields step={step} onChange={(s) => change(i, s)} displays={displays} castable={castable} apps={apps} games={games} />
+            {problems[i] && <p className="error small-print">{problems[i]}</p>}
+          </li>
+        ))}
+      </ol>
+      {!steps.length && <p className="muted">No steps yet. Add the first one below.</p>}
       <label>
-        Announcement (optional)
-        <input value={text} onChange={(e) => setText(e.target.value)} />
-      </label>
-      {!text.trim() && (
-        <label className="inline">
-          <input type="checkbox" checked={clearAnn} onChange={(e) => setClearAnn(e.target.checked)} style={{ width: "auto" }} /> Take the announcement down
-        </label>
-      )}
-      <label className="inline">
-        <input type="checkbox" checked={clearCd} onChange={(e) => setClearCd(e.target.checked)} style={{ width: "auto" }} /> Clear the countdown
+        Add a step
+        <select value="" onChange={(e) => e.target.value && setSteps([...steps, newStep(e.target.value, displays, castable)])}>
+          <option value="">Pick what happens next…</option>
+          {ADD.map((a) => (
+            <option key={a.kind} value={a.kind}>
+              {a.label}
+            </option>
+          ))}
+        </select>
       </label>
       <label>
         Then (a sequence, optional)
         <div className="inline">
           <select value={nextId} onChange={(e) => setNextId(e.target.value)} aria-label="Scene to apply next">
             <option value="">Nothing after this</option>
-            {scenes.map((s) => (
-              <option key={s.id} value={s.id}>
-                apply {s.name}
-              </option>
-            ))}
+            {scenes
+              .filter((s) => s.id !== id)
+              .map((s) => (
+                <option key={s.id} value={s.id}>
+                  apply {s.name}
+                </option>
+              ))}
           </select>
           {nextId && (
             <select value={nextMin} onChange={(e) => setNextMin(Number(e.target.value))} aria-label="After how long">
-              {[1, 5, 10, 15, 20, 30, 45, 60, 90, 120].map((m) => (
+              {[...new Set([1, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, nextMin])].sort((a, b) => a - b).map((m) => (
                 <option key={m} value={m}>
                   {m} min later
                 </option>
@@ -339,15 +391,169 @@ function SceneEditor({ games, displays, scenes, onDone }: { games: Game[]; displ
           )}
         </div>
       </label>
-      <p className="muted small-print">TVs left on "Leave alone" aren't touched, so a scene can skip a TV that's showing something else (an Apple TV on input 1, say). TVs run top to bottom: use ↑ ↓ and "Wait first" for "switch the TV to input 1, then cast to the Apple TV".</p>
+      <p className="muted small-print">TVs a scene doesn't name aren't touched, so a scene can skip a TV that's showing something else. For "switch the TV to input 1, then cast to the Apple TV": an input step, a short wait, then the game step.</p>
       <div className="buttons">
-        <button className="primary" disabled={!name.trim()} onClick={() => void save()}>
-          Save scene
+        <button className="primary" disabled={busy || !name.trim() || problems.some(Boolean)} onClick={() => void save(false)}>
+          Save
         </button>
-        <button onClick={onDone}>Cancel</button>
+        <button disabled={busy || !name.trim() || !steps.length || problems.some(Boolean)} onClick={() => void save(true)}>
+          Save and run it
+        </button>
+        <button onClick={() => onDone()}>Cancel</button>
+        {!isNew && (
+          <button
+            className="danger"
+            onClick={() => window.confirm(`Delete ${initial.name}?`) && void api.deleteScene(initial.id).then(() => onDone(), (e: Error) => setErr(e.message))}
+          >
+            Delete
+          </button>
+        )}
       </div>
       {err && <p className="error">{err}</p>}
     </div>
+  );
+}
+
+/** The settings of one step: what it does, and (TV steps) which TVs. */
+function StepFields({ step, onChange, displays, castable, apps, games }: { step: SceneStep; onChange: (s: SceneStep) => void; displays: Display[]; castable: Game[]; apps: Record<string, { id: string; name: string }[]>; games: Game[] }) {
+  if (step.do === "wait")
+    return (
+      <label className="inline">
+        Wait
+        <select value={step.seconds} onChange={(e) => onChange({ ...step, seconds: Number(e.target.value) })}>
+          {[...new Set([...WAITS, step.seconds])].sort((a, b) => a - b).map((s) => (
+            <option key={s} value={s}>
+              {duration(s)}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  if (step.do === "announce")
+    return (
+      <>
+        <label>
+          Announcement
+          <input value={step.text} maxLength={200} placeholder="Bingo starts in 10 minutes!" onChange={(e) => onChange({ ...step, text: e.target.value })} />
+        </label>
+        <label className="inline">
+          Stays up
+          <select value={step.minutes ?? 0} onChange={(e) => onChange({ ...step, minutes: Number(e.target.value) || undefined })}>
+            <option value={0}>until taken down</option>
+            {[5, 10, 15, 30, 60, 120, 240].map((m) => (
+              <option key={m} value={m}>
+                {m} min
+              </option>
+            ))}
+          </select>
+        </label>
+      </>
+    );
+  if (step.do === "countdown")
+    return (
+      <div className="inline">
+        <label>
+          Label
+          <input value={step.label} maxLength={60} onChange={(e) => onChange({ ...step, label: e.target.value })} />
+        </label>
+        <label>
+          Minutes
+          <input type="number" min={1} max={180} value={step.minutes} onChange={(e) => onChange({ ...step, minutes: Math.max(1, Math.min(180, Number(e.target.value) || 1)) })} />
+        </label>
+      </div>
+    );
+  if (!isTvStep(step)) return null;
+
+  const fit = (s: SceneStep): SceneStep => (isTvStep(s) ? { ...s, tvs: s.tvs.filter((t) => displays.some((d) => d.id === t && canTake(d, s))) } : s);
+  const inputs = [...new Set(displays.flatMap((d) => d.capabilities?.inputs ?? []))];
+  const appList = [...new Map(Object.values(apps).flat().map((a) => [a.id, a])).values()].sort((a, b) => a.name.localeCompare(b.name));
+  const eligible = displays.filter((d) => canTake(d, step));
+  const others = displays.length - eligible.length;
+  const toggle = (id: string, on: boolean) => onChange({ ...step, tvs: on ? [...step.tvs.filter((t) => t !== id), id] : step.tvs.filter((t) => t !== id) });
+  return (
+    <>
+      {step.do === "power" && (
+        <label className="inline">
+          Power
+          <select value={step.on ? "on" : "off"} onChange={(e) => onChange({ ...step, on: e.target.value === "on" })}>
+            <option value="on">Turn on</option>
+            <option value="off">Turn off</option>
+          </select>
+        </label>
+      )}
+      {step.do === "input" && (
+        <label className="inline">
+          Input
+          <select value={step.input} onChange={(e) => onChange(fit({ ...step, input: e.target.value }))}>
+            {[...new Set([...inputs, step.input])].map((i) => (
+              <option key={i} value={i}>
+                {inputLabel(i, displays.find((d) => d.capabilities?.inputs.includes(i))?.driver)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {step.do === "game" && (
+        <>
+          <label className="inline">
+            Show
+            <select value={step.gameId} onChange={(e) => onChange({ ...step, gameId: e.target.value })}>
+              {!step.gameId && <option value="">Pick a game or app…</option>}
+              {castable.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.context.game.displayName}
+                  {isApp(g.manifest) ? "" : " (new room)"}
+                </option>
+              ))}
+              {step.gameId && !castable.some((g) => g.id === step.gameId) && <option value={step.gameId}>{games.find((g) => g.id === step.gameId)?.context.game.displayName ?? step.gameId} (turned off)</option>}
+            </select>
+          </label>
+          <label className="inline">
+            Host controls
+            <select value={step.host ?? ""} onChange={(e) => onChange({ ...step, host: (e.target.value || undefined) as HostMode | undefined })}>
+              <option value="">Don't open them</option>
+              <option value="open">Open them on the device that runs the scene</option>
+              <option value="ask">Ask first ("Host Bingo ABCD?")</option>
+            </select>
+          </label>
+        </>
+      )}
+      {step.do === "app" && (
+        <label className="inline">
+          App
+          <select value={step.appId} onChange={(e) => onChange({ ...step, appId: e.target.value, appName: appList.find((a) => a.id === e.target.value)?.name })}>
+            {!step.appId && <option value="">{appList.length ? "Pick an app…" : "Loading the TVs' apps…"}</option>}
+            {step.appId && !appList.some((a) => a.id === step.appId) && <option value={step.appId}>{step.appName ?? step.appId}</option>}
+            {appList.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {step.do === "channel" && (
+        <label className="inline">
+          Channel
+          <input inputMode="decimal" placeholder="e.g. 7.1" value={step.channel} onChange={(e) => onChange({ ...step, channel: e.target.value.replace(/[^\d.]/g, "").slice(0, 8) })} />
+        </label>
+      )}
+      <div className="tv-chips" role="group" aria-label="TVs">
+        {eligible.map((d) => (
+          <label key={d.id} className={`tv-chip${step.tvs.includes(d.id) ? " on" : ""}`}>
+            <input type="checkbox" checked={step.tvs.includes(d.id)} onChange={(e) => toggle(d.id, e.target.checked)} />
+            {d.label || d.name}
+          </label>
+        ))}
+        {eligible.length > 1 && (
+          <button type="button" className="ghost small" onClick={() => onChange({ ...step, tvs: step.tvs.length === eligible.length ? [] : eligible.map((d) => d.id) })}>
+            {step.tvs.length === eligible.length ? "None" : "All"}
+          </button>
+        )}
+      </div>
+      {!eligible.length && <p className="muted small-print">No TV can do this yet. Pair a TV's control (TVs → the TV → Setup) for power, inputs and apps.</p>}
+      {eligible.length > 0 && others > 0 && step.do !== "game" && step.do !== "idle" && step.do !== "off" && <p className="muted small-print">{others} other TV{others === 1 ? "" : "s"} can't do this (no TV control paired, or no such input).</p>}
+    </>
   );
 }
 
@@ -428,7 +634,7 @@ export function ClosingCard() {
           <button
             className="danger"
             onClick={() =>
-              window.confirm(`Apply ${scene.name} now?${scene.endRooms ? " It ends every open room." : ""}`) &&
+              window.confirm(`Apply ${scene.name} now?${endsRooms(scene) ? " It ends every open room." : ""}`) &&
               void api.applyScene(scene.id).then(
                 () => setMsg(`${scene.name} applied.`),
                 (e: Error) => setMsg(e.message),

@@ -444,6 +444,40 @@ test("scenes 0.20.0: wait steps run in order, show progress and can be cancelled
   }
 });
 
+test("scenes 0.26.0: a step on several TVs runs on all at once; one room across a game step's TVs; extras anywhere", async () => {
+  const sent: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const b = await boot((url, init) => {
+    const m = /^http:\/\/broker\/displays\/(tv\d)\/power$/.exec(url);
+    if (init?.method === "POST" && m) {
+      sent.push(`power ${m[1]}`);
+      // Both TVs' power calls are in flight before either answers: parallel.
+      if (sent.length === 2) release();
+      return gate.then(() => reply({ ok: true })) as unknown as Response;
+    }
+    return undefined;
+  });
+  try {
+    for (const d of b.displays as Record<string, unknown>[]) d.capabilities = { delivery: ["airplay"], power: true };
+    const put = await b.json(
+      "PUT",
+      "/api/scenes/all-on",
+      { name: "All on", steps: [{ do: "power", tvs: ["tv1", "tv2"], on: true }, { do: "announce", text: "Bingo soon" }, { do: "idle", tvs: ["tv1", "tv2"] }] },
+      b.authed,
+    );
+    assert.equal(put.status, 200, await put.clone().text());
+    const r = (await (await b.json("POST", "/api/scenes/all-on/apply", undefined, b.authed)).json()) as { steps: { step: string; ok: boolean }[]; total: number };
+    assert.equal(r.total, 3);
+    assert.deepEqual(r.steps.map((x) => x.step), ["tv1: power on", "tv2: power on", "announcement", "tv1: idle", "tv2: idle"]);
+    assert.ok(b.shows.some((x) => x.displayIds?.join() === "tv1,tv2"), "idle: one show call for both TVs");
+    assert.equal((await b.json("PUT", "/api/scenes/bad", { name: "Bad", steps: [{ do: "power", tvs: [], on: true }] }, b.authed)).status, 400, "a TV step needs TVs");
+    assert.equal((await b.json("PUT", "/api/scenes/bad", { name: "Bad", steps: [{ do: "announce", text: " " }] }, b.authed)).status, 400);
+  } finally {
+    b.close();
+  }
+});
+
 test("scenes: TV control steps (power, input, app, channel) are checked against the TV and run in order", async () => {
   const sent: { url: string; body?: unknown }[] = [];
   const b = await boot((url, init) => {
@@ -886,12 +920,12 @@ test("0.9.0 scenes and schedules: closing time, scheduled bingo with a countdown
     await b.json("PUT", "/api/venue", { timezone: "America/New_York" }, b.authed);
 
     // Closing time from the preset.
-    const list = (await (await b.json("GET", "/api/scenes", undefined, b.authed)).json()) as { scenes: unknown[]; presets: { id: string; actions: { displayId: string; do: string }[]; endRooms?: boolean }[] };
+    const list = (await (await b.json("GET", "/api/scenes", undefined, b.authed)).json()) as { scenes: unknown[]; presets: { id: string; steps: { do: string; tvs?: string[] }[] }[] };
     const preset = list.presets[0];
     assert.equal(preset.id, "closing-time");
     // Box 0.16.0: the preset leaves the TVs alone (one may be on an Apple TV) and stops the sound.
-    assert.deepEqual(preset.actions, []);
-    assert.equal((preset as { stopSound?: boolean }).stopSound, true);
+    assert.ok(!preset.steps.some((x) => x.tvs));
+    assert.deepEqual(preset.steps.map((x) => x.do), ["endRooms", "announce", "clearCountdown", "stopSound"]);
     assert.equal((await b.json("PUT", "/api/scenes/closing-time", preset, b.authed)).status, 200);
     assert.equal((await b.json("PUT", "/api/scenes/bad", { name: "x", actions: [{ displayId: "nope", do: "idle" }] }, b.authed)).status, 400);
     const applied = (await (await b.json("POST", "/api/scenes/closing-time/apply", undefined, b.authed)).json()) as { steps: { step: string; ok: boolean }[] };

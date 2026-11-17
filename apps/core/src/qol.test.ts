@@ -45,8 +45,27 @@ test("scenes: sequence and extras are validated", () => {
   const exists = { game: () => false, display: () => true, scene: (id: string) => id === "closing" };
   const ok = cleanScene({ id: "last-call", name: "Last call", actions: [], announcement: { text: "Last call!" }, stopSound: true, clearCountdown: true, next: { sceneId: "closing", afterMinutes: 15 } }, exists);
   assert.ok(typeof ok !== "string");
-  assert.deepEqual([ok.stopSound, ok.clearCountdown, ok.next], [true, true, { sceneId: "closing", afterMinutes: 15 }]);
-  assert.equal(ok.clearAnnouncement, undefined);
+  // Box 0.26.0: the old flags arrive as steps, in the order they always ran.
+  assert.deepEqual(ok.steps, [{ do: "announce", text: "Last call!" }, { do: "clearCountdown" }, { do: "stopSound" }]);
+  assert.deepEqual(ok.next, { sceneId: "closing", afterMinutes: 15 });
+  // Old TV actions: back-to-back identical ones on different TVs become one step; games stay one per TV.
+  const old = cleanScene(
+    {
+      id: "old",
+      name: "Old",
+      endRooms: true,
+      actions: [
+        { displayId: "a", do: "power", on: true },
+        { displayId: "b", do: "power", on: true },
+        { displayId: "", do: "wait", seconds: 5 },
+        { displayId: "a", do: "idle" },
+        { displayId: "b", do: "off" },
+      ],
+    },
+    { ...exists, caps: () => ({ power: true }) },
+  );
+  assert.ok(typeof old !== "string", String(old));
+  assert.deepEqual(old.steps, [{ do: "endRooms" }, { do: "power", tvs: ["a", "b"], on: true }, { do: "wait", seconds: 5 }, { do: "idle", tvs: ["a"] }, { do: "off", tvs: ["b"] }]);
   assert.match(String(cleanScene({ id: "a", name: "A", actions: [], next: { sceneId: "a", afterMinutes: 5 } }, exists)), /follow itself/);
   assert.match(String(cleanScene({ id: "a", name: "A", actions: [], next: { sceneId: "nope", afterMinutes: 5 } }, exists)), /saved scene/);
   assert.match(String(cleanScene({ id: "a", name: "A", actions: [], next: { sceneId: "closing", afterMinutes: 0 } }, exists)), /1-240/);

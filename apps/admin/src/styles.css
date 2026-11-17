@@ -390,3 +390,19 @@ button.tv-tile.selected { border-color: var(--primary); }
 .host-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .host-bar b { flex: 1; }
 .host-view iframe { flex: 1; width: 100%; border: 0; border-radius: 12px; background: #000; }
+
+/* Box 0.26.0: scenes as step lists. */
+.scene-list { display: grid; gap: 8px; margin: 0 0 12px; }
+.scene-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.scene-row > button:first-child { min-width: 9em; }
+.scene-row-tools { display: inline-flex; gap: 4px; margin-left: auto; }
+.scene-row-tools button.small, .tv-chips button.small { padding: 2px 10px; min-height: 0; }
+.scene-steps { list-style: decimal; padding-left: 1.6em; margin: 8px 0; display: grid; gap: 10px; }
+.scene-step { border: 1px solid #252c55; border-radius: 10px; padding: 8px 12px; min-width: 0; }
+.scene-step-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+.scene-step-head strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.scene-step select, .scene-step input:not([type="checkbox"]) { max-width: 100%; }
+.tv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; align-items: center; }
+.tv-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid #343c6e; cursor: pointer; }
+.tv-chip input { width: auto; margin: 0; }
+.tv-chip.on { background: #2a3470; border-color: #5b6bd6; }

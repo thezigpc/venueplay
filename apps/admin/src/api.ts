@@ -176,26 +176,31 @@ export interface MediaProvider {
 }
 /** Box 0.20.0: after a game step, the device that applied the scene opens its host controls ("ask": offers a button). */
 export type HostMode = "open" | "ask";
-export type SceneAction =
-  | { displayId: string; do: "game"; gameId: string; host?: HostMode }
-  | { displayId: ""; do: "wait"; seconds: number }
-  | { displayId: string; do: "media"; gameId: string; itemId: string }
-  | { displayId: string; do: "idle" | "off" }
-  | { displayId: string; do: "power"; on: boolean }
-  | { displayId: string; do: "input"; input: string }
-  | { displayId: string; do: "app"; appId: string; appName?: string }
-  | { displayId: string; do: "channel"; channel: string };
+/**
+ * Box 0.26.0: what a scene does, top to bottom. A TV step acts on all its TVs at once; a game
+ * step on several TVs is one room on all of them. Waits and extras are steps too.
+ */
+export type SceneStep =
+  | { do: "wait"; seconds: number }
+  | { do: "power"; tvs: string[]; on: boolean }
+  | { do: "input"; tvs: string[]; input: string }
+  | { do: "app"; tvs: string[]; appId: string; appName?: string }
+  | { do: "channel"; tvs: string[]; channel: string }
+  | { do: "game"; tvs: string[]; gameId: string; host?: HostMode }
+  | { do: "media"; tvs: string[]; gameId: string; itemId: string }
+  | { do: "idle"; tvs: string[] }
+  | { do: "off"; tvs: string[] }
+  | { do: "endRooms" }
+  | { do: "announce"; text: string; minutes?: number }
+  | { do: "clearAnnouncement" }
+  | { do: "countdown"; label: string; minutes: number }
+  | { do: "clearCountdown" }
+  | { do: "stopSound" };
 export interface Scene {
   id: string;
   name: string;
-  actions: SceneAction[];
-  endRooms?: boolean;
-  announcement?: { text: string; minutes?: number };
-  countdown?: { label: string; minutes: number };
-  /** Box 0.16.0 extras and sequences. */
-  stopSound?: boolean;
-  clearAnnouncement?: boolean;
-  clearCountdown?: boolean;
+  steps: SceneStep[];
+  /** Box 0.16.0: a sequence: apply another scene this many minutes later. */
   next?: { sceneId: string; afterMinutes: number };
 }
 /** Box 0.20.0: a scene being applied (waits run in the background). */

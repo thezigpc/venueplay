@@ -11,14 +11,42 @@
  */
 export type HostMode = "open" | "ask";
 
+/**
+ * Box 0.26.0: a scene is a list of steps, run top to bottom. A TV step acts on one or more
+ * TVs at once (in parallel: "turn on every TV"); a game step on several TVs is one room
+ * shown on all of them. Waits and the extras (end rooms, announcement, countdown, sound) are
+ * steps too, so they go anywhere in the order.
+ */
+export type SceneStep =
+  | { do: "wait"; seconds: number }
+  | { do: "power"; tvs: string[]; on: boolean }
+  | { do: "input"; tvs: string[]; input: string }
+  | { do: "app"; tvs: string[]; appId: string; appName?: string }
+  | { do: "channel"; tvs: string[]; channel: string }
+  | { do: "game"; tvs: string[]; gameId: string; host?: HostMode }
+  | { do: "media"; tvs: string[]; gameId: string; itemId: string }
+  | { do: "idle"; tvs: string[] }
+  | { do: "off"; tvs: string[] }
+  /** End every open room (closing time). */
+  | { do: "endRooms" }
+  /** Post (or replace) the staff announcement. */
+  | { do: "announce"; text: string; minutes?: number }
+  | { do: "clearAnnouncement" }
+  /** Start the lobby countdown. */
+  | { do: "countdown"; label: string; minutes: number }
+  | { do: "clearCountdown" }
+  /** Stop every sound the box is playing (music, apps, test sounds). */
+  | { do: "stopSound" };
+export type TvStep = Extract<SceneStep, { tvs: string[] }>;
+export const isTvStep = (s: SceneStep): s is TvStep => "tvs" in s;
+
+/** Before box 0.26.0: one TV per action, with the extras as scene flags (still accepted, converted). */
 export type SceneAction =
   | { displayId: string; do: "game"; gameId: string; host?: HostMode }
-  /** Box 0.20.0: pause before the next step ("input 1, wait 5 s, then cast"). */
   | { displayId: ""; do: "wait"; seconds: number }
   | { displayId: string; do: "media"; gameId: string; itemId: string }
   | { displayId: string; do: "idle" }
   | { displayId: string; do: "off" }
-  /** TV control (needs the TV's remote: Roku, paired Vizio or Apple TV). */
   | { displayId: string; do: "power"; on: boolean }
   | { displayId: string; do: "input"; input: string }
   | { displayId: string; do: "app"; appId: string; appName?: string }
@@ -40,25 +68,14 @@ export const TV_APP_ID = /^[A-Za-z0-9_.-]{1,100}$/;
 /** Box 0.20.0: one wait step, and all of a scene's waits together. */
 export const MAX_WAIT_SECONDS = 600;
 export const MAX_TOTAL_WAIT_SECONDS = 1800;
-/** Does applying this scene take a while (waits), or hand host controls to whoever applied it? */
-export const sceneRunsLong = (s: Scene) => s.actions.some((a) => a.do === "wait");
+/** Does applying this scene take a while (waits)? */
+export const sceneRunsLong = (s: Scene) => s.steps.some((a) => a.do === "wait");
 
 export interface Scene {
   id: string;
   name: string;
-  actions: SceneAction[];
-  /** End every open room first (closing time). */
-  endRooms?: boolean;
-  /** Post (or replace) the staff announcement. */
-  announcement?: { text: string; minutes?: number };
-  /** Start a countdown. */
-  countdown?: { label: string; minutes: number };
-  /** Box 0.16.0: stop every sound the box is playing (music, apps, test sounds). */
-  stopSound?: boolean;
-  /** Box 0.16.0: take the staff announcement down. */
-  clearAnnouncement?: boolean;
-  /** Box 0.16.0: clear the lobby countdown. */
-  clearCountdown?: boolean;
+  /** Box 0.26.0: what the scene does, in order. */
+  steps: SceneStep[];
   /**
    * Box 0.16.0: a sequence. After this scene, apply another one this many minutes later
    * ("Last call" → 15 min → "Closing"). Kept in memory: a core restart drops a pending step.
@@ -121,66 +138,119 @@ export interface Schedule {
 const ID = /^[a-z0-9-]{1,40}$/;
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+const sameStep = (a: SceneStep, b: SceneStep) => {
+  if (!isTvStep(a) || !isTvStep(b) || a.do !== b.do || a.do === "game" || a.do === "media") return false;
+  const { tvs: _a, ...x } = a;
+  const { tvs: _b, ...y } = b;
+  return JSON.stringify(x) === JSON.stringify(y);
+};
+
+/**
+ * Box 0.26.0: a scene saved before steps (one TV per action, extras as flags) as steps, in
+ * the order it always ran: end rooms, announcement, countdown, clears, sound, then the TVs.
+ * Back-to-back identical TV actions (power on tv1, power on tv2) become one step on both.
+ * Game actions stay one per TV: each had its own room.
+ */
+export function upgradeScene(v: Record<string, unknown>): Record<string, unknown> {
+  if (Array.isArray(v.steps) || !Array.isArray(v.actions)) return v;
+  const { actions, endRooms, announcement, countdown, clearAnnouncement, clearCountdown, stopSound, ...rest } = v as Record<string, unknown> & { actions: Record<string, unknown>[] };
+  const steps: Record<string, unknown>[] = [];
+  if (endRooms === true) steps.push({ do: "endRooms" });
+  const ann = announcement as { text?: unknown; minutes?: unknown } | undefined;
+  if (ann && typeof ann.text === "string" && ann.text.trim()) steps.push({ do: "announce", text: ann.text, ...(ann.minutes !== undefined ? { minutes: ann.minutes } : {}) });
+  const cd = countdown as { label?: unknown; minutes?: unknown } | undefined;
+  if (cd && typeof cd.label === "string" && cd.label.trim()) steps.push({ do: "countdown", label: cd.label, minutes: cd.minutes });
+  if (clearAnnouncement === true && !steps.some((x) => x.do === "announce")) steps.push({ do: "clearAnnouncement" });
+  if (clearCountdown === true && !steps.some((x) => x.do === "countdown")) steps.push({ do: "clearCountdown" });
+  if (stopSound === true) steps.push({ do: "stopSound" });
+  for (const a of actions) {
+    if (!a || typeof a !== "object") continue;
+    if (a.do === "wait") {
+      steps.push({ do: "wait", seconds: a.seconds });
+      continue;
+    }
+    const { displayId, ...step } = a;
+    const next = { ...step, tvs: [displayId] };
+    const last = steps[steps.length - 1];
+    if (last && Array.isArray(last.tvs) && sameStep(last as SceneStep, next as SceneStep) && !(last.tvs as unknown[]).includes(displayId)) (last.tvs as unknown[]).push(displayId);
+    else steps.push(next);
+  }
+  return { ...rest, steps };
+}
+
+/** A saved scene, whatever box wrote it. */
+export const sceneOf = (v: Scene | Record<string, unknown>): Scene => upgradeScene(v as Record<string, unknown>) as unknown as Scene;
+
 export function cleanScene(v: unknown, exists: { game: (id: string) => boolean; display: (id: string) => boolean; caps?: (id: string) => TvCaps | undefined; scene?: (id: string) => boolean }): Scene | string {
-  if (typeof v !== "object" || v === null) return "scene: { id, name, actions, endRooms?, announcement?, countdown? }";
-  const s = v as Record<string, unknown>;
+  if (typeof v !== "object" || v === null) return "scene: { id, name, steps, next? }";
+  const s = upgradeScene(v as Record<string, unknown>);
   const id = typeof s.id === "string" && ID.test(s.id) ? s.id : undefined;
   const name = typeof s.name === "string" ? s.name.trim().slice(0, 40) : "";
   if (!id) return "id: lowercase letters, digits, dashes";
   if (!name) return "name required";
-  if (!Array.isArray(s.actions) || s.actions.length > 64) return "actions: up to 64";
-  const actions: SceneAction[] = [];
+  if (!Array.isArray(s.steps) || s.steps.length > 64) return "steps: up to 64";
+  const steps: SceneStep[] = [];
   let waited = 0;
-  for (const a of s.actions as Record<string, unknown>[]) {
-    if (a?.do === "wait") {
+  for (const a of s.steps as Record<string, unknown>[]) {
+    if (typeof a !== "object" || a === null) return "steps: objects with a \"do\"";
+    if (a.do === "wait") {
       const seconds = Math.round(Number(a.seconds));
       if (!(seconds >= 1 && seconds <= MAX_WAIT_SECONDS)) return `wait: 1-${MAX_WAIT_SECONDS} seconds (longer: a sequence, "then apply a scene N minutes later")`;
       waited += seconds;
       if (waited > MAX_TOTAL_WAIT_SECONDS) return `waits: ${MAX_TOTAL_WAIT_SECONDS / 60} minutes in all at most`;
-      actions.push({ displayId: "", do: "wait", seconds });
+      steps.push({ do: "wait", seconds });
       continue;
     }
-    const displayId = typeof a?.displayId === "string" ? a.displayId : "";
-    if (!displayId || !exists.display(displayId)) return `unknown TV ${displayId}`;
-    const caps = exists.caps?.(displayId) ?? {};
-    if (a.do === "idle" || a.do === "off") actions.push({ displayId, do: a.do });
+    if (a.do === "endRooms" || a.do === "clearAnnouncement" || a.do === "clearCountdown" || a.do === "stopSound") {
+      steps.push({ do: a.do });
+      continue;
+    }
+    if (a.do === "announce") {
+      const text = typeof a.text === "string" ? a.text.trim().replace(/\s+/g, " ").slice(0, 200) : "";
+      if (!text) return "announcement: the text to show";
+      const minutes = a.minutes === undefined || a.minutes === null || a.minutes === "" ? undefined : Number(a.minutes);
+      if (minutes !== undefined && !(minutes >= 1 && minutes <= 1440)) return "announcement.minutes: 1-1440";
+      steps.push({ do: "announce", text, ...(minutes ? { minutes } : {}) });
+      continue;
+    }
+    if (a.do === "countdown") {
+      const label = typeof a.label === "string" ? a.label.trim().slice(0, 60) : "";
+      const minutes = Number(a.minutes);
+      if (!label) return "countdown: a label (\"Bingo starts\")";
+      if (!(minutes >= 0.25 && minutes <= 180)) return "countdown.minutes: 0.25-180";
+      steps.push({ do: "countdown", label, minutes });
+      continue;
+    }
+    const tvs = [...new Set((Array.isArray(a.tvs) ? (a.tvs as unknown[]) : []).filter((t): t is string => typeof t === "string" && t.length > 0))];
+    if (!tvs.length) return `${String(a.do)}: pick at least one TV`;
+    if (tvs.length > 64) return "a step: 64 TVs at most";
+    for (const t of tvs) if (!exists.display(t)) return `unknown TV ${t}`;
+    const caps = (t: string) => exists.caps?.(t) ?? {};
+    if (a.do === "idle" || a.do === "off") steps.push({ do: a.do, tvs });
     else if (a.do === "power") {
-      if (!caps.power) return `${displayId} can't be switched on or off by the box (pair its TV control first?)`;
-      actions.push({ displayId, do: "power", on: a.on === true });
+      const bad = tvs.find((t) => !caps(t).power);
+      if (bad) return `${bad} can't be switched on or off by the box (pair its TV control first?)`;
+      steps.push({ do: "power", tvs, on: a.on === true });
     } else if (a.do === "input") {
-      if (typeof a.input !== "string" || !(caps.inputs ?? []).includes(a.input)) return `${displayId} has no input ${String(a.input)} the box can switch to`;
-      actions.push({ displayId, do: "input", input: a.input });
+      const bad = tvs.find((t) => typeof a.input !== "string" || !(caps(t).inputs ?? []).includes(a.input));
+      if (bad) return `${bad} has no input ${String(a.input)} the box can switch to`;
+      steps.push({ do: "input", tvs, input: a.input as string });
     } else if (a.do === "app") {
-      if (!caps.apps) return `${displayId} can't open apps from the box (pair its TV control first?)`;
-      if (typeof a.appId !== "string" || !TV_APP_ID.test(a.appId)) return `app for ${displayId}: an app id from the TV's app list`;
-      actions.push({ displayId, do: "app", appId: a.appId, ...(typeof a.appName === "string" && a.appName.trim() ? { appName: a.appName.trim().slice(0, 60) } : {}) });
+      const bad = tvs.find((t) => !caps(t).apps);
+      if (bad) return `${bad} can't open apps from the box (pair its TV control first?)`;
+      if (typeof a.appId !== "string" || !TV_APP_ID.test(a.appId)) return `app for ${tvs.join(", ")}: an app id from the TV's app list`;
+      steps.push({ do: "app", tvs, appId: a.appId, ...(typeof a.appName === "string" && a.appName.trim() ? { appName: a.appName.trim().slice(0, 60) } : {}) });
     } else if (a.do === "channel") {
-      if (!caps.tvChannels) return `${displayId} can't tune TV channels`;
+      const bad = tvs.find((t) => !caps(t).tvChannels);
+      if (bad) return `${bad} can't tune TV channels`;
       const channel = typeof a.channel === "string" ? a.channel.trim() : "";
       if (!TV_CHANNEL.test(channel)) return "channel: like 7 or 7.1";
-      actions.push({ displayId, do: "channel", channel });
-    }
-    else if (a.do === "game" && typeof a.gameId === "string" && exists.game(a.gameId)) actions.push({ displayId, do: "game", gameId: a.gameId, ...(a.host === "open" || a.host === "ask" ? { host: a.host } : {}) });
-    else if (a.do === "media" && typeof a.gameId === "string" && exists.game(a.gameId) && typeof a.itemId === "string" && a.itemId) actions.push({ displayId, do: "media", gameId: a.gameId, itemId: a.itemId });
-    else return `action for ${displayId}: do game | media | idle | off | power | input | app | channel | wait`;
+      steps.push({ do: "channel", tvs, channel });
+    } else if (a.do === "game" && typeof a.gameId === "string" && exists.game(a.gameId)) steps.push({ do: "game", tvs, gameId: a.gameId, ...(a.host === "open" || a.host === "ask" ? { host: a.host } : {}) });
+    else if (a.do === "media" && typeof a.gameId === "string" && exists.game(a.gameId) && typeof a.itemId === "string" && a.itemId) steps.push({ do: "media", tvs, gameId: a.gameId, itemId: a.itemId });
+    else return `step for ${tvs.join(", ")}: do game | media | idle | off | power | input | app | channel | wait | endRooms | announce | clearAnnouncement | countdown | clearCountdown | stopSound`;
   }
-  const out: Scene = { id, name, actions };
-  if (s.endRooms === true) out.endRooms = true;
-  const ann = s.announcement as Record<string, unknown> | undefined;
-  if (ann && typeof ann.text === "string" && ann.text.trim()) {
-    const minutes = ann.minutes === undefined ? undefined : Number(ann.minutes);
-    if (minutes !== undefined && !(minutes >= 1 && minutes <= 1440)) return "announcement.minutes: 1-1440";
-    out.announcement = { text: ann.text.trim().replace(/\s+/g, " ").slice(0, 200), ...(minutes ? { minutes } : {}) };
-  }
-  const cd = s.countdown as Record<string, unknown> | undefined;
-  if (cd && typeof cd.label === "string" && cd.label.trim()) {
-    const minutes = Number(cd.minutes);
-    if (!(minutes >= 0.25 && minutes <= 180)) return "countdown.minutes: 0.25-180";
-    out.countdown = { label: cd.label.trim().slice(0, 60), minutes };
-  }
-  if (s.stopSound === true) out.stopSound = true;
-  if (s.clearAnnouncement === true && !out.announcement) out.clearAnnouncement = true;
-  if (s.clearCountdown === true && !out.countdown) out.clearCountdown = true;
+  const out: Scene = { id, name, steps };
   const next = s.next as Record<string, unknown> | undefined;
   if (next && typeof next === "object") {
     const after = Number(next.afterMinutes);
@@ -202,11 +272,7 @@ export function closingTimeScene(_displayIds: string[] = []): Scene {
   return {
     id: "closing-time",
     name: "Closing time",
-    endRooms: true,
-    stopSound: true,
-    clearCountdown: true,
-    announcement: { text: "We're closing. Thanks for playing, see you next time!", minutes: 60 },
-    actions: [],
+    steps: [{ do: "endRooms" }, { do: "announce", text: "We're closing. Thanks for playing, see you next time!", minutes: 60 }, { do: "clearCountdown" }, { do: "stopSound" }],
   };
 }
 

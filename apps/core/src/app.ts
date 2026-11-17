@@ -5,7 +5,7 @@ import { HostSampler } from "./systemStats.js";
 import { createBackup, packBackup, resumePendingRestore, unpackBackup, writeCoreFiles } from "./backup.js";
 import { cleanMatchStart, Matches } from "./matches.js";
 import { activeGuests, cleanGuestRequest, closingTonight, DEFAULT_GUEST_HOURS, guestActive, MAX_COHOSTS, pruneGuests, type GuestLink } from "./guests.js";
-import { cleanClosing, cleanScene, cleanSchedule, closingSchedules, closingTimeScene, dueNow, sceneRunsLong, WAKE_RETRY_MS, WAKE_TRIES, type HostMode, type Scene, type Schedule, type TvCaps } from "./scenes.js";
+import { cleanClosing, cleanScene, cleanSchedule, closingSchedules, closingTimeScene, dueNow, isTvStep, sceneRunsLong, WAKE_RETRY_MS, WAKE_TRIES, type HostMode, type Scene, type SceneStep, type Schedule, type TvCaps } from "./scenes.js";
 import { cleanResult, board, Leaderboards, nightStart } from "./leaderboard.js";
 import { rewardsHook } from "./rewards.js";
 import {
@@ -1055,7 +1055,7 @@ export function createApp(d: AppDeps) {
   const runs = new Map<string, SceneRun>();
   const newRun = (scene: Scene, by: string): SceneRun => {
     for (const [id, r] of runs) if (r.finishedAt && Date.now() - Date.parse(r.finishedAt) > 10 * 60_000) runs.delete(id);
-    const run: SceneRun = { id: randomBytes(6).toString("hex"), sceneId: scene.id, name: scene.name, by, total: scene.actions.length, done: 0, startedAt: new Date().toISOString(), steps: [] };
+    const run: SceneRun = { id: randomBytes(6).toString("hex"), sceneId: scene.id, name: scene.name, by, total: scene.steps.length, done: 0, startedAt: new Date().toISOString(), steps: [] };
     runs.set(run.id, run);
     return run;
   };
@@ -1103,48 +1103,17 @@ export function createApp(d: AppDeps) {
     return steps;
   };
   app.locals.pendingSequences = () => [...pendingNext.entries()].map(([from, p]) => ({ from, sceneId: p.sceneId, at: p.at }));
+  /**
+   * Box 0.26.0: a scene's steps, top to bottom. A TV step runs on all its TVs at once; a
+   * game step on several TVs is one room shown on all of them.
+   */
   const runSceneSteps = async (scene: Scene, run: SceneRun) => {
     const steps = run.steps;
-    if (scene.endRooms) {
-      for (const g of d.games.list().filter((x) => x.enabled && x.manifest.sdk.level >= 3 && x.manifest.commands.includes("end"))) {
-        const st = await gameStatusOf(g).catch(() => undefined);
-        for (const room of st?.rooms ?? []) {
-          const r = await gameCommand(g, { command: "end", roomCode: room.code, args: { reason: scene.announcement?.text ?? "The venue closed this room." } }).catch((err: Error) => ({ result: { ok: false, message: err.message } }));
-          steps.push({ step: `end ${g.id} ${room.code}`, ok: r.result.ok, message: r.result.message });
-        }
-      }
-    }
-    if (scene.announcement) {
-      await postAnnouncement(scene.announcement.text, scene.announcement.minutes);
-      steps.push({ step: "announcement", ok: true });
-    }
-    if (scene.countdown) {
-      await setCountdown(newCountdown(scene.countdown));
-      steps.push({ step: "countdown", ok: true });
-    }
-    // Box 0.16.0 extras.
-    if (scene.clearAnnouncement) {
-      await d.state.announcement.set({});
-      scheduleExpiry(undefined);
-      void refreshIdleTvs().catch(() => undefined);
-      steps.push({ step: "announcement cleared", ok: true });
-    }
-    if (scene.clearCountdown) {
-      await setCountdown({});
-      steps.push({ step: "countdown cleared", ok: true });
-    }
-    if (scene.stopSound) {
-      const playing = (((await brokerCall("GET", "/audio/sessions").catch(() => [])) as { id: string; state: string }[]) ?? []).filter((s) => !["ended", "error"].includes(s.state));
-      for (const s of playing) {
-        const ok = await brokerCall("POST", `/audio/sessions/${encodeURIComponent(s.id)}/stop`, { by: "admin" }).then(() => true, () => false);
-        steps.push({ step: `sound stopped (${s.id})`, ok });
-      }
-      if (!playing.length) steps.push({ step: "no sound playing", ok: true });
-    }
-    const idle = scene.actions.some((a) => a.do === "idle") ? await idleContent() : undefined;
+    const idle = scene.steps.some((a) => a.do === "idle") ? await idleContent() : undefined;
     /** TVs this scene just switched on: their next step retries while they wake up. */
     const waking = new Set<string>();
-    for (const a of scene.actions) {
+    const endReason = scene.steps.find((a): a is Extract<SceneStep, { do: "announce" }> => a.do === "announce")?.text ?? "The venue closed this room.";
+    for (const a of scene.steps) {
       if (run.cancelled) {
         steps.push({ step: "cancelled: the rest was skipped", ok: false });
         break;
@@ -1156,26 +1125,41 @@ export function createApp(d: AppDeps) {
         steps.push({ step: `waited ${a.seconds} s`, ok: true });
         continue;
       }
-      run.current = `${a.displayId}: ${a.do}`;
-      const tv = `/displays/${encodeURIComponent(a.displayId)}`;
+      run.current = isTvStep(a) ? `${a.tvs.join(", ")}: ${a.do}` : a.do;
       try {
-        if (a.do === "power") {
-          await brokerCall("POST", `${tv}/power`, { on: a.on });
-          if (a.on) waking.add(a.displayId);
-          steps.push({ step: `${a.displayId}: power ${a.on ? "on" : "off"}`, ok: true });
-        } else if (a.do === "input" || a.do === "app" || a.do === "channel") {
-          const send = () =>
-            a.do === "input"
-              ? brokerCall("POST", `${tv}/input`, { input: a.input })
-              : a.do === "app"
-                ? brokerCall("POST", `${tv}/apps/${encodeURIComponent(a.appId)}/launch`)
-                : brokerCall("POST", `${tv}/channel`, { channel: a.channel });
-          await (waking.has(a.displayId) ? whileWaking(send) : send());
-          steps.push({ step: `${a.displayId}: ${a.do === "input" ? `input ${a.input}` : a.do === "app" ? `app ${a.appName ?? a.appId}` : `channel ${a.channel}`}`, ok: true });
+        if (a.do === "endRooms") {
+          for (const g of d.games.list().filter((x) => x.enabled && x.manifest.sdk.level >= 3 && x.manifest.commands.includes("end"))) {
+            const st = await gameStatusOf(g).catch(() => undefined);
+            for (const room of st?.rooms ?? []) {
+              const r = await gameCommand(g, { command: "end", roomCode: room.code, args: { reason: endReason } }).catch((err: Error) => ({ result: { ok: false, message: err.message } }));
+              steps.push({ step: `end ${g.id} ${room.code}`, ok: r.result.ok, message: r.result.message });
+            }
+          }
+        } else if (a.do === "announce") {
+          await postAnnouncement(a.text, a.minutes);
+          steps.push({ step: "announcement", ok: true });
+        } else if (a.do === "countdown") {
+          await setCountdown(newCountdown({ label: a.label, minutes: a.minutes }));
+          steps.push({ step: "countdown", ok: true });
+        } else if (a.do === "clearAnnouncement") {
+          await d.state.announcement.set({});
+          scheduleExpiry(undefined);
+          void refreshIdleTvs().catch(() => undefined);
+          steps.push({ step: "announcement cleared", ok: true });
+        } else if (a.do === "clearCountdown") {
+          await setCountdown({});
+          steps.push({ step: "countdown cleared", ok: true });
+        } else if (a.do === "stopSound") {
+          const playing = (((await brokerCall("GET", "/audio/sessions").catch(() => [])) as { id: string; state: string }[]) ?? []).filter((x) => !["ended", "error"].includes(x.state));
+          for (const x of playing) {
+            const ok = await brokerCall("POST", `/audio/sessions/${encodeURIComponent(x.id)}/stop`, { by: "admin" }).then(() => true, () => false);
+            steps.push({ step: `sound stopped (${x.id})`, ok });
+          }
+          if (!playing.length) steps.push({ step: "no sound playing", ok: true });
         } else if (a.do === "game") {
-          const r = await castGame(a.gameId, { displayIds: [a.displayId] }, { firstJoinerHosts: true });
-          const res = r.results[a.displayId];
-          steps.push({ step: `${a.displayId}: ${a.gameId}`, ok: res?.ok !== false, message: res?.message });
+          // One room on every TV of the step.
+          const r = await castGame(a.gameId, { displayIds: a.tvs }, { firstJoinerHosts: true });
+          for (const tv of a.tvs) steps.push({ step: `${tv}: ${a.gameId}`, ok: r.results[tv]?.ok !== false, message: r.results[tv]?.message });
           if (a.host) {
             // Box 0.20.0: the room's host link (a new room is "first joiner hosts"); an app's host page.
             const game = d.games.get(a.gameId);
@@ -1184,16 +1168,43 @@ export function createApp(d: AppDeps) {
             if (url && ctx) run.host = { gameId: a.gameId, name: ctx.game.displayName, ...(r.roomCode ? { code: r.roomCode } : {}), url, mode: a.host };
             else steps.push({ step: `${a.gameId}: host controls`, ok: false, message: "this game has no host page to open" });
           }
-        } else if (a.do === "media") {
-          const r = await gameCommand(mediaApp(a.gameId), { command: "media_play", args: { displayId: a.displayId, itemId: a.itemId, takeBack: true } });
-          if (r.result.ok) roomCache.boost(a.gameId);
-          steps.push({ step: `${a.displayId}: ${a.gameId} list`, ok: r.result.ok, message: r.result.message });
+        } else if (a.do === "idle" || a.do === "off") {
+          const res = (await brokerCall("POST", "/show", { displayIds: a.tvs, content: a.do === "idle" ? idle : { kind: "off" } })) as Record<string, { ok: boolean; message?: string }>;
+          for (const tv of a.tvs) steps.push({ step: `${tv}: ${a.do}`, ok: res?.[tv]?.ok !== false, message: res?.[tv]?.message });
         } else {
-          const res = ((await brokerCall("POST", "/show", { displayIds: [a.displayId], content: a.do === "idle" ? idle : { kind: "off" } })) as Record<string, { ok: boolean; message?: string }>)[a.displayId];
-          steps.push({ step: `${a.displayId}: ${a.do}`, ok: res?.ok !== false, message: res?.message });
+          // Per TV, all at once.
+          const results = await Promise.all(
+            a.tvs.map(async (tvId): Promise<{ step: string; ok: boolean; message?: string }> => {
+              const tv = `/displays/${encodeURIComponent(tvId)}`;
+              try {
+                if (a.do === "power") {
+                  await brokerCall("POST", `${tv}/power`, { on: a.on });
+                  if (a.on) waking.add(tvId);
+                  else waking.delete(tvId);
+                  return { step: `${tvId}: power ${a.on ? "on" : "off"}`, ok: true };
+                }
+                if (a.do === "media") {
+                  const r = await gameCommand(mediaApp(a.gameId), { command: "media_play", args: { displayId: tvId, itemId: a.itemId, takeBack: true } });
+                  if (r.result.ok) roomCache.boost(a.gameId);
+                  return { step: `${tvId}: ${a.gameId} list`, ok: r.result.ok, message: r.result.message };
+                }
+                const send = () =>
+                  a.do === "input"
+                    ? brokerCall("POST", `${tv}/input`, { input: a.input })
+                    : a.do === "app"
+                      ? brokerCall("POST", `${tv}/apps/${encodeURIComponent(a.appId)}/launch`)
+                      : brokerCall("POST", `${tv}/channel`, { channel: a.channel });
+                await (waking.has(tvId) ? whileWaking(send) : send());
+                return { step: `${tvId}: ${a.do === "input" ? `input ${a.input}` : a.do === "app" ? `app ${a.appName ?? a.appId}` : `channel ${a.channel}`}`, ok: true };
+              } catch (err) {
+                return { step: `${tvId}: ${a.do}`, ok: false, message: (err as Error).message };
+              }
+            }),
+          );
+          steps.push(...results);
         }
       } catch (err) {
-        steps.push({ step: `${a.displayId}: ${a.do}`, ok: false, message: (err as Error).message });
+        steps.push({ step: isTvStep(a) ? `${a.tvs.join(", ")}: ${a.do}` : a.do, ok: false, message: (err as Error).message });
       }
     }
     return steps;

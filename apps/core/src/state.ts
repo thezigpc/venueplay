@@ -5,7 +5,7 @@ import path from "node:path";
 import type { CloudflareSettings } from "./cloudflare/service.js";
 import type { StartupRule } from "./startup.js";
 import type { ResultEntry } from "./leaderboard.js";
-import { DEFAULT_CLOSING, type ClosingSettings, type Scene, type Schedule } from "./scenes.js";
+import { DEFAULT_CLOSING, sceneOf, type ClosingSettings, type Scene, type Schedule } from "./scenes.js";
 import type { MatchRecord } from "@bargames/sdk";
 import { DEFAULT_GUESTS, type GuestStore } from "./guests.js";
 
@@ -137,6 +137,13 @@ export const DEFAULT_ANNOUNCEMENT_PRESETS: AnnouncementPreset[] = [
   { id: "next-round", text: "Next round starting soon.", minutes: 5 },
 ];
 
+/** Box 0.26.0: scenes saved before steps read as steps (the file is rewritten at the next save). */
+function upgradeScenes(store: JsonStore<{ scenes: Scene[] }>): JsonStore<{ scenes: Scene[] }> {
+  const data = store.get();
+  if (Array.isArray(data.scenes)) data.scenes = data.scenes.map(sceneOf);
+  return store;
+}
+
 export function openState(dataDir: string) {
   return {
     venue: new JsonStore<VenueSettings>(path.join(dataDir, "venue.json"), DEFAULT_VENUE),
@@ -149,7 +156,7 @@ export function openState(dataDir: string) {
     /** The venue's lobby countdown (SDK 0.9.0; none: {}). */
     countdown: new JsonStore<Partial<Countdown>>(path.join(dataDir, "countdown.json"), {}),
     /** Saved scenes (SDK 0.9.0). */
-    scenes: new JsonStore<{ scenes: Scene[] }>(path.join(dataDir, "scenes.json"), { scenes: [] }),
+    scenes: upgradeScenes(new JsonStore<{ scenes: Scene[] }>(path.join(dataDir, "scenes.json"), { scenes: [] })),
     /** Scheduled sessions, and when each last fired (id|kind → local date). */
     schedules: new JsonStore<{ schedules: Schedule[]; fired: Record<string, string> }>(path.join(dataDir, "schedules.json"), { schedules: [], fired: {} }),
     /** Game results for the leaderboards (last 30 days). */
