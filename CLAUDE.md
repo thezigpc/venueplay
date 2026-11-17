@@ -29,6 +29,7 @@ Repo: https://github.com/thezigpc/venueplay (public, branch `main`). Commits use
 - Venue-wide concerns (branding, access, events, Home Assistant) belong in the platform, never in individual games.
 
 ## Gotchas
+- After a power cut, Docker's json-file logs can end in a half-written line, and `docker logs` then shows nothing newer though the services log fine. Truncating doesn't help (Docker keeps its write offset). Run `docker compose up -d --force-recreate core gateway broker` for fresh log files.
 - Node `fetch` drops a custom `Host` header. Use `node:http` `request` in tests that need host routing.
 - The compose file checks `${VAR:?}` even for profile-disabled services, so use `${VAR:-}` for optional ones.
 - The gateway trusts `CF-Connecting-IP` only because games aren't reachable except through it. Never publish game ports.
