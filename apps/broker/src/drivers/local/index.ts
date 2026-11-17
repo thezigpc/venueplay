@@ -14,6 +14,7 @@
 import { spawn as spawnChild } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { TOUCH_PAGE_SCRIPT } from "./touchPage.js";
 import path from "node:path";
 import type { Logger } from "@bargames/common";
 import type { Proc, ProcRunner } from "../../airplay.js";
@@ -93,6 +94,19 @@ export function touchDevices(text: string): string[] {
     if ((low >> 53n) & 1n) out.push(name);
   }
   return out;
+}
+
+/**
+ * Box 0.22.1: how a touch screen answers a page's dialog (alert, confirm, prompt,
+ * beforeunload): yes. Nobody can tap the dialog itself there (cage 0.1.4; Debian 13 fixes it).
+ */
+export function dialogAnswer(d: { type: string; defaultPrompt?: string }): { accept: boolean; promptText?: string } {
+  return d.type === "prompt" ? { accept: true, promptText: d.defaultPrompt ?? "" } : { accept: true };
+}
+
+/** A page script that shows an alert's text as a notice for a few seconds. */
+export function noticeScript(message: string): string {
+  return `(() => { const n = document.createElement("div"); n.setAttribute("role", "status"); n.textContent = ${JSON.stringify(message.slice(0, 300))}; Object.assign(n.style, { position: "fixed", left: "50%", top: "4vh", transform: "translateX(-50%)", zIndex: "2147483002", maxWidth: "70vw", padding: "2vh 3vw", borderRadius: "1.5vh", background: "rgba(20,20,30,0.95)", color: "#fff", font: "600 3vh system-ui, sans-serif", boxShadow: "0 1vh 4vh rgba(0,0,0,0.5)", textAlign: "center" }); document.body.appendChild(n); setTimeout(() => n.remove(), 5000); })()`;
 }
 
 /** Chromium flags for a touch screen: touch events, no pinch zoom or swipe-back, no pop-ups. */
@@ -380,9 +394,26 @@ export class LocalScreenDriver implements DisplayDriver {
         s.send = (method, params) => {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ id: id++, method, params }));
         };
-        ws.onopen = () => ws.send(JSON.stringify({ id: id++, method: "Fetch.enable", params: { patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }] } }));
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ id: id++, method: "Fetch.enable", params: { patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }] } }));
+          ws.send(JSON.stringify({ id: id++, method: "Page.enable", params: {} }));
+          // Box 0.22.1: dropdowns as on-page lists, in every page from now on and this one.
+          ws.send(JSON.stringify({ id: id++, method: "Page.addScriptToEvaluateOnNewDocument", params: { source: TOUCH_PAGE_SCRIPT } }));
+          ws.send(JSON.stringify({ id: id++, method: "Runtime.evaluate", params: { expression: TOUCH_PAGE_SCRIPT } }));
+        };
         ws.onmessage = (ev) => {
           const msg = JSON.parse(String(ev.data)) as { method?: string; params?: { requestId: string; request: { url: string } } };
+          // Box 0.22.1: alert/confirm/prompt/"leave this page?" open as a separate Chromium
+          // window that touch can't reach, and the page is frozen until it's answered. Answer
+          // it here (the tap on the button was the decision); show an alert's text on the page.
+          if (msg.method === "Page.javascriptDialogOpening") {
+            const d = msg.params as unknown as { type: string; message: string; defaultPrompt?: string };
+            const answer = dialogAnswer(d);
+            ws.send(JSON.stringify({ id: id++, method: "Page.handleJavaScriptDialog", params: answer }));
+            this.o.log?.info("local", "answered a dialog on the touch screen", { type: d.type, accept: answer.accept });
+            if (d.type === "alert" && d.message) ws.send(JSON.stringify({ id: id++, method: "Runtime.evaluate", params: { expression: noticeScript(d.message) } }));
+            return;
+          }
           if (msg.method !== "Fetch.requestPaused" || !msg.params) return;
           const ok = allowedBy(s.sites, msg.params.request.url);
           if (!ok) this.o.log?.info("local", "blocked a page on the touch screen", { url: msg.params.request.url.slice(0, 120) });

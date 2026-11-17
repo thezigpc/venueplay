@@ -256,7 +256,15 @@ test("local screens: connected outputs from sysfs; showing starts cage + Chromiu
 });
 
 test("local screens 0.21.0: touchscreens found, touch flags, venue-only pages", async () => {
-  const { touchDevices, kioskArgs, siteOf, allowedBy, touchEventFor } = await import("./drivers/local/index.js");
+  const { touchDevices, kioskArgs, siteOf, allowedBy, touchEventFor, dialogAnswer, noticeScript } = await import("./drivers/local/index.js");
+  // Box 0.22.1: the page script for dropdowns parses as JavaScript.
+  const { TOUCH_PAGE_SCRIPT } = await import("./drivers/local/touchPage.js");
+  assert.doesNotThrow(() => new Function(TOUCH_PAGE_SCRIPT));
+  // Box 0.22.1: dialogs on a touch screen are answered for the tapper.
+  assert.deepEqual(dialogAnswer({ type: "confirm" }), { accept: true });
+  assert.deepEqual(dialogAnswer({ type: "beforeunload" }), { accept: true });
+  assert.deepEqual(dialogAnswer({ type: "prompt", defaultPrompt: "Dana" }), { accept: true, promptText: "Dana" });
+  assert.match(noticeScript('Room "AB" closed'), /"Room \\"AB\\" closed"/);
   // Box 0.22.0: touch frames (0..1) → DevTools touch events in CSS pixels.
   const css = { width: 1920, height: 1080 };
   assert.deepEqual(touchEventFor({ points: [{ id: 3, x: 0.5, y: 0.25 }] }, 0, css), { type: "touchStart", touchPoints: [{ id: 3, x: 960, y: 270, radiusX: 8, radiusY: 8, force: 1 }] });

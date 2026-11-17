@@ -56,8 +56,13 @@ touchscreen the box found).
     (wl_seat capabilities 0, "could not create touch point"), though libinput reads the
     screen fine. Moving the broker image to Debian 13 (cage 0.2, wlroots 0.18) is the
     long-term fix.
-  - **Dropdowns:** Chromium's `<select>` list is a separate pop-up that touch can't reach, so
-    GameKit 0.10.6 shows the choices on the page.
+  - **Dropdowns:** Chromium's `<select>` list is a separate pop-up that touch can't reach. The
+    broker adds a page script (`touchPage.ts`, box 0.22.1) that shows the choices on the page for
+    every game. GameKit 0.10.6 does the same inside games; the broker's runs first.
+  - **Dialogs (box 0.22.1):** `alert`, `confirm`, `prompt` and "leave this page?" are separate
+    windows too, and the page is frozen while one is open. On a touch screen the broker answers
+    them (Yes, OK, the prompt's default). An alert's text then shows on the page for 5 s. No
+    Cancel there until the Debian 13 image gives cage real touch.
   - **Container:** `broker-start` adds the `/dev/input` group to the broker process.
   - **Venue pages only:** a DevTools session fails any page load (main page or frame) outside
     the venue's own sites, meaning the domain of every page the box sent that screen.
