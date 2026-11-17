@@ -239,9 +239,8 @@ interface Session {
   /** Box 0.25.0: reloading an error page (Cloudflare 502, no network): the timer and the try. */
   retry?: ReturnType<typeof setTimeout>;
   attempts: number;
-  /** Box 0.26.1: when the guard last blocked a page, and a notice for the next page to show. */
+  /** Box 0.26.1: when the guard last blocked a page. */
   blockedAt?: number;
-  notice?: string;
 }
 
 export class LocalScreenDriver implements DisplayDriver {
@@ -430,8 +429,10 @@ export class LocalScreenDriver implements DisplayDriver {
       s.blockedAt = undefined;
       const h = (await call("Page.getNavigationHistory", {})) as { currentIndex?: number; entries?: { id: number }[] } | undefined;
       const prev = h?.entries && typeof h.currentIndex === "number" && h.currentIndex > 0 ? h.entries[h.currentIndex - 1] : undefined;
-      void call(prev ? "Page.navigateToHistoryEntry" : "Page.navigate", prev ? { entryId: prev.id } : { url: s.url });
-      s.notice = "Only the venue's own pages open on this screen.";
+      await call(prev ? "Page.navigateToHistoryEntry" : "Page.navigate", prev ? { entryId: prev.id } : { url: s.url });
+      // Going back usually comes from the back/forward cache (no load event): say why on a timer.
+      const t = setTimeout(() => this.session === s && void call("Runtime.evaluate", { expression: noticeScript("Only the venue's own pages open on this screen.") }), 1200);
+      t.unref?.();
       return;
     }
     if (isErrorLoad(status, String(href))) {
@@ -449,10 +450,6 @@ export class LocalScreenDriver implements DisplayDriver {
     if (s.retry) clearTimeout(s.retry);
     s.retry = undefined;
     s.attempts = 0;
-    if (s.notice) {
-      void call("Runtime.evaluate", { expression: noticeScript(s.notice) });
-      s.notice = undefined;
-    }
     if (s.resetHistory) {
       s.resetHistory = false;
       void call("Page.resetNavigationHistory", {});
