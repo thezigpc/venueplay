@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.17.0";
+export const SDK_VERSION = "0.18.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -705,7 +705,20 @@ export interface BoxTv {
    * (model: pyatv's name, e.g. "Apple TV 4K (gen 3)") or "roku" (model: the ECP model
    * number, e.g. "3930X"). Absent: the box can't hand this TV a video.
    */
-  video?: { kind: "appletv" | "roku"; model: string };
+  video?: BoxTvVideo;
+}
+
+/**
+ * SDK 0.17.0: a TV that takes video links. SDK 0.18.0 adds kind "venuebox": a Venuebox app
+ * (Android/Google TV, Windows/Mac/Linux PC) with its own player; `formats` says what it plays
+ * directly, so ask your media server for that or a transcode. Lower-case names, as Jellyfin
+ * uses them (containers "mp4" "mkv" "hls"…, video "h264" "hevc"…, audio "aac" "eac3"…).
+ * `seek` false: no seek and no start part-way (like a Roku).
+ */
+export interface BoxTvVideo {
+  kind: "appletv" | "roku" | "venuebox";
+  model: string;
+  formats?: { containers: string[]; video: string[]; audio: string[]; maxHeight?: number; seek: boolean; passthrough?: string[] };
 }
 
 /** SDK 0.17.0: a video link for a TV to play itself (bg.playVideo). The TV fetches `url` and `poster` straight from their server. */

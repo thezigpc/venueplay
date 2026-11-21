@@ -170,8 +170,18 @@ export interface DisplayDriver {
 
 /** Box 0.27.0: what kind of player a TV has, for apps choosing a stream (bg.tvs().video). */
 export interface VideoInfo {
-  kind: "appletv" | "roku";
+  kind: "appletv" | "roku" | "venuebox";
   model: string;
+  /** Box 0.28.0, Venuebox apps: what the player plays (direct play vs transcode). */
+  formats?: VideoFormats;
+}
+export interface VideoFormats {
+  containers: string[];
+  video: string[];
+  audio: string[];
+  maxHeight?: number;
+  seek: boolean;
+  passthrough?: string[];
 }
 
 /** A video for the TV to play itself. `url` and `poster` may carry the media server's key: never log or store them. */

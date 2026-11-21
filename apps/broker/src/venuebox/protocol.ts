@@ -26,6 +26,24 @@ export interface Screen {
 
 export type Delivery = "native-url" | "hls";
 
+/**
+ * Box 0.28.0: a client that can play a video link itself (full screen, over the page it was
+ * showing) says what it plays. Lower-case names, as Jellyfin uses them: containers
+ * "mp4" "mkv" "mov" "webm" "ts" "hls"; video "h264" "hevc" "av1" "vp9"; audio "aac" "mp3"
+ * "ac3" "eac3" "dts" "truehd" "opus" "flac". Apps pick direct play or a transcode from it.
+ */
+export interface VideoCaps {
+  containers: string[];
+  video: string[];
+  audio: string[];
+  /** Tallest picture it plays (2160 for 4K). */
+  maxHeight?: number;
+  /** It can jump to a position (and start part-way). */
+  seek: boolean;
+  /** Surround audio passed through to the TV/receiver. */
+  passthrough?: string[];
+}
+
 // ---------------------------------------------------------------- client → box
 
 export interface HelloMsg {
@@ -37,6 +55,8 @@ export interface HelloMsg {
   appVersion?: string;
   screens: Screen[];
   deliveries: Delivery[];
+  /** Box 0.28.0: present when the client plays video links itself. */
+  video?: VideoCaps;
 }
 /** A screen was plugged in or unplugged (desktop): the full current list. */
 export interface ScreensMsg {
@@ -59,7 +79,30 @@ export interface PreviewMsg {
   jpeg?: string;
   error?: string;
 }
-export type ClientMsg = HelloMsg | ScreensMsg | StateMsg | PreviewMsg;
+/** Box 0.28.0: the answer to a "video" message, same requestId. Never put the link in `message`. */
+export interface VideoReplyMsg {
+  type: "video-reply";
+  requestId: string;
+  ok: boolean;
+  /** unsupported | not-allowed | error */
+  reason?: string;
+  message?: string;
+  /** With op "status" (and allowed with any op): the player's state now. */
+  state?: VideoState;
+  position?: number;
+  duration?: number;
+}
+export type VideoState = "loading" | "playing" | "paused" | "stopped" | "error";
+/** Box 0.28.0: the player changed by itself (started, ended, failed, staff used the TV's remote). Send at most every few seconds while playing. */
+export interface VideoStateMsg {
+  type: "video-state";
+  screen: string;
+  state: VideoState;
+  position?: number;
+  duration?: number;
+  message?: string;
+}
+export type ClientMsg = HelloMsg | ScreensMsg | StateMsg | PreviewMsg | VideoReplyMsg | VideoStateMsg;
 
 // ---------------------------------------------------------------- box → client
 
@@ -79,9 +122,21 @@ export interface ShowMsg {
   kind: Delivery;
   title?: string;
 }
+/**
+ * Box 0.28.0: play a video link full screen over the page (play), or control it. The client
+ * answers with a video-reply (same requestId) as soon as it has accepted the op: for play,
+ * once the player is loading, not when the picture starts. When the video ends or is
+ * stopped, the page it was showing comes back. `url` and `poster` carry the media server's
+ * key: never log them, store them or report them in "state".showing.
+ */
+export type VideoMsg =
+  | { type: "video"; screen: string; requestId: string; op: "play"; url: string; title: string; mime?: string; poster?: string; startAt?: number }
+  | { type: "video"; screen: string; requestId: string; op: "pause" | "resume" | "stop" | "status" }
+  | { type: "video"; screen: string; requestId: string; op: "seek"; position: number };
 export type BoxMsg =
   | WelcomeMsg
   | ShowMsg
+  | VideoMsg
   | { type: "off"; screen: string }
   | { type: "reload"; screen: string }
   | { type: "identify"; screen: string; label: string }
@@ -90,6 +145,21 @@ export type BoxMsg =
 
 /** WebSocket close codes the box uses. */
 export const CLOSE = { badToken: 4401, revoked: 4403, protocol: 4400, replaced: 4409 } as const;
+
+const NAMES = /^[a-z0-9][a-z0-9.+-]{0,23}$/;
+const names = (v: unknown) => (Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === "string").map((x) => x.toLowerCase()).filter((x) => NAMES.test(x)))].slice(0, 24) : []);
+/** A hello's video abilities, cleaned up; undefined when it can't play anything. */
+export function checkVideoCaps(v: unknown): VideoCaps | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const caps: VideoCaps = { containers: names(o.containers), video: names(o.video), audio: names(o.audio), seek: o.seek === true };
+  if (!caps.containers.length || !caps.video.length) return undefined;
+  const h = Number(o.maxHeight);
+  if (Number.isInteger(h) && h >= 144 && h <= 4320) caps.maxHeight = h;
+  const pass = names(o.passthrough);
+  if (pass.length) caps.passthrough = pass;
+  return caps;
+}
 
 export function checkScreens(v: unknown): Screen[] | undefined {
   if (!Array.isArray(v) || v.length === 0 || v.length > 16) return undefined;

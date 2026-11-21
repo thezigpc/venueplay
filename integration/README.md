@@ -21,6 +21,19 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.18.0 (video on Venuebox apps)
+
+- **Most modules: nothing to change.**
+- **Video apps** (box 0.28.0): `bg.tvs()` can now list TVs with
+  `video: { kind: "venuebox", model, formats }`. These are Venuebox apps (Android/Google TV
+  sticks, PCs) with their own video player. `formats` is
+  `{ containers, video, audio, maxHeight?, seek, passthrough? }`: lower-case names as Jellyfin
+  uses them (`"mkv"`, `"hevc"`, `"eac3"`…). Build the stream request from it (direct play when
+  it fits, else a transcode). `seek: true`: seek and `startAt` work.
+- Type: `BoxTvVideo` (exported). `video.formats` is absent for Apple TVs and Rokus.
+- The mock box adds **`fake-den`**, a pretend Venuebox Android TV with a 4K HEVC player, for
+  video apps only.
+
 ## What's new in SDK 0.17.0 (video links on TVs)
 
 - **Most modules: nothing to change.**

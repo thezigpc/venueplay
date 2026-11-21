@@ -149,6 +149,48 @@ the same rule as the game SDK.
   - Before venues install updates, it needs one shared release signing key, kept out of
     every repo. An APK signed with a different key can't upgrade the installed app.
 
+## Video player (box 0.28.0, still protocol v1)
+
+A client can play a video link itself, full screen over the page it was showing: a
+movie from the venue's Jellyfin, handed over by an app with `video.play` (the Movies app).
+The device streams straight from the media server. The box never carries the video. It's
+optional: a client that doesn't declare it keeps working, and the box never sends it
+`video`. Field names are typed in `apps/broker/src/venuebox/protocol.ts`.
+
+- **Declare it** in `hello`: `video: { containers, video, audio, maxHeight?, seek, passthrough? }`,
+  lower-case names as Jellyfin uses them: containers `mp4` `mkv` `mov` `webm` `ts` `hls`;
+  video `h264` `hevc` `av1` `vp9`; audio `aac` `mp3` `ac3` `eac3` `dts` `truehd` `opus` `flac`.
+  Only list what the device plays **without** dropping frames (check the decoders:
+  Android `MediaCodecList`, hardware HEVC/AV1 only). `maxHeight` 2160 for 4K, 1080 otherwise.
+  `seek: true` when it can jump and start part-way. `passthrough`: surround formats sent to
+  the TV/receiver as-is. Apps choose direct play or a transcode from this, so be accurate.
+- **Box → client** `video { screen, requestId, op, ... }`:
+  - `op: "play"`, `url`, `title`, `mime?`, `poster?`, `startAt?` (seconds): open the player
+    over the page and start (from `startAt` when given). `mime` is a hint
+    (`application/vnd.apple.mpegurl` = HLS, `video/x-matroska`, `video/mp4`…).
+  - `op: "pause" | "resume" | "stop" | "status"`, or `op: "seek"` with `position` (seconds).
+  - Answer **every** op with `video-reply { requestId, ok, reason?, message? }`: for play as
+    soon as the player is loading (within 15 s), not when the picture starts; others within
+    5 s, `status` within 3 s. `reason`: `unsupported` (an op or format it can't do),
+    `not-allowed`, or `error`. For `status` (allowed on any op) add
+    `state: "loading" | "playing" | "paused" | "stopped" | "error"`, `position`, `duration`
+    (seconds).
+- **Client → box** `video-state { screen, state, position?, duration?, message? }` when the
+  player changes by itself: it started playing, buffering, ended, failed, or someone used the
+  TV's own remote. While playing, at most every 10 s (the box asks with `status` when an app
+  wants it fresh).
+- **When it ends or is stopped**, close the player and show the page again (it kept running
+  underneath, or reload the last `show`). A new `show` for that screen also closes the player.
+  The TV's remote: play/pause and seek work in the player; Back stops it (send `video-state`
+  `stopped`).
+- **The link and poster carry the media server's key.** Never log them, never store them,
+  never put them in `state.showing` or in any `message`. A failure message says what
+  happened ("the server refused the stream", "no HEVC decoder"), not which link.
+- Players: Android, Media3/ExoPlayer (HLS, MKV, MP4 and the device's hardware codecs; audio
+  passthrough via `AudioCapabilities`). Desktop (Electron): a bundled **mpv**, full screen on
+  that screen's monitor, driven over its JSON IPC (direct play of nearly everything: MKV, HEVC,
+  AV1, HDR, hardware decoding, audio passthrough).
+
 ## Box side (when building starts)
 
 1. Core: pairing endpoints and the device registry (data/core/devices.json), LAN-only.

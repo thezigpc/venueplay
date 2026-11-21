@@ -679,12 +679,12 @@ export function createApp(d: AppDeps) {
     h(async (req, res) => {
       const game = mediaProviderAuth(req);
       const allowed = game.manifest.media?.launch ?? [];
-      const list = ((await brokerCall("GET", "/displays?health=1").catch(() => [])) as { id: string; name: string; label?: string; group?: string; driver: string; health?: { online?: boolean }; launchable?: string[]; video?: { kind: string; model: string } }[]) ?? [];
+      const list = ((await brokerCall("GET", "/displays?health=1").catch(() => [])) as { id: string; name: string; label?: string; group?: string; driver: string; health?: { online?: boolean }; launchable?: string[]; video?: { kind: string; model: string; formats?: unknown } }[]) ?? [];
       const tvs = await Promise.all(
         list.map(async (x) => {
           const canLaunch = (x.launchable ?? []).filter((a) => allowed.includes(a));
           const tv: Record<string, unknown> = { id: x.id, name: x.label || x.name, ...(x.group ? { group: x.group } : {}), kind: x.driver, online: Boolean(x.health?.online), canLaunch };
-          if (game.manifest.video?.play && x.video) tv.video = { kind: x.video.kind, model: x.video.model };
+          if (game.manifest.video?.play && x.video) tv.video = { kind: x.video.kind, model: x.video.model, ...(x.video.formats ? { formats: x.video.formats } : {}) };
           if (allowed.includes("youtube") && x.health?.online && x.driver === "roku") {
             const r = (await brokerCall("GET", "/displays/" + encodeURIComponent(x.id) + "/dial/youtube").catch(() => undefined)) as { screenId?: string } | undefined;
             if (r?.screenId) tv.youtubeScreenId = r.screenId;

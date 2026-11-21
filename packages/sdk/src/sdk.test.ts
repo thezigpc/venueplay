@@ -1037,8 +1037,15 @@ test("0.17.0 video: manifest video.play; the mock box's fake video TVs (a Roku w
     const tvs = await bg.tvs();
     assert.deepEqual(
       tvs.filter((t) => t.video).map((t) => [t.id, t.video?.kind]),
-      [["fake-bar", "roku"], ["fake-patio", "appletv"]],
+      [["fake-bar", "roku"], ["fake-patio", "appletv"], ["fake-den", "venuebox"]],
     );
+    // SDK 0.18.0: a Venuebox app's player says what it plays, and can start part-way.
+    const den = tvs.find((t) => t.id === "fake-den")!;
+    assert.equal(den.video?.formats?.seek, true);
+    assert.ok(den.video?.formats?.video.includes("hevc"));
+    assert.deepEqual(await bg.playVideo("fake-den", { url: "http://media.example/v.mkv?api_key=k", title: "A movie", startAt: 30 }), { ok: true });
+    assert.equal((await bg.videoStatus("fake-den")).position, 30);
+    await bg.videoControl("fake-den", "stop");
     const link = "http://media.example/Videos/1/master.m3u8?api_key=k";
     assert.match((await bg.playVideo("fake-bar", { url: link, title: "A movie", startAt: 40 })).message ?? "", /from the beginning/);
     assert.equal((await bg.videoControl("fake-bar", { seek: 10 })).reason, "unsupported");

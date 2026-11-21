@@ -66,6 +66,10 @@ venue TV a video link that the TV plays itself, streaming straight from the link
   The Apple TV must be paired twice, with "Pair TV control" and then a second PIN for AirPlay.
   Without that, `reason: "needs-pairing"`.
 - **Rokus** play it in their built-in player. A Roku can't seek or start part-way through.
+- **Venuebox apps** (SDK 0.18.0, box 0.28.0; Android/Google TV and PC clients with a player)
+  have `video.kind: "venuebox"` and `video.formats` (containers, video and audio codecs,
+  `maxHeight`, `seek`, `passthrough`): what they play directly, so ask the media server for
+  that or for a transcode. With `seek: true`, seek and `startAt` work.
 
 The calls:
 - `bg.tvs()[].video` (`{ kind: "appletv" | "roku", model }`) says which TVs can take a link.

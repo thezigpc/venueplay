@@ -9,7 +9,7 @@
 import { createServer, request, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { connect } from "node:net";
 import { isApp, isIntegration, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
-import { AUDIO_PATHS, GUEST_PATHS, HEADERS, INTEGRATION_PATHS, MATCH_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type AudioEndReason, type AudioOutput, type AudioPlayOptions, type MatchRecord, type MatchStart, type GuestLinkInfo, type GuestRole, type AudioSession, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
+import { AUDIO_PATHS, GUEST_PATHS, HEADERS, INTEGRATION_PATHS, MATCH_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type AudioEndReason, type AudioOutput, type AudioPlayOptions, type MatchRecord, type MatchStart, type GuestLinkInfo, type GuestRole, type AudioSession, type BoxTvVideo, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
 import { DEFAULT_THEME } from "./theme.js";
 import { joinUrl, normalizeBasePath } from "./base.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -312,10 +312,18 @@ export function mockBox(o: MockBoxOptions) {
   let fakeRokuApp = "home";
   // SDK 0.17.0: pretend video TVs. fake-bar is a Roku 3930X (no seek, no start part-way),
   // fake-patio an Apple TV 4K. A video "plays" in real time for 90 s, then stops.
-  const FAKE_VIDEO: Record<string, { kind: "roku" | "appletv"; model: string }> = {
+  const FAKE_VIDEO: Record<string, BoxTvVideo> = {
     "fake-bar": { kind: "roku", model: "3930X" },
     "fake-patio": { kind: "appletv", model: "Apple TV 4K (gen 3)" },
+    // SDK 0.18.0: a Venuebox app on an Android TV stick, which plays video links itself.
+    "fake-den": {
+      kind: "venuebox",
+      model: "android · Chromecast with Google TV (4K)",
+      formats: { containers: ["mp4", "mkv", "mov", "webm", "ts", "hls"], video: ["h264", "hevc", "vp9", "av1"], audio: ["aac", "mp3", "ac3", "eac3", "opus", "flac"], maxHeight: 2160, seek: true, passthrough: ["ac3", "eac3"] },
+    },
   };
+  /** SDK 0.18.0: TVs only video apps see (a Venuebox app with a video player). */
+  const VIDEO_ONLY_TVS = [{ id: "fake-den", name: "Den (fake Venuebox Android TV)", group: "Main room" }];
   const FAKE_VIDEO_SECONDS = 90;
   const videos = new Map<string, { title: string; base: number; since: number; paused: boolean }>();
   const videoPos = (v: { base: number; since: number; paused: boolean }) => Math.min(FAKE_VIDEO_SECONDS, v.base + (v.paused ? 0 : Math.floor((Date.now() - v.since) / 1000)));
@@ -434,18 +442,21 @@ export function mockBox(o: MockBoxOptions) {
       const launch = o.manifest.media?.launch ?? [];
       const video = Boolean(o.manifest.video?.play);
       return json(200, {
-        tvs: FAKE_TVS.map((t, i) => ({
-          id: t.id,
-          name: t.name,
-          group: t.group,
-          kind: i === 0 ? "roku" : video && FAKE_VIDEO[t.id] ? FAKE_VIDEO[t.id].kind : "airplay",
-          ...(video && FAKE_VIDEO[t.id] ? { video: FAKE_VIDEO[t.id] } : {}),
-          online: !t.unpaired,
-          canLaunch: i === 0 ? launch.filter((a) => a === "youtube") : [],
-          ...(i === 0 && launch.includes("youtube") ? { youtubeScreenId: "fake-screen-id-bar" } : {}),
-          // SDK 0.10.4: the fake Roku starts on its home screen; a launch puts the app up.
-          ...(i === 0 ? { activeApp: fakeRokuApp } : {}),
-        })),
+        tvs: [
+          ...FAKE_TVS.map((t, i) => ({
+            id: t.id,
+            name: t.name,
+            group: t.group,
+            kind: i === 0 ? "roku" : video && FAKE_VIDEO[t.id] ? FAKE_VIDEO[t.id].kind : "airplay",
+            ...(video && FAKE_VIDEO[t.id] ? { video: FAKE_VIDEO[t.id] } : {}),
+            online: !t.unpaired,
+            canLaunch: i === 0 ? launch.filter((a) => a === "youtube") : [],
+            ...(i === 0 && launch.includes("youtube") ? { youtubeScreenId: "fake-screen-id-bar" } : {}),
+            // SDK 0.10.4: the fake Roku starts on its home screen; a launch puts the app up.
+            ...(i === 0 ? { activeApp: fakeRokuApp } : {}),
+          })),
+          ...(video ? VIDEO_ONLY_TVS.map((t) => ({ ...t, kind: "venuebox", video: FAKE_VIDEO[t.id], online: true, canLaunch: [] })) : []),
+        ],
       });
     }
     if (req.url === "/internal/launch-app" && req.method === "POST") {
@@ -466,7 +477,7 @@ export function mockBox(o: MockBoxOptions) {
       const body = req.method === "POST" ? (JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>) : {};
       const id = String(body.displayId ?? url.searchParams.get("displayId") ?? "");
       const tv = FAKE_VIDEO[id];
-      const name = FAKE_TVS.find((t) => t.id === id)?.name ?? id;
+      const name = [...FAKE_TVS, ...VIDEO_ONLY_TVS].find((t) => t.id === id)?.name ?? id;
       if (url.pathname === "/internal/video/status") {
         const v = videos.get(id);
         if (!v) return json(200, { state: "stopped" });
@@ -477,14 +488,14 @@ export function mockBox(o: MockBoxOptions) {
         }
         return json(200, { state: v.paused ? "paused" : "playing", position, duration: FAKE_VIDEO_SECONDS });
       }
-      if (!tv) return json(200, { ok: false, reason: "unsupported", message: `${name} can't be handed a video (fake video TVs: fake-bar, fake-patio)` });
+      if (!tv) return json(200, { ok: false, reason: "unsupported", message: `${name} can't be handed a video (fake video TVs: ${Object.keys(FAKE_VIDEO).join(", ")})` });
       if (url.pathname === "/internal/video/play") {
         const bad = typeof body.url !== "string" || !/^https?:\/\//.test(body.url) ? "url: an http or https link" : typeof body.title !== "string" || !body.title ? "title required" : undefined;
         if (bad) {
           console.log(c.bad(`✗ playVideo: ${bad}`));
           return json(200, { ok: false, reason: "error", message: bad });
         }
-        const start = tv.kind === "appletv" && typeof body.startAt === "number" ? Math.max(0, Math.floor(body.startAt)) : 0;
+        const start = tv.kind !== "roku" && typeof body.startAt === "number" ? Math.max(0, Math.floor(body.startAt)) : 0;
         videos.set(id, { title: String(body.title), base: start, since: Date.now(), paused: false });
         console.log(`${c.ok("video")} "${body.title}" on ${name}${start ? ` from ${start} s` : ""} (pretend, ${FAKE_VIDEO_SECONDS} s; link not shown)`);
         return json(200, tv.kind === "roku" && body.startAt ? { ok: true, message: `${name} starts from the beginning (a Roku can't start part-way through)` } : { ok: true });

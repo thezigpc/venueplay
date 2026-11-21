@@ -109,3 +109,92 @@ test("video: a Roku gets the link through its built-in player; status, pause, st
 
   await assert.rejects(reg.playVideo("roku:GONE", { url: LINK, title: "x" }, "movies"), /no display/, "ignored TVs are refused");
 });
+
+test("video 0.28.0: a Venuebox app with a player gets the link over its channel; formats, seek, status, redaction", async () => {
+  const { createLogger } = await import("@bargames/common");
+  const { WebSocket } = await import("ws");
+  const { DeviceStore, Pairings } = await import("./venuebox/devices.js");
+  const { VenueboxHub } = await import("./venuebox/hub.js");
+  const dir = mkdtempSync(path.join(tmpdir(), "video-vb-"));
+  const drivers = new Map();
+  const reg = new DisplayRegistry(new JsonStore<{ displays: DisplayRecord[] }>(path.join(dir, "displays.json"), { displays: [] }), drivers);
+  const hub = new VenueboxHub({
+    devices: new DeviceStore(new JsonStore(path.join(dir, "devices.json"), { devices: [] })),
+    pairings: new Pairings(),
+    log: createLogger("test", "error"),
+    boxName: () => "Test box",
+    displaysChanged: async (found, removed) => {
+      await reg.merge(found);
+      await reg.removeMany(removed);
+    },
+    reconnected: () => {},
+  });
+  drivers.set(hub.id, hub);
+  const server = hub.listen(0, "127.0.0.1");
+  await new Promise((r) => server.once("listening", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const screens = [{ id: "hdmi", name: "TV", w: 3840, h: 2160 }];
+  try {
+    const start = (await (await fetch(base + "/pair/start", { method: "POST", body: JSON.stringify({ name: "Den stick", platform: "android", model: "Chromecast with Google TV", screens }) })).json()) as { pairingId: string; code: string };
+    const dev = await hub.approve(start.code);
+    const { token } = (await (await fetch(`${base}/pair/status?id=${start.pairingId}`)).json()) as { token: string };
+    const id = `venuebox:${dev.id}:hdmi`;
+
+    const ws = new WebSocket(base.replace("http", "ws") + "/client");
+    const got: Record<string, unknown>[] = [];
+    let answer: (m: Record<string, unknown>) => Record<string, unknown> | undefined = () => undefined;
+    ws.on("message", (raw) => {
+      const m = JSON.parse(String(raw)) as Record<string, unknown>;
+      got.push(m);
+      const r = m.type === "video" ? answer(m) : undefined;
+      if (r) ws.send(JSON.stringify({ type: "video-reply", requestId: m.requestId, ...r }));
+    });
+    await new Promise((r) => ws.on("open", r));
+    ws.send(
+      JSON.stringify({
+        type: "hello", v: 1, token, platform: "android", screens, deliveries: ["native-url"],
+        video: { containers: ["MP4", "mkv", "hls", "bad name!"], video: ["h264", "hevc"], audio: ["aac", "eac3"], maxHeight: 2160, seek: true, passthrough: ["eac3"] },
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 80));
+
+    const views = await reg.view();
+    assert.deepEqual(views.find((v) => v.id === id)!.video, {
+      kind: "venuebox",
+      model: "android · Chromecast with Google TV",
+      formats: { containers: ["mp4", "mkv", "hls"], video: ["h264", "hevc"], audio: ["aac", "eac3"], maxHeight: 2160, seek: true, passthrough: ["eac3"] },
+    });
+
+    answer = () => ({ ok: true });
+    const r = await reg.playVideo(id, { url: LINK, title: "A movie", mime: "video/x-matroska", startAt: 30 }, "movies");
+    assert.deepEqual(r, { ok: true });
+    const play = got.find((m) => m.type === "video" && m.op === "play")!;
+    assert.deepEqual({ ...play, requestId: "x" }, { type: "video", screen: "hdmi", requestId: "x", op: "play", url: LINK, title: "A movie", mime: "video/x-matroska", startAt: 30 });
+    assert.deepEqual(reg.get(id)!.content, { kind: "external", provider: "movies", app: "video", title: "A movie" });
+    assert.ok(!readFileSync(path.join(dir, "displays.json"), "utf8").includes("SECRET"), "the link is never stored");
+
+    assert.deepEqual(await reg.videoControl(id, { seek: 600.4 }), { ok: true });
+    assert.equal(got.at(-1)!.position, 600);
+    answer = (m) => (m.op === "status" ? { ok: true, state: "playing", position: 612.9, duration: 5400 } : { ok: true });
+    assert.deepEqual(await reg.videoStatus(id), { state: "playing", position: 612, duration: 5400 });
+
+    // The player reports by itself (ended); a client that stops answering falls back to that.
+    ws.send(JSON.stringify({ type: "video-state", screen: "hdmi", state: "stopped", position: 5400, duration: 5400 }));
+    answer = () => undefined;
+    await new Promise((r) => setTimeout(r, 30));
+    assert.deepEqual(await reg.videoStatus(id), { state: "stopped", position: 5400, duration: 5400 });
+
+    // A failure echoing the link: the link never comes back out.
+    answer = () => ({ ok: false, reason: "error", message: `can't open ${LINK}` });
+    const bad = await reg.playVideo(id, { url: LINK, title: "A movie" }, "movies");
+    assert.equal(bad.ok, false);
+    assert.doesNotMatch(JSON.stringify(bad), /SECRET|media\.example/);
+
+    ws.close();
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal((await reg.view()).find((v) => v.id === id)!.video, undefined, "disconnected: no player to hand a link to");
+  } finally {
+    hub.close();
+    server.close();
+  }
+});

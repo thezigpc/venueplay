@@ -5,9 +5,16 @@ import type { Logger } from "@bargames/common";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { Capabilities, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamState } from "../types.js";
+import { redactUrls, type Capabilities, type DisplayContent, type DisplayDevice, type DisplayDriver, type Health, type ShowResult, type StreamState, type VideoAction, type VideoInfo, type VideoRequest, type VideoResult, type VideoStatus } from "../types.js";
 import { type Device, type DeviceStore, type Pairings } from "./devices.js";
-import { checkScreens, CLIENT_PROTOCOL, CLOSE, type BoxMsg, type ClientMsg, type Delivery, type Screen } from "./protocol.js";
+import { checkScreens, checkVideoCaps, CLIENT_PROTOCOL, CLOSE, type BoxMsg, type ClientMsg, type Delivery, type Screen, type VideoCaps, type VideoMsg, type VideoReplyMsg, type VideoState } from "./protocol.js";
+
+/** Box 0.28.0: how long a client gets to accept a video op (play: until its player is loading). */
+const VIDEO_TIMEOUT = { play: 15_000, other: 5_000, status: 3_000 };
+type VideoOp =
+  | { op: "play"; url: string; title: string; mime?: string; poster?: string; startAt?: number }
+  | { op: "pause" | "resume" | "stop" | "status" }
+  | { op: "seek"; position: number };
 
 export const DRIVER_ID = "venuebox";
 export const displayId = (deviceId: string, screenId: string) => `${DRIVER_ID}:${deviceId}:${screenId}`;
@@ -21,6 +28,11 @@ interface Session {
   state: Map<string, { showing: string; status: string; detail?: string }>;
   previews: Map<string, (jpeg: Buffer | undefined) => void>;
   alive: boolean;
+  /** Box 0.28.0: what its video player plays (absent: no player). */
+  video?: VideoCaps;
+  /** Last video state each screen reported. */
+  videoState: Map<string, { state: VideoState; position?: number; duration?: number; message?: string }>;
+  replies: Map<string, (r: VideoReplyMsg | undefined) => void>;
 }
 
 export interface HubDeps {
@@ -118,7 +130,7 @@ export class VenueboxHub implements DisplayDriver {
         if (!device) return fail(CLOSE.badToken, { type: "error", code: "bad-token", message: "not paired with this box (or revoked): pair again" });
         const screens = checkScreens(msg.screens) ?? device.screens;
         const deliveries = (Array.isArray(msg.deliveries) ? msg.deliveries : ["native-url"]).filter((x): x is Delivery => x === "native-url" || x === "hls");
-        session = { ws, device, screens, deliveries, state: new Map(), previews: new Map(), alive: true };
+        session = { ws, device, screens, deliveries, state: new Map(), previews: new Map(), alive: true, video: checkVideoCaps(msg.video), videoState: new Map(), replies: new Map() };
         void this.connected(session, msg, req);
         return;
       }
@@ -130,6 +142,7 @@ export class VenueboxHub implements DisplayDriver {
       if (session && this.sessions.get(session.device.id) === session) {
         this.sessions.delete(session.device.id);
         for (const done of session.previews.values()) done(undefined);
+        for (const done of session.replies.values()) done(undefined);
         this.d.log.info("venuebox", "device disconnected", { device: session.device.name });
       }
     });
@@ -166,6 +179,13 @@ export class VenueboxHub implements DisplayDriver {
         // New screens: put back what they showed before (if they were ever paired).
         this.d.reconnected(screens.filter((x) => !before.has(x.id)).map((x) => displayId(s.device.id, x.id)));
       });
+    } else if (msg.type === "video-reply" && typeof msg.requestId === "string") {
+      const done = s.replies.get(msg.requestId);
+      if (!done) return;
+      s.replies.delete(msg.requestId);
+      done(msg);
+    } else if (msg.type === "video-state" && typeof msg.screen === "string" && VIDEO_STATES.has(msg.state)) {
+      s.videoState.set(msg.screen, { state: msg.state, position: seconds(msg.position), duration: seconds(msg.duration), message: clean(msg.message) });
     } else if (msg.type === "preview" && typeof msg.requestId === "string") {
       const done = s.previews.get(msg.requestId);
       if (!done) return;
@@ -324,6 +344,81 @@ export class VenueboxHub implements DisplayDriver {
     return { delivery: "native-url", url: st.showing, state: map[st.status] ?? st.status, needsCode: false, detail: st.detail, settings: `${screen!.w}×${screen!.h} · rendered on the device` };
   }
 
+  // ---------------------------------------------------------------- video (box 0.28.0)
+
+  videoInfo(device: DisplayDevice): VideoInfo | undefined {
+    const { s, screen } = this.find(device);
+    if (!s?.video || !screen) return undefined;
+    return { kind: "venuebox", model: `${s.device.platform}${s.device.model ? ` · ${s.device.model}` : ""}`, formats: s.video };
+  }
+
+  /** Sends a video op and waits for the client's reply (no reply: timed out or disconnected). */
+  private videoAsk(device: DisplayDevice, body: VideoOp): Promise<{ reply?: VideoReplyMsg; s?: Session; offline?: boolean }> {
+    const { s, screen } = this.find(device);
+    if (!s || !screen) return Promise.resolve({ offline: true });
+    const requestId = randomBytes(6).toString("hex");
+    const ms = body.op === "play" ? VIDEO_TIMEOUT.play : body.op === "status" ? VIDEO_TIMEOUT.status : VIDEO_TIMEOUT.other;
+    return new Promise((resolve) => {
+      const t = setTimeout(() => {
+        s.replies.delete(requestId);
+        resolve({ s });
+      }, ms);
+      s.replies.set(requestId, (reply) => {
+        clearTimeout(t);
+        resolve({ reply, s });
+      });
+      this.post(s, { type: "video", screen: screen.id, requestId, ...body } as VideoMsg);
+    });
+  }
+
+  private videoResult(device: DisplayDevice, r: { reply?: VideoReplyMsg; offline?: boolean }): VideoResult {
+    if (r.offline) return { ok: false, reason: "offline", message: `${device.name} isn't connected to the box right now.` };
+    if (!r.reply) return { ok: false, reason: "error", message: `${device.name} didn't answer.` };
+    const message = clean(r.reply.message);
+    if (r.reply.ok) return message ? { ok: true, message } : { ok: true };
+    const reason = r.reply.reason === "unsupported" || r.reply.reason === "not-allowed" ? r.reply.reason : "error";
+    return { ok: false, reason, message: message ?? "The player couldn't do that." };
+  }
+
+  async playVideo(device: DisplayDevice, video: VideoRequest): Promise<VideoResult> {
+    if (!this.videoInfo(device)) return { ok: false, reason: "unsupported", message: `${device.name} has no video player (update its Venuebox app)` };
+    const r = await this.videoAsk(device, {
+      op: "play",
+      url: video.url,
+      title: video.title,
+      ...(video.mime ? { mime: video.mime } : {}),
+      ...(video.poster ? { poster: video.poster } : {}),
+      ...(video.startAt ? { startAt: video.startAt } : {}),
+    });
+    const { screen } = this.find(device);
+    if (r.reply?.ok && r.s && screen) r.s.videoState.set(screen.id, { state: "loading" });
+    return this.videoResult(device, r);
+  }
+
+  async videoControl(device: DisplayDevice, action: VideoAction): Promise<VideoResult> {
+    const info = this.videoInfo(device);
+    if (!info) return { ok: false, reason: "unsupported", message: `${device.name} has no video player` };
+    if (typeof action === "object" && !info.formats?.seek) return { ok: false, reason: "unsupported", message: `${device.name} can't jump to a position` };
+    return this.videoResult(device, await this.videoAsk(device, typeof action === "object" ? { op: "seek", position: Math.max(0, Math.floor(action.seek)) } : { op: action }));
+  }
+
+  async videoStatus(device: DisplayDevice): Promise<VideoStatus> {
+    const { s, screen } = this.find(device);
+    if (!s || !screen) return { state: "stopped", message: "not connected" };
+    const r = await this.videoAsk(device, { op: "status" });
+    const fresh = r.reply?.ok && r.reply.state && VIDEO_STATES.has(r.reply.state);
+    const st = fresh
+      ? { state: r.reply!.state!, position: seconds(r.reply!.position), duration: seconds(r.reply!.duration), message: clean(r.reply!.message) }
+      : s.videoState.get(screen.id);
+    if (fresh && st) s.videoState.set(screen.id, st);
+    if (!st) return { state: "stopped" };
+    const out: VideoStatus = { state: st.state === "loading" ? "playing" : st.state };
+    if (st.position !== undefined) out.position = st.position;
+    if (st.duration !== undefined) out.duration = st.duration;
+    if (st.message) out.message = st.message;
+    return out;
+  }
+
   /** Asks the device for a JPEG of the screen (3 s timeout). */
   preview(device: DisplayDevice): Promise<Buffer | undefined> {
     const { s, screen } = this.find(device);
@@ -342,6 +437,11 @@ export class VenueboxHub implements DisplayDriver {
     });
   }
 }
+
+const VIDEO_STATES = new Set<string>(["loading", "playing", "paused", "stopped", "error"]);
+const seconds = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined);
+/** A client's message, short and with any link taken out (it may echo the media server's key). */
+const clean = (v: unknown) => (typeof v === "string" && v.trim() ? redactUrls(v.trim()).slice(0, 200) : undefined);
 
 function readBody(req: IncomingMessage, limit: number): Promise<string> {
   return new Promise((resolve, reject) => {
