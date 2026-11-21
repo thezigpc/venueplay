@@ -51,6 +51,12 @@ export function DisplaysPage({ selected, tab }: { selected?: string; tab?: strin
     });
   };
   const providers = media.data?.providers ?? [];
+  // Box 0.27.1: step to the TV before or after this one (in the room filter's order) without leaving the panel.
+  const neighbour = (step: number) => {
+    const order = sel && shown.some((d) => d.id === sel.id) ? shown : list;
+    const i = order.findIndex((d) => d.id === sel?.id);
+    return i < 0 || order.length < 2 ? undefined : order[(i + step + order.length) % order.length].id;
+  };
 
   return (
     <div className={`tv-layout${sel ? " has-panel" : ""}`}>
@@ -116,7 +122,7 @@ export function DisplaysPage({ selected, tab }: { selected?: string; tab?: strin
         {list.length > 0 && !sel && <p className="muted small-print">Tap a TV to control it.</p>}
       </div>
       {sel && (
-        <TvPanel key={sel.id} d={sel} tab={tab} busy={busy} run={run} reload={displays.reload} previews={previews} startup={startup.data?.[sel.id]} games={games.data ?? []} media={providers} reloadMedia={media.reload} />
+        <TvPanel key={sel.id} d={sel} tab={tab} prev={neighbour(-1)} next={neighbour(1)} busy={busy} run={run} reload={displays.reload} previews={previews} startup={startup.data?.[sel.id]} games={games.data ?? []} media={providers} reloadMedia={media.reload} />
       )}
     </div>
   );
@@ -233,17 +239,20 @@ function AddTvCard({ busy, run, setNote, previews, togglePreviews, hasStartup }:
   );
 }
 
+// Box 0.27.1: what's on, the buttons and the remote share one Control tab (old #…/now and #…/remote links land there).
 const PANEL_TABS = [
-  { id: "now", label: "Now" },
-  { id: "remote", label: "Remote" },
+  { id: "control", label: "Control" },
   { id: "apps", label: "Apps" },
   { id: "setup", label: "Setup" },
 ] as const;
 
-/** Everything for one TV, in tabs: what it shows now, its remote, its apps, its setup. */
+/** Everything for one TV, in tabs: control (what it shows, its buttons, its remote), its apps, its setup.
+ *  Beside a compact TV list in landscape; a sheet over the TV wall in portrait. */
 function TvPanel({
   d,
   tab,
+  prev,
+  next,
   busy,
   run,
   reload,
@@ -255,6 +264,8 @@ function TvPanel({
 }: {
   d: Display;
   tab?: string;
+  prev?: string;
+  next?: string;
   busy: boolean;
   run: (fn: () => Promise<unknown>) => void;
   reload: () => unknown;
@@ -275,8 +286,9 @@ function TvPanel({
   const canPair = d.capabilities?.delivery.includes("airplay");
   const hasRemote = (d.capabilities?.remoteKeys?.length ?? 0) > 0;
   const hasApps = Boolean(d.capabilities?.apps);
-  const tabs = PANEL_TABS.filter((t) => (t.id === "remote" ? hasRemote : t.id === "apps" ? hasApps : true));
-  const active = tabs.find((t) => t.id === tab)?.id ?? "now";
+  const tabs = PANEL_TABS.filter((t) => (t.id === "apps" ? hasApps : true));
+  const active = tabs.find((t) => t.id === tab)?.id ?? "control";
+  const keepTab = active === "control" ? undefined : active;
   const now = describeTv(d, media);
 
   return (
@@ -288,6 +300,16 @@ function TvPanel({
             {[d.group, kindOf(d), d.health?.powerMode ?? (online ? "online" : "offline")].filter(Boolean).join(" · ")}
           </span>
         </div>
+        {prev && (
+          <button type="button" className="ghost step" aria-label="Previous TV" onClick={() => go("tvs", prev, ...(keepTab ? [keepTab] : []))}>
+            ‹
+          </button>
+        )}
+        {next && (
+          <button type="button" className="ghost step" aria-label="Next TV" onClick={() => go("tvs", next, ...(keepTab ? [keepTab] : []))}>
+            ›
+          </button>
+        )}
         <button type="button" className="ghost close" aria-label="Close" onClick={() => go("tvs")}>
           ×
         </button>
@@ -300,7 +322,8 @@ function TvPanel({
         ))}
       </div>
 
-      {active === "now" && (
+      {active === "control" && (
+        <div className="tv-control">
         <div className="tv-panel-body">
           {previews && stream ? <TvPreview id={d.id} /> : <span className={`tv-screen big${online === false ? " offline" : ""}`}>{now.text}</span>}
           <p className={now.warn ? "warn" : ""}>
@@ -354,11 +377,11 @@ function TvPanel({
             </p>
           )}
         </div>
-      )}
-
-      {active === "remote" && hasRemote && (
-        <div className="tv-panel-body">
-          <Remote d={d} keys={d.capabilities!.remoteKeys!} embedded />
+        {hasRemote && (
+          <div className="tv-panel-body tv-control-remote">
+            <Remote d={d} keys={d.capabilities!.remoteKeys!} embedded />
+          </div>
+        )}
         </div>
       )}
 
