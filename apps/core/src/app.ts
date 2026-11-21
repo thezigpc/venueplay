@@ -668,7 +668,8 @@ export function createApp(d: AppDeps) {
   };
   const mediaProviderAuth = (req: Request) => {
     const game = gameAuth(req);
-    if (!game.manifest.media) throw new HttpError(403, "declare media in bargames.json to use this");
+    // SDK 0.17.0: video apps list TVs too (to find the ones that take video links).
+    if (!game.manifest.media && !game.manifest.video?.play) throw new HttpError(403, "declare media in bargames.json to use this");
     return game;
   };
 
@@ -677,12 +678,13 @@ export function createApp(d: AppDeps) {
     "/internal/tvs",
     h(async (req, res) => {
       const game = mediaProviderAuth(req);
-      const allowed = game.manifest.media!.launch;
-      const list = ((await brokerCall("GET", "/displays?health=1").catch(() => [])) as { id: string; name: string; label?: string; group?: string; driver: string; health?: { online?: boolean }; launchable?: string[] }[]) ?? [];
+      const allowed = game.manifest.media?.launch ?? [];
+      const list = ((await brokerCall("GET", "/displays?health=1").catch(() => [])) as { id: string; name: string; label?: string; group?: string; driver: string; health?: { online?: boolean }; launchable?: string[]; video?: { kind: string; model: string } }[]) ?? [];
       const tvs = await Promise.all(
         list.map(async (x) => {
           const canLaunch = (x.launchable ?? []).filter((a) => allowed.includes(a));
           const tv: Record<string, unknown> = { id: x.id, name: x.label || x.name, ...(x.group ? { group: x.group } : {}), kind: x.driver, online: Boolean(x.health?.online), canLaunch };
+          if (game.manifest.video?.play && x.video) tv.video = { kind: x.video.kind, model: x.video.model };
           if (allowed.includes("youtube") && x.health?.online && x.driver === "roku") {
             const r = (await brokerCall("GET", "/displays/" + encodeURIComponent(x.id) + "/dial/youtube").catch(() => undefined)) as { screenId?: string } | undefined;
             if (r?.screenId) tv.youtubeScreenId = r.screenId;
@@ -711,11 +713,62 @@ export function createApp(d: AppDeps) {
         d.log.warn("media", "launch app refused", { game: game.id, display: displayId, app: tvApp, message });
         res.json({ ok: false, reason: "not-allowed", message });
       };
-      if (!game.manifest.media!.launch.includes(tvApp)) return refuse(tvApp + " isn't in media.launch in bargames.json");
+      if (!(game.manifest.media?.launch ?? []).includes(tvApp)) return refuse(tvApp + " isn't in media.launch in bargames.json");
       await roomCache.refresh(game.id).catch(() => undefined);
       if (!roomCache.mediaTargets(game.id).some((t) => t.displayId === displayId)) return refuse("report this TV in status.media.targets first");
       const r = await brokerCall("POST", "/displays/" + encodeURIComponent(displayId) + "/launch", { app: tvApp, provider: game.id }).catch((err: Error) => ({ ok: false, reason: "error", message: err.message }));
       d.log.info("media", "launch app", { game: game.id, display: displayId, app: tvApp, ok: (r as { ok?: boolean }).ok });
+      res.json(r);
+    }),
+  );
+
+  // ---- SDK 0.17.0: video links a TV plays itself (manifest video.play)
+  // The link and poster may carry the media server's key: never logged, never stored, never
+  // put in an event. Only the app, the TV and the title go in the log.
+  const videoAuth = (req: Request) => {
+    const game = gameAuth(req);
+    if (!game.manifest.video?.play) throw new HttpError(403, 'This app didn\'t ask to play video on TVs: add "video": { "play": true } to bargames.json.');
+    return game;
+  };
+  const tvId = (v: unknown) => {
+    if (typeof v !== "string" || !v) throw new HttpError(400, "displayId required");
+    return v;
+  };
+  const videoBroker = (displayId: string, method: "GET" | "POST", sub: string, body?: unknown) =>
+    brokerCall(method, "/displays/" + encodeURIComponent(displayId) + "/video" + sub, body).catch((err: Error & { status?: number }) =>
+      err.status === 404
+        ? { ok: false, reason: "unsupported", message: "no TV " + displayId }
+        : err.status === 400
+          ? { ok: false, reason: "error", message: err.message }
+          : { ok: false, reason: "error", message: "the box couldn't reach its TV service" },
+    );
+  app.post(
+    "/internal/video/play",
+    h(async (req, res) => {
+      const game = videoAuth(req);
+      const { displayId, url, mime, title, poster, startAt } = (req.body ?? {}) as Record<string, unknown>;
+      const id = tvId(displayId);
+      const r = (await videoBroker(id, "POST", "", { url, mime, title, poster, startAt, provider: game.id })) as { ok?: boolean; reason?: string };
+      d.log.info("video", "play", { game: game.id, display: id, title: typeof title === "string" ? title.slice(0, 80) : undefined, ok: r.ok, reason: r.reason });
+      res.json(r);
+    }),
+  );
+  app.post(
+    "/internal/video/control",
+    h(async (req, res) => {
+      const game = videoAuth(req);
+      const { displayId, action, seek } = (req.body ?? {}) as Record<string, unknown>;
+      const id = tvId(displayId);
+      const r = (await videoBroker(id, "POST", "/control", typeof seek === "number" ? { seek } : { action })) as { ok?: boolean };
+      d.log.info("video", "control", { game: game.id, display: id, action: typeof seek === "number" ? "seek" : action, ok: r.ok });
+      res.json(r);
+    }),
+  );
+  app.get(
+    "/internal/video/status",
+    h(async (req, res) => {
+      videoAuth(req);
+      const r = await brokerCall("GET", "/displays/" + encodeURIComponent(tvId(req.query.displayId)) + "/video").catch((err: Error) => ({ state: "error", message: err.message }));
       res.json(r);
     }),
   );

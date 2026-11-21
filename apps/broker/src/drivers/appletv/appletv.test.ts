@@ -14,7 +14,7 @@ import { AppleTvDriver, type AppleTvAuth } from "./index.js";
 /** A fake atv-helper: PIN 4321 gives credentials "creds-1". */
 function fakeHelper() {
   const calls: { op: string; args: Record<string, unknown> }[] = [];
-  const state = { valid: new Set<string>(), pairing: false };
+  const state = { valid: new Set<string>(), pairing: false, protocol: "companion", videoError: "" };
   const call: AtvCall = async (op, args = {}) => {
     calls.push({ op, args });
     switch (op) {
@@ -22,12 +22,23 @@ function fakeHelper() {
         return [{ identifier: "AA:BB:CC:00:11:22", name: "Bar Apple TV", address: "192.0.2.50", model: "Apple TV 4K (gen 3)", version: "27.0" }];
       case "pair_begin":
         state.pairing = true;
+        state.protocol = args.protocol === "airplay" ? "airplay" : "companion";
         return { pin: true };
       case "pair_finish":
         if (!state.pairing) throw new AtvError("start pairing first", "error");
         if (args.pin !== "4321") throw new AtvError("that PIN didn't work", "pin");
+        if (state.protocol === "airplay") return { credentials: "air-1" };
         state.valid.add("creds-1");
         return { credentials: "creds-1" };
+      // Box 0.27.0: video over AirPlay needs the AirPlay credentials.
+      case "video_play":
+        if (args.airplay !== "air-1") throw new AtvError("the Apple TV wants the box paired for AirPlay video", "needs-pairing");
+        if (state.videoError) throw new AtvError(state.videoError, "error");
+        return { ok: true };
+      case "video_status":
+        return { state: "playing", position: 12, duration: 5400 };
+      case "video_control":
+        return { ok: true };
     }
     if (!state.valid.has(String(args.credentials))) throw new AtvError("refused", "auth");
     if (op === "apps") return [{ id: "com.zeta", name: "Zeta" }, { id: "com.alpha", name: "Alpha" }];
@@ -61,8 +72,13 @@ test("apple tv: discovery, PIN pairing, remote, apps, typing", async () => {
   const wrong = await atv.pairControl(dev, "1111");
   assert.equal(wrong.ok, false);
   assert.equal(wrong.needsCode, true);
+  const first = await atv.pairControl(dev, "4321");
+  assert.equal(first.ok, false, "box 0.27.0: then a second PIN, for AirPlay video");
+  assert.equal(first.needsCode, true);
+  assert.match(first.message!, /second PIN/);
+  assert.equal(auth.get().credentials[dev.id], "creds-1", "TV control works after the first PIN");
   assert.equal((await atv.pairControl(dev, "4321")).ok, true);
-  assert.equal(auth.get().credentials[dev.id], "creds-1");
+  assert.equal(auth.get().airplay?.[dev.id], "air-1");
 
   caps = await atv.capabilities(dev);
   assert.equal(caps.power, true);
@@ -106,8 +122,41 @@ test("apple tv: one saved as AirPlay moves over; credentials stay out of display
   assert.equal(reg.list().length, 1);
 
   await reg.pairControl(moved.id);
+  assert.equal((await reg.pairControl(moved.id, "4321")).needsCode, true);
   assert.equal((await reg.pairControl(moved.id, "4321")).ok, true);
-  assert.ok(!readFileSync(path.join(dir, "displays.json"), "utf8").includes("creds-1"));
+  const saved = readFileSync(path.join(dir, "displays.json"), "utf8");
+  assert.ok(!saved.includes("creds-1") && !saved.includes("air-1"));
   await reg.remove(moved.id);
   assert.equal(auth.get().credentials[moved.id], undefined);
+  assert.equal(auth.get().airplay?.[moved.id], undefined);
+});
+
+test("apple tv 0.27.0: video links over AirPlay; asks for the second pairing; never echoes the link", async () => {
+  const { fake, atv } = setup();
+  const [dev] = await atv.discover(10);
+  const video = { url: "http://media.example:8096/Videos/1/stream?static=true&api_key=SECRET", title: "A movie", mime: "video/mp4", startAt: 95 };
+  assert.deepEqual(atv.videoInfo(dev), { kind: "appletv", model: "Apple TV 4K (gen 3)" });
+
+  const unpaired = await atv.playVideo(dev, video);
+  assert.equal(unpaired.reason, "needs-pairing");
+  assert.doesNotMatch(JSON.stringify(unpaired), /SECRET/);
+
+  await atv.pairControl(dev);
+  await atv.pairControl(dev, "4321");
+  await atv.pairControl(dev, "4321");
+  assert.deepEqual(await atv.playVideo(dev, video), { ok: true });
+  const play = fake.calls.find((c) => c.op === "video_play" && c.args.airplay === "air-1")!;
+  assert.equal(play.args.url, video.url);
+  assert.equal(play.args.startAt, 95);
+  assert.equal(play.args.credentials, "creds-1", "Companion too, so the same connection serves the remote");
+
+  assert.deepEqual(await atv.videoStatus(dev), { state: "playing", position: 12, duration: 5400 });
+  assert.deepEqual(await atv.videoControl(dev, { seek: 600 }), { ok: true });
+  assert.deepEqual(fake.calls.at(-1)?.args.action, "seek");
+  assert.equal(fake.calls.at(-1)?.args.position, 600);
+
+  fake.state.videoError = "couldn't fetch http://media.example:8096/x?api_key=SECRET";
+  const failed = await atv.playVideo(dev, video);
+  assert.equal(failed.ok, false);
+  assert.doesNotMatch(failed.message!, /SECRET|media\.example/, "links are cut out of messages");
 });

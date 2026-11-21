@@ -160,6 +160,75 @@ export interface DisplayDriver {
   launchApp?(device: DisplayDevice, app: string): Promise<{ ok: true } | { ok: false; reason: "unsupported" | "offline" | "ecp-blocked" | "error"; message: string }>;
   /** DIAL: an app's screen id (YouTube's Lounge screen id). GET only, never launches. */
   dialScreenId?(device: DisplayDevice, app: string): Promise<string | undefined>;
+  /** Box 0.27.0: the TV can be handed a video URL to play itself (undefined: it can't). */
+  videoInfo?(device: DisplayDevice): VideoInfo | undefined;
+  /** Hands the TV a video URL; the TV streams it straight from its server. Never log the URL. */
+  playVideo?(device: DisplayDevice, video: VideoRequest): Promise<VideoResult>;
+  videoControl?(device: DisplayDevice, action: VideoAction): Promise<VideoResult>;
+  videoStatus?(device: DisplayDevice): Promise<VideoStatus>;
+}
+
+/** Box 0.27.0: what kind of player a TV has, for apps choosing a stream (bg.tvs().video). */
+export interface VideoInfo {
+  kind: "appletv" | "roku";
+  model: string;
+}
+
+/** A video for the TV to play itself. `url` and `poster` may carry the media server's key: never log or store them. */
+export interface VideoRequest {
+  url: string;
+  /** application/vnd.apple.mpegurl (HLS), video/mp4, video/quicktime, video/x-matroska. */
+  mime?: string;
+  title: string;
+  poster?: string;
+  /** Resume point in seconds. */
+  startAt?: number;
+}
+
+/** pause, resume, stop, or seek to a position in seconds from the start. */
+export type VideoAction = "pause" | "resume" | "stop" | { seek: number };
+
+export interface VideoResult {
+  ok: boolean;
+  /** offline | unsupported | needs-pairing | not-allowed | error */
+  reason?: string;
+  message?: string;
+}
+
+export interface VideoStatus {
+  state: "playing" | "paused" | "stopped" | "error";
+  /** Seconds. */
+  position?: number;
+  duration?: number;
+  message?: string;
+}
+
+/** Checks a video request from core: the request, or what's wrong with it. */
+export function checkVideo(b: unknown): { video: VideoRequest; provider: string } | string {
+  if (typeof b !== "object" || b === null) return "url, title and provider required";
+  const v = b as Record<string, unknown>;
+  const httpUrl = (x: unknown) => typeof x === "string" && x.length <= 4096 && /^https?:\/\/[^\s]+$/i.test(x);
+  if (!httpUrl(v.url)) return "url: an http or https link (up to 4096 characters)";
+  if (typeof v.title !== "string" || !v.title.trim()) return "title required";
+  if (typeof v.provider !== "string" || !v.provider) return "provider required";
+  if (v.poster !== undefined && v.poster !== null && v.poster !== "" && !httpUrl(v.poster)) return "poster: an http or https link";
+  if (v.mime !== undefined && (typeof v.mime !== "string" || !/^[\w.+-]+\/[\w.+-]+$/.test(v.mime))) return "mime: like video/mp4";
+  if (v.startAt !== undefined && !(typeof v.startAt === "number" && Number.isFinite(v.startAt) && v.startAt >= 0)) return "startAt: seconds";
+  return {
+    provider: v.provider,
+    video: {
+      url: v.url as string,
+      title: v.title.trim().slice(0, 120),
+      ...(typeof v.mime === "string" ? { mime: v.mime } : {}),
+      ...(typeof v.poster === "string" && v.poster ? { poster: v.poster } : {}),
+      ...(typeof v.startAt === "number" && v.startAt > 0 ? { startAt: Math.floor(v.startAt) } : {}),
+    },
+  };
+}
+
+/** Strips anything that could carry a key from a message before it's logged or returned (ECP paths, URLs). */
+export function redactUrls(s: string): string {
+  return s.replace(/(?:https?|rtsp):\/\/[^\s"'<>]+/gi, "<url>").replace(/\/input\/15985\?[^\s"'<>]*/g, "/input/15985?…");
 }
 
 /**

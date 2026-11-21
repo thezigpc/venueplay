@@ -8,12 +8,14 @@
 
 import type { JsonStore } from "@bargames/common";
 import { connect } from "node:net";
-import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamService, StreamState } from "../../types.js";
+import { redactUrls, type Capabilities, type DeliveryMethod, type DisplayContent, type DisplayDevice, type DisplayDriver, type Health, type ShowResult, type StreamService, type StreamState, type VideoAction, type VideoInfo, type VideoRequest, type VideoResult, type VideoStatus } from "../../types.js";
 import { AtvError, type AtvCall } from "./helper.js";
 
 /** Pairing credentials per Apple TV (Companion). Kept out of displays.json. */
 export interface AppleTvAuth {
   credentials: Record<string, string>;
+  /** Box 0.27.0: AirPlay credentials (pyatv), for handing the Apple TV video links. */
+  airplay?: Record<string, string>;
 }
 
 /** The box's remote keys an Apple TV takes (the helper maps them to Companion commands). */
@@ -48,6 +50,13 @@ export class AppleTvDriver implements DisplayDriver {
     private readonly auth: JsonStore<AppleTvAuth>,
     private readonly o: { call: AtvCall; clientName?: () => string; reachable?: (host: string) => Promise<boolean> },
   ) {}
+
+  /** Box 0.27.0: which PIN the Apple TV is showing now (Companion first, then AirPlay). */
+  private readonly pairing = new Map<string, "companion" | "airplay">();
+
+  private airplayCreds(device: DisplayDevice): string | undefined {
+    return this.auth.get().airplay?.[device.id];
+  }
 
   private creds(device: DisplayDevice): string | undefined {
     return this.auth.get().credentials[device.id];
@@ -159,26 +168,95 @@ export class AppleTvDriver implements DisplayDriver {
 
   /** Companion pairing. Without a PIN the Apple TV shows one; with it, the box keeps the credentials. */
   async pairControl(device: DisplayDevice, pin?: string): Promise<ShowResult> {
+    const name = this.o.clientName?.() ?? "Bar Games box";
     try {
       if (!pin) {
-        await this.o.call("pair_begin", { ...this.target(device), name: this.o.clientName?.() ?? "Bar Games box" });
+        this.pairing.set(device.id, "companion");
+        await this.o.call("pair_begin", { ...this.target(device), name });
         return { ok: false, needsCode: true, message: "Enter the PIN the Apple TV is showing." };
       }
+      const step = this.pairing.get(device.id) ?? "companion";
       const r = (await this.o.call("pair_finish", { identifier: this.target(device).identifier, pin })) as { credentials: string };
+      if (step === "airplay") {
+        this.pairing.delete(device.id);
+        await this.auth.update((s) => {
+          (s.airplay ??= {})[device.id] = r.credentials;
+        });
+        return { ok: true, message: "Paired. The box can now use this Apple TV's remote, open its apps, type into it, put it to sleep or wake it, and hand it movies to play." };
+      }
       await this.auth.update((s) => {
         s.credentials[device.id] = r.credentials;
       });
-      return { ok: true, message: "Paired. The box can now use this Apple TV's remote, open its apps, type into it, and put it to sleep or wake it." };
+      // Box 0.27.0: then AirPlay, so apps can hand it video links. A second PIN; skippable.
+      try {
+        await this.o.call("pair_begin", { ...this.target(device), name, protocol: "airplay" });
+        this.pairing.set(device.id, "airplay");
+        return { ok: false, needsCode: true, message: "TV control is paired. The Apple TV now shows a second PIN, so the box can hand it movies to play: enter it too (or leave it; the remote works already)." };
+      } catch {
+        this.pairing.delete(device.id);
+        return { ok: true, message: "Paired. The box can now use this Apple TV's remote, open its apps, type into it, and put it to sleep or wake it." };
+      }
     } catch (err) {
       if (err instanceof AtvError) return { ok: false, needsCode: err.code === "pin", message: `${device.name}: ${err.message}` };
       throw err;
     }
   }
 
+  // ---- Box 0.27.0: video links the Apple TV plays itself (AirPlay)
+
+  videoInfo(device: DisplayDevice): VideoInfo {
+    return { kind: "appletv", model: device.model || "Apple TV" };
+  }
+
+  private async videoCall(device: DisplayDevice, op: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
+    return this.o.call(op, { ...this.target(device), credentials: this.creds(device), airplay: this.airplayCreds(device), ...args }, timeoutMs);
+  }
+
+  private videoFailure(device: DisplayDevice, err: unknown): VideoResult {
+    if (err instanceof AtvError) {
+      const message = redactUrls(err.message);
+      if (err.code === "needs-pairing" || err.code === "auth")
+        return { ok: false, reason: "needs-pairing", message: `${device.name} needs the box paired for movies: TVs > ${device.name} > Setup > Pair TV control (it shows two PINs)` };
+      if (err.code === "offline") return { ok: false, reason: "offline", message: `${device.name} isn't answering` };
+      if (err.code === "unsupported") return { ok: false, reason: "unsupported", message: `${device.name}: ${message}` };
+      return { ok: false, reason: "error", message: `${device.name}: ${message}` };
+    }
+    return { ok: false, reason: "error", message: `${device.name}: ${redactUrls(String(err instanceof Error ? err.message : err))}` };
+  }
+
+  async playVideo(device: DisplayDevice, v: VideoRequest): Promise<VideoResult> {
+    // The box's own AirPlay mirror would fight the video for the screen.
+    if (this.streams.state?.(device.id)) await this.streams.stopFor(device.id).catch(() => undefined);
+    try {
+      await this.videoCall(device, "video_play", { url: v.url, ...(v.startAt ? { startAt: v.startAt } : {}) }, 40_000);
+      return { ok: true };
+    } catch (err) {
+      return this.videoFailure(device, err);
+    }
+  }
+
+  async videoControl(device: DisplayDevice, action: VideoAction): Promise<VideoResult> {
+    try {
+      await this.videoCall(device, "video_control", typeof action === "object" ? { action: "seek", position: action.seek } : { action });
+      return { ok: true };
+    } catch (err) {
+      return this.videoFailure(device, err);
+    }
+  }
+
+  async videoStatus(device: DisplayDevice): Promise<VideoStatus> {
+    try {
+      return (await this.videoCall(device, "video_status", {})) as VideoStatus;
+    } catch (err) {
+      return { state: "error", message: this.videoFailure(device, err).message };
+    }
+  }
+
   async forget(device: DisplayDevice): Promise<void> {
-    if (!this.creds(device)) return;
+    if (!this.creds(device) && !this.airplayCreds(device)) return;
     await this.auth.update((s) => {
       delete s.credentials[device.id];
+      if (s.airplay) delete s.airplay[device.id];
     });
   }
 

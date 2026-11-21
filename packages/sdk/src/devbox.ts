@@ -310,6 +310,15 @@ export function mockBox(o: MockBoxOptions) {
   let countdown: Countdown | undefined;
   /** What the fake Roku (fake-bar) shows: "home" until a launch. */
   let fakeRokuApp = "home";
+  // SDK 0.17.0: pretend video TVs. fake-bar is a Roku 3930X (no seek, no start part-way),
+  // fake-patio an Apple TV 4K. A video "plays" in real time for 90 s, then stops.
+  const FAKE_VIDEO: Record<string, { kind: "roku" | "appletv"; model: string }> = {
+    "fake-bar": { kind: "roku", model: "3930X" },
+    "fake-patio": { kind: "appletv", model: "Apple TV 4K (gen 3)" },
+  };
+  const FAKE_VIDEO_SECONDS = 90;
+  const videos = new Map<string, { title: string; base: number; since: number; paused: boolean }>();
+  const videoPos = (v: { base: number; since: number; paused: boolean }) => Math.min(FAKE_VIDEO_SECONDS, v.base + (v.paused ? 0 : Math.floor((Date.now() - v.since) / 1000)));
   const base = normalizeBasePath(o.basePath);
   const origin = `http://localhost:${o.gatewayPort}`;
   /** What the game is told its address is (--public-url), else the mock gateway's. */
@@ -421,14 +430,16 @@ export function mockBox(o: MockBoxOptions) {
       return json(200, { ok: true });
     }
     if (req.url === "/internal/tvs" && req.method === "GET") {
-      if (!o.manifest?.media) return json(403, { error: "declare media in bargames.json to use this" });
-      const launch = o.manifest.media.launch;
+      if (!o.manifest?.media && !o.manifest?.video?.play) return json(403, { error: "declare media in bargames.json to use this" });
+      const launch = o.manifest.media?.launch ?? [];
+      const video = Boolean(o.manifest.video?.play);
       return json(200, {
         tvs: FAKE_TVS.map((t, i) => ({
           id: t.id,
           name: t.name,
           group: t.group,
-          kind: i === 0 ? "roku" : "airplay",
+          kind: i === 0 ? "roku" : video && FAKE_VIDEO[t.id] ? FAKE_VIDEO[t.id].kind : "airplay",
+          ...(video && FAKE_VIDEO[t.id] ? { video: FAKE_VIDEO[t.id] } : {}),
           online: !t.unpaired,
           canLaunch: i === 0 ? launch.filter((a) => a === "youtube") : [],
           ...(i === 0 && launch.includes("youtube") ? { youtubeScreenId: "fake-screen-id-bar" } : {}),
@@ -444,6 +455,59 @@ export function mockBox(o: MockBoxOptions) {
       console.log(`${c.ok("launch")} ${b.app} on ${b.displayId} (pretend)`);
       fakeRokuApp = String(b.app);
       return json(200, { ok: true });
+    }
+    // SDK 0.17.0: video links. The link is never printed (it may carry a server key).
+    if (req.url?.startsWith("/internal/video/")) {
+      if (!o.manifest?.video?.play) {
+        console.log(c.bad(`✗ ${req.method} ${req.url}: add "video": { "play": true } to bargames.json`));
+        return json(403, { error: `This app didn't ask to play video on TVs: add "video": { "play": true } to bargames.json.` });
+      }
+      const url = new URL(req.url, "http://mock");
+      const body = req.method === "POST" ? (JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>) : {};
+      const id = String(body.displayId ?? url.searchParams.get("displayId") ?? "");
+      const tv = FAKE_VIDEO[id];
+      const name = FAKE_TVS.find((t) => t.id === id)?.name ?? id;
+      if (url.pathname === "/internal/video/status") {
+        const v = videos.get(id);
+        if (!v) return json(200, { state: "stopped" });
+        const position = videoPos(v);
+        if (position >= FAKE_VIDEO_SECONDS) {
+          videos.delete(id);
+          return json(200, { state: "stopped", position, duration: FAKE_VIDEO_SECONDS });
+        }
+        return json(200, { state: v.paused ? "paused" : "playing", position, duration: FAKE_VIDEO_SECONDS });
+      }
+      if (!tv) return json(200, { ok: false, reason: "unsupported", message: `${name} can't be handed a video (fake video TVs: fake-bar, fake-patio)` });
+      if (url.pathname === "/internal/video/play") {
+        const bad = typeof body.url !== "string" || !/^https?:\/\//.test(body.url) ? "url: an http or https link" : typeof body.title !== "string" || !body.title ? "title required" : undefined;
+        if (bad) {
+          console.log(c.bad(`✗ playVideo: ${bad}`));
+          return json(200, { ok: false, reason: "error", message: bad });
+        }
+        const start = tv.kind === "appletv" && typeof body.startAt === "number" ? Math.max(0, Math.floor(body.startAt)) : 0;
+        videos.set(id, { title: String(body.title), base: start, since: Date.now(), paused: false });
+        console.log(`${c.ok("video")} "${body.title}" on ${name}${start ? ` from ${start} s` : ""} (pretend, ${FAKE_VIDEO_SECONDS} s; link not shown)`);
+        return json(200, tv.kind === "roku" && body.startAt ? { ok: true, message: `${name} starts from the beginning (a Roku can't start part-way through)` } : { ok: true });
+      }
+      if (url.pathname === "/internal/video/control") {
+        const v = videos.get(id);
+        if (body.action === "stop") {
+          videos.delete(id);
+          console.log(`${c.ok("video")} stopped on ${name}`);
+          return json(200, { ok: true });
+        }
+        if (!v) return json(200, { ok: false, reason: "error", message: "nothing is playing" });
+        if (typeof body.seek === "number") {
+          if (tv.kind === "roku") return json(200, { ok: false, reason: "unsupported", message: `${name} can't seek (a Roku's built-in player can't); use pause and resume` });
+          Object.assign(v, { base: Math.max(0, Math.min(FAKE_VIDEO_SECONDS, Math.floor(body.seek))), since: Date.now() });
+          return json(200, { ok: true });
+        }
+        if (body.action === "pause" && !v.paused) Object.assign(v, { base: videoPos(v), paused: true });
+        else if (body.action === "resume" && v.paused) Object.assign(v, { since: Date.now(), paused: false });
+        else if (body.action !== "pause" && body.action !== "resume") return json(400, { error: 'action: "pause" | "resume" | "stop", or seek' });
+        return json(200, { ok: true });
+      }
+      return json(404, { error: "no such video call" });
     }
     // SDK 0.13.0: audio. Pretend outputs; "playing" runs in real time (durationMs, else 30 s).
     if (req.url?.startsWith("/internal/audio/")) {

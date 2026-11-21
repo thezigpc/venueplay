@@ -5,7 +5,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { Logger } from "@bargames/common";
 
-export type AtvCode = "auth" | "offline" | "pin" | "unsupported" | "error";
+export type AtvCode = "auth" | "offline" | "pin" | "unsupported" | "error" | "needs-pairing";
 
 export class AtvError extends Error {
   constructor(

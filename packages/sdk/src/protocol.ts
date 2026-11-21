@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.16.0";
+export const SDK_VERSION = "0.17.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -157,6 +157,10 @@ export const STANDARD_EVENTS = [
   "game_over",
   /** SDK 0.9.0: data is a GameResult (bg.reportResults sends it). */
   "game_result",
+  /** SDK 0.17.0, video apps: { tv: displayId, title }. Never the link. */
+  "video_started",
+  /** SDK 0.17.0: { tv: displayId }. */
+  "video_stopped",
 ] as const;
 export type StandardEventType = (typeof STANDARD_EVENTS)[number];
 
@@ -696,6 +700,41 @@ export interface BoxTv {
    * the app closed on the TV.
    */
   activeApp?: string;
+  /**
+   * SDK 0.17.0, apps with video.play: the TV can be handed a video link. `kind` "appletv"
+   * (model: pyatv's name, e.g. "Apple TV 4K (gen 3)") or "roku" (model: the ECP model
+   * number, e.g. "3930X"). Absent: the box can't hand this TV a video.
+   */
+  video?: { kind: "appletv" | "roku"; model: string };
+}
+
+/** SDK 0.17.0: a video link for a TV to play itself (bg.playVideo). The TV fetches `url` and `poster` straight from their server. */
+export interface VideoRequest {
+  url: string;
+  /** application/vnd.apple.mpegurl (HLS), video/mp4, video/quicktime, video/x-matroska. A Roku needs it to pick its player's format. */
+  mime?: string;
+  title: string;
+  poster?: string;
+  /** Resume point in seconds. Apple TV only (a Roku starts from the beginning and says so in `message`). */
+  startAt?: number;
+}
+
+/** pause, resume, stop, or seek to a position in seconds from the start (Apple TV only). */
+export type VideoAction = "pause" | "resume" | "stop" | { seek: number };
+
+export interface VideoResult {
+  ok: boolean;
+  /** offline | unsupported | not-allowed | needs-pairing (an Apple TV not paired for AirPlay) | error. Show `message` as is. */
+  reason?: string;
+  message?: string;
+}
+
+export interface VideoStatus {
+  state: "playing" | "paused" | "stopped" | "error";
+  /** Seconds. */
+  position?: number;
+  duration?: number;
+  message?: string;
 }
 
 export type LaunchResult = { ok: true } | { ok: false; reason: "not-allowed" | "unsupported" | "offline" | "ecp-blocked" | "error"; message: string };

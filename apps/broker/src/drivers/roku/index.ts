@@ -1,5 +1,5 @@
-import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamService, StreamState } from "../../types.js";
-import { RokuEcp } from "./ecp.js";
+import { redactUrls, type Capabilities, type DeliveryMethod, type DisplayContent, type DisplayDevice, type DisplayDriver, type Health, type ShowResult, type StreamService, type StreamState, type VideoAction, type VideoInfo, type VideoRequest, type VideoResult, type VideoStatus } from "../../types.js";
+import { RokuEcp, type RokuPlayer } from "./ecp.js";
 import { ssdpSearch } from "./ssdp.js";
 
 /** Sideloaded dev channel id; our HLS player app (Phase 3) is installed as the dev app. */
@@ -154,6 +154,59 @@ export class RokuDriver implements DisplayDriver {
     return this.streams.preview?.(device.id) ?? Promise.resolve(undefined);
   }
 
+  // ---- Box 0.27.0: a video URL the Roku plays itself (its built-in player, channel 15985)
+
+  videoInfo(device: DisplayDevice): VideoInfo {
+    // device.model is "Roku Express 3930X": the last word is the model number.
+    return { kind: "roku", model: (device.model ?? "").split(/\s+/).pop() || "Roku" };
+  }
+
+  async playVideo(device: DisplayDevice, v: VideoRequest): Promise<VideoResult> {
+    if (this.streams.state?.(device.id)) await this.streams.stopFor(device.id).catch(() => undefined);
+    try {
+      await this.ecp(device).playUrl({ url: v.url, title: v.title, poster: v.poster, format: rokuFormat(v.mime, v.url) });
+    } catch (err) {
+      return rokuFailure(device, err);
+    }
+    // The built-in player can't start part-way through or seek.
+    return v.startAt ? { ok: true, message: `${device.name} starts from the beginning (a Roku can't start part-way through)` } : { ok: true };
+  }
+
+  async videoControl(device: DisplayDevice, action: VideoAction): Promise<VideoResult> {
+    try {
+      const ecp = this.ecp(device);
+      if (typeof action === "object") return { ok: false, reason: "unsupported", message: `${device.name} can't seek (a Roku's built-in player can't); use pause and resume` };
+      if (action === "stop") {
+        await ecp.keypress("Home");
+        return { ok: true };
+      }
+      // Play is a toggle on a Roku: press it only when it would do what was asked.
+      const p = await ecp.mediaPlayer();
+      if (p.plugin !== ROKU_URL_PLAYER) return { ok: false, reason: "error", message: `${device.name} isn't playing the video any more` };
+      const playing = ["play", "buffer", "startup"].includes(p.state);
+      if ((action === "pause" && playing) || (action === "resume" && p.state === "pause")) await ecp.keypress("Play");
+      return { ok: true };
+    } catch (err) {
+      return rokuFailure(device, err);
+    }
+  }
+
+  async videoStatus(device: DisplayDevice): Promise<VideoStatus> {
+    let p: RokuPlayer;
+    try {
+      p = await this.ecp(device).mediaPlayer();
+    } catch (err) {
+      return { state: "error", message: rokuFailure(device, err).message };
+    }
+    // Something else playing (another channel) means our video has stopped.
+    if (p.plugin && p.plugin !== ROKU_URL_PLAYER) return { state: "stopped" };
+    const times = { ...(p.position !== undefined ? { position: p.position } : {}), ...(p.duration ? { duration: p.duration } : {}) };
+    if (p.error) return { state: "error", ...times, message: `${device.name} couldn't play the video (its format, or the server refused the TV)` };
+    if (["play", "buffer", "startup", "open"].includes(p.state)) return { state: "playing", ...times };
+    if (p.state === "pause") return { state: "paused", ...times };
+    return { state: "stopped", ...times };
+  }
+
   /** Live TV on a Roku TV's tuner: ECP launch tvinput.dtv?ch=7.1. */
   async tuneChannel(device: DisplayDevice, channel: string): Promise<void> {
     if (!device.isTv) throw Object.assign(new Error(`${device.name} is a Roku player; it has no TV tuner`), { status: 400 });
@@ -211,6 +264,36 @@ export class RokuDriver implements DisplayDriver {
       return { online: false, detail: String(err) };
     }
   }
+}
+
+/** Roku's built-in URL player ("Play on Roku"). */
+export const ROKU_URL_PLAYER = "15985";
+
+/** The built-in player's videoFormat, from the MIME type (or the URL's extension). */
+export function rokuFormat(mime?: string, url?: string): string {
+  const m = (mime ?? "").toLowerCase();
+  if (m.includes("mpegurl")) return "hls";
+  if (m.includes("matroska")) return "mkv";
+  if (m.includes("quicktime")) return "mov";
+  if (m.includes("dash")) return "dash";
+  if (m.startsWith("video/")) return "mp4";
+  let path = "";
+  try {
+    path = new URL(url ?? "").pathname.toLowerCase();
+  } catch {
+    /* not a URL: the default below */
+  }
+  if (path.endsWith(".m3u8")) return "hls";
+  if (path.endsWith(".mkv")) return "mkv";
+  if (path.endsWith(".mov")) return "mov";
+  return "mp4";
+}
+
+function rokuFailure(device: DisplayDevice, err: unknown): VideoResult {
+  const msg = redactUrls(String(err instanceof Error ? err.message : err));
+  if (/Permissive|403/.test(msg)) return { ok: false, reason: "not-allowed", message: `${device.name} refused: on the Roku, set Settings → System → Advanced system settings → Control by mobile apps → Network access to Permissive` };
+  if (/abort|timeout|ECONNREFUSED|EHOSTUNREACH|fetch failed|didn't answer/i.test(msg)) return { ok: false, reason: "offline", message: `${device.name} isn't answering` };
+  return { ok: false, reason: "error", message: `${device.name}: ${msg}` };
 }
 
 /** A tuner channel: "7", "7.1", "1004". */

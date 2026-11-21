@@ -29,6 +29,10 @@ import {
   type Countdown,
   type GameResult,
   type LaunchResult,
+  type VideoAction,
+  type VideoRequest,
+  type VideoResult,
+  type VideoStatus,
   type MediaItem,
   type MediaPlayArgs,
   type MediaPlayResult,
@@ -208,6 +212,15 @@ export interface BarGames {
   tvs(): Promise<BoxTv[]>;
   /** Media providers: start a TV app (one of manifest media.launch) on one of your target displays. Returns once accepted. */
   launchApp(displayId: string, app: string): Promise<LaunchResult>;
+  /**
+   * SDK 0.17.0 (manifest "video": { "play": true }): hands a TV a video link that it plays
+   * itself, streaming straight from the link's server. TVs that can: bg.tvs() entries with
+   * `video`. The box never logs or stores the link. Off a box: { ok: false, reason: "unsupported" }.
+   */
+  playVideo(displayId: string, video: VideoRequest): Promise<VideoResult>;
+  videoControl(displayId: string, action: VideoAction): Promise<VideoResult>;
+  /** What the TV's player is doing. Poll it (every few seconds) while a video plays. */
+  videoStatus(displayId: string): Promise<VideoStatus>;
   /** media_list: your lists and plans. */
   onMediaList(fn: () => MediaItem[] | Promise<MediaItem[]>): void;
   /** media_play: answer within ~3 s; return pending: true while a TV app starts. */
@@ -547,6 +560,33 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
         return { ok: false, reason: "error", message: String(err) };
       }
     },
+    async playVideo(displayId, video) {
+      if (!connected) return { ok: false, reason: "unsupported", message: "not running on a Bar Games box" };
+      try {
+        const r = await core("POST", "/internal/video/play", { displayId, ...video });
+        return (await r.json()) as VideoResult;
+      } catch (err) {
+        return { ok: false, reason: "error", message: String(err) };
+      }
+    },
+    async videoControl(displayId, action) {
+      if (!connected) return { ok: false, reason: "unsupported", message: "not running on a Bar Games box" };
+      try {
+        const r = await core("POST", "/internal/video/control", { displayId, ...(typeof action === "object" ? { seek: action.seek } : { action }) });
+        return (await r.json()) as VideoResult;
+      } catch (err) {
+        return { ok: false, reason: "error", message: String(err) };
+      }
+    },
+    async videoStatus(displayId) {
+      if (!connected) return { state: "stopped" };
+      try {
+        const r = await core("GET", "/internal/video/status?displayId=" + encodeURIComponent(displayId));
+        return (await r.json()) as VideoStatus;
+      } catch (err) {
+        return { state: "error", message: String(err) };
+      }
+    },
     onMediaList: (fn) => void commands.set("media_list", async () => ({ ok: true, data: { items: await fn() } })),
     onMediaPlay: (fn) =>
       void commands.set("media_play", async ({ args }) => {
@@ -584,6 +624,10 @@ export type {
   GameResult,
   GameStatus,
   LaunchResult,
+  VideoAction,
+  VideoRequest,
+  VideoResult,
+  VideoStatus,
   MediaItem,
   MediaPlayArgs,
   MediaPlayResult,

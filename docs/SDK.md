@@ -59,6 +59,27 @@ its own audio on the box's speakers. These are the box's jack or HDMI, Bluetooth
 and AirPlay TVs, which the venue sets up under Settings → Connected devices. Use
 `bg.audio` (or `@bargames/sdk/audio`) and `bg.fromBox(req)`. Guide: [AUDIO.md](AUDIO.md).
 
+**Video on TVs (SDK 0.17.0, box 0.27.0):** `"video": { "play": true }` lets an app hand a
+venue TV a video link that the TV plays itself, streaming straight from the link's server
+(a media server such as Jellyfin). The box never carries the video:
+- **Apple TVs** get it over AirPlay: full 4K and HDR, `startAt` and seek work.
+  The Apple TV must be paired twice, with "Pair TV control" and then a second PIN for AirPlay.
+  Without that, `reason: "needs-pairing"`.
+- **Rokus** play it in their built-in player. A Roku can't seek or start part-way through.
+
+The calls:
+- `bg.tvs()[].video` (`{ kind: "appletv" | "roku", model }`) says which TVs can take a link.
+- `bg.playVideo(displayId, { url, mime?, title, poster?, startAt? })` hands the TV the link.
+  `mime` picks the Roku's player format.
+- `bg.videoControl(displayId, "pause" | "resume" | "stop" | { seek: seconds from the start })`.
+- `bg.videoStatus(displayId)` returns `{ state, position?, duration?, message? }`. Poll it
+  every few seconds while a video plays.
+
+The box never logs or stores the link, since it may carry the server's key. Don't put it in
+events either. The standard events are `video_started { tv, title }` and
+`video_stopped { tv }`. In the mock box, fake-bar is a Roku 3930X and fake-patio is an
+Apple TV 4K; a video "plays" for 90 s.
+
 **Guest hosts (SDK 0.16.0, box 0.19.0):** an app that declares
 `"guests": { "path"?: "/kj", "cohosts"?: true }` can be handed to a guest: staff make a guest
 link in the box admin (Tonight → Guest hosts, or the app's details), and the gateway gives

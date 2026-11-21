@@ -9,7 +9,7 @@ import type { AppleTvDriver } from "./drivers/appletv/index.js";
 import type { VenueboxHub } from "./venuebox/hub.js";
 import { mountAudio, type BoxAudio } from "./audio/index.js";
 import type { DisplayRegistry } from "./registry.js";
-import { checkStreamSettings, type DeliveryMethod, type DisplayContent, type StreamSettings } from "./types.js";
+import { checkStreamSettings, checkVideo, type DeliveryMethod, type DisplayContent, type StreamSettings, type VideoAction } from "./types.js";
 
 const h =
   (fn: (req: Request, res: Response) => unknown): RequestHandler =>
@@ -290,6 +290,33 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
       res.json({ ok: true });
     }),
   );
+  // Box 0.27.0: video links the TV plays itself. Core checks the app's video.play first.
+  // The URL and poster may carry the media server's key: never logged, never stored.
+  /** { url, mime?, title, poster?, startAt?, provider } */
+  app.post(
+    "/displays/:id/video",
+    h(async (req, res) => {
+      const v = checkVideo(req.body);
+      if (typeof v === "string") return void res.status(400).json({ error: v });
+      res.json(await d.registry.playVideo(req.params.id, v.video, v.provider));
+    }),
+  );
+  /** { action: "pause" | "resume" | "stop" } or { seek: seconds } */
+  app.post(
+    "/displays/:id/video/control",
+    h(async (req, res) => {
+      const b = (req.body ?? {}) as { action?: unknown; seek?: unknown };
+      const action: VideoAction | undefined =
+        typeof b.seek === "number" && Number.isFinite(b.seek) && b.seek >= 0 ? { seek: Math.floor(b.seek) } : b.action === "pause" || b.action === "resume" || b.action === "stop" ? b.action : undefined;
+      if (!action) return void res.status(400).json({ error: 'action: "pause" | "resume" | "stop", or seek: seconds' });
+      res.json(await d.registry.videoControl(req.params.id, action));
+    }),
+  );
+  app.get(
+    "/displays/:id/video",
+    h(async (req, res) => res.json(await d.registry.videoStatus(req.params.id))),
+  );
+
   /** DIAL screen id (YouTube's Lounge screen id). Never logged. */
   app.get(
     "/displays/:id/dial/:app",

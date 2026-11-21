@@ -5,7 +5,13 @@ The broker starts this once and talks JSON lines over stdin/stdout:
   request  {"id": 1, "op": "key", "identifier": "...", "address": "192.0.2.10", "credentials": "...", "key": "up"}
   response {"id": 1, "ok": true, "result": ...}   or   {"id": 1, "ok": false, "code": "auth|offline|pin|unsupported|error", "error": "..."}
 
-Ops: scan, pair_begin, pair_finish, key, power, state, apps, launch, text.
+Ops: scan, pair_begin, pair_finish, key, power, state, apps, launch, text,
+video_play, video_control, video_status (box 0.27.0).
+
+Video (box 0.27.0): the Apple TV is handed a URL over AirPlay and streams it itself. That
+needs an AirPlay connection (credentials from an AirPlay pairing, else transient pairing)
+next to Companion. AirPlay playback lasts as long as that connection, so the helper keeps
+it open while the video plays. URLs carry the media server's key: never logged.
 One Companion connection per Apple TV stays open (remote presses are instant) and is
 closed after 10 idle minutes or when the TV drops it. Credentials are passed in by the
 broker on every call; nothing is stored here. Logs go to stderr, never credentials.
@@ -18,7 +24,7 @@ import time
 
 import pyatv
 from pyatv import exceptions
-from pyatv.const import OperatingSystem, PowerState, Protocol
+from pyatv.const import DeviceState, OperatingSystem, PowerState, Protocol
 from pyatv.interface import DeviceListener
 
 IDLE_SECONDS = 600
@@ -69,6 +75,7 @@ class Helper:
         self.conns = {}  # identifier -> [atv, last_used]
         self.pairings = {}  # identifier -> [handler, started]
         self.locks = {}
+        self.videos = {}  # identifier -> {"atv", "task", "error"} (box 0.27.0)
 
     def lock(self, identifier):
         return self.locks.setdefault(identifier, asyncio.Lock())
@@ -107,7 +114,9 @@ class Helper:
         if old:
             await old[0].close()
         conf = await self.find(req["address"], ident)
-        handler = await pyatv.pair(conf, Protocol.Companion, self.loop, name=req.get("name") or "Bar Games box")
+        # Box 0.27.0: "airplay" pairs AirPlay (for handing the Apple TV video links).
+        protocol = Protocol.AirPlay if req.get("protocol") == "airplay" else Protocol.Companion
+        handler = await pyatv.pair(conf, protocol, self.loop, name=req.get("name") or "Bar Games box")
         await handler.begin()
         self.pairings[ident] = [handler, time.monotonic()]
         return {"pin": bool(handler.device_provides_pin)}
@@ -139,6 +148,10 @@ class Helper:
 
     async def device(self, req):
         ident = req["identifier"]
+        # While a video plays, its connection (Companion and AirPlay) serves the remote too.
+        video = self.videos.get(ident)
+        if video:
+            return video["atv"]
         entry = self.conns.get(ident)
         if entry:
             entry[1] = time.monotonic()
@@ -217,6 +230,124 @@ class Helper:
         text = str(req.get("text", ""))[:100]
         return await self.with_device(req, lambda atv: atv.keyboard.text_append(text))
 
+    # ---- video (box 0.27.0)
+
+    async def video_open(self, req):
+        ident = req["identifier"]
+        await self.video_close(ident)
+        conf = await self.find(req["address"], ident)
+        if req.get("credentials"):
+            conf.set_credentials(Protocol.Companion, req["credentials"])
+        if req.get("airplay"):
+            conf.set_credentials(Protocol.AirPlay, req["airplay"])
+        # The Companion-only remote connection would compete with this one, which does both.
+        self.drop(ident)
+        try:
+            atv = await pyatv.connect(conf, self.loop)
+        except exceptions.AuthenticationError as err:
+            raise Fail("needs-pairing", f"the Apple TV wants the box paired for AirPlay video ({err})")
+        v = {"atv": atv, "task": None, "error": None}
+        self.videos[ident] = v
+        return v
+
+    async def video_close(self, ident):
+        v = self.videos.pop(ident, None)
+        if not v:
+            return
+        if v["task"] and not v["task"].done():
+            v["task"].cancel()
+        try:
+            v["atv"].close()
+        except Exception:  # noqa: BLE001 - closing a dead connection
+            pass
+
+    async def video_play(self, req):
+        ident = req["identifier"]
+        url = str(req.get("url", ""))
+        if not url.startswith(("http://", "https://")):
+            raise Fail("unsupported", "only http and https video links")
+        start = float(req.get("startAt") or 0)
+        async with self.lock(ident):
+            v = await self.video_open(req)
+
+            async def run():
+                try:
+                    if start:
+                        await v["atv"].stream.play_url(url, position=start)
+                    else:
+                        await v["atv"].stream.play_url(url)
+                except asyncio.CancelledError:
+                    raise
+                except exceptions.AuthenticationError:
+                    v["error"] = "needs-pairing"
+                except Exception as err:  # noqa: BLE001 - reported through video_status
+                    # Never the URL: the error's type, and its text only when it holds no link.
+                    msg = str(err)
+                    v["error"] = type(err).__name__ + ("" if "://" in msg or not msg else f": {msg[:160]}")
+                    log("video playback ended with", type(err).__name__)
+
+            v["task"] = asyncio.ensure_future(run())
+            # Give the Apple TV a moment to refuse (a format it can't play, pairing) before answering.
+            await asyncio.sleep(2.5)
+            if v["task"].done() and v["error"]:
+                err = v["error"]
+                await self.video_close(ident)
+                if err == "needs-pairing":
+                    raise Fail("needs-pairing", "the Apple TV wants the box paired for AirPlay video")
+                raise Fail("error", f"the Apple TV couldn't play it ({err})")
+        return {"ok": True}
+
+    async def video_status(self, req):
+        v = self.videos.get(req["identifier"])
+        if not v:
+            return {"state": "stopped"}
+        out = {}
+        try:
+            p = await v["atv"].metadata.playing()
+            if p.position is not None:
+                out["position"] = int(p.position)
+            if p.total_time:
+                out["duration"] = int(p.total_time)
+            if p.device_state in (DeviceState.Playing, DeviceState.Loading, DeviceState.Seeking):
+                out["state"] = "playing"
+            elif p.device_state == DeviceState.Paused:
+                out["state"] = "paused"
+        except Exception:  # noqa: BLE001 - no metadata over this connection: go by the playback task
+            pass
+        running = v["task"] is not None and not v["task"].done()
+        if not running:
+            out["state"] = "error" if v["error"] else "stopped"
+            if v["error"]:
+                out["message"] = "the Apple TV stopped with an error (" + v["error"] + ")"
+        elif "state" not in out:
+            out["state"] = "playing"
+        return out
+
+    async def video_control(self, req):
+        ident = req["identifier"]
+        action = req.get("action")
+        v = self.videos.get(ident)
+        if action == "stop":
+            if v:
+                try:
+                    await v["atv"].remote_control.stop()
+                except Exception:  # noqa: BLE001 - closing the AirPlay session stops it anyway
+                    pass
+                await self.video_close(ident)
+            return {"ok": True}
+        if not v or v["task"] is None or v["task"].done():
+            raise Fail("error", "nothing is playing")
+        rc = v["atv"].remote_control
+        if action == "pause":
+            await rc.pause()
+        elif action == "resume":
+            await rc.play()
+        elif action == "seek":
+            await rc.set_position(max(0, int(req.get("position") or 0)))
+        else:
+            raise Fail("unsupported", f"unknown action {action!r}")
+        return {"ok": True}
+
     async def handle(self, req):
         op = req.get("op")
         fn = {
@@ -230,6 +361,9 @@ class Helper:
             "now": self.now,
             "launch": self.launch,
             "text": self.text,
+            "video_play": self.video_play,
+            "video_status": self.video_status,
+            "video_control": self.video_control,
         }.get(op)
         if not fn:
             raise Fail("unsupported", f"unknown op {op!r}")

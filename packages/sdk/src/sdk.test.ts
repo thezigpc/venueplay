@@ -1017,3 +1017,46 @@ test("SDK 0.16.0: guests in the manifest; bg.guest / bg.guests against the mock 
     appServer.close();
   }
 });
+
+test("0.17.0 video: manifest video.play; the mock box's fake video TVs (a Roku without seek, an Apple TV with it)", async () => {
+  const { mockBox, DEV_TOKEN } = await import("./devbox.js");
+  const base = { id: "movies", name: "Movies", kind: "app", version: "0.1.0", image: "x/movies:0.1.0", port: 3017, sdk: { version: "0.17.0", level: 3 }, routes: { player: "/" }, commands: ["media_list", "media_play", "media_stop"], media: { launch: [] } };
+  const bad = validateManifest({ ...base, video: { play: "yes" } });
+  assert.ok(!bad.ok && bad.errors.some((e) => e.startsWith("video:")));
+  const m = validateManifest({ ...base, video: { play: true } });
+  assert.ok(m.ok);
+  assert.deepEqual(m.ok && m.manifest.video, { play: true });
+  assert.deepEqual(m.ok && m.manifest.media, { launch: [] }, "a media provider that launches no TV app");
+
+  const box = mockBox({ gameId: "movies", displayName: "Movies (mock)", gameUrl: "http://127.0.0.1:9", corePort: 0, gatewayPort: 0, manifest: m.ok ? m.manifest : undefined });
+  await new Promise((r) => box.core.once("listening", r));
+  const log = console.log;
+  console.log = () => undefined;
+  try {
+    const bg = createBarGames({ gameId: "movies", coreUrl: `http://127.0.0.1:${(box.core.address() as AddressInfo).port}`, token: DEV_TOKEN });
+    const tvs = await bg.tvs();
+    assert.deepEqual(
+      tvs.filter((t) => t.video).map((t) => [t.id, t.video?.kind]),
+      [["fake-bar", "roku"], ["fake-patio", "appletv"]],
+    );
+    const link = "http://media.example/Videos/1/master.m3u8?api_key=k";
+    assert.match((await bg.playVideo("fake-bar", { url: link, title: "A movie", startAt: 40 })).message ?? "", /from the beginning/);
+    assert.equal((await bg.videoControl("fake-bar", { seek: 10 })).reason, "unsupported");
+    assert.deepEqual(await bg.playVideo("fake-patio", { url: link, title: "A movie", startAt: 40 }), { ok: true });
+    assert.equal((await bg.videoStatus("fake-patio")).position, 40);
+    await bg.videoControl("fake-patio", "pause");
+    assert.equal((await bg.videoStatus("fake-patio")).state, "paused");
+    await bg.videoControl("fake-patio", { seek: 80 });
+    assert.equal((await bg.videoStatus("fake-patio")).position, 80);
+    await bg.videoControl("fake-patio", "stop");
+    assert.equal((await bg.videoStatus("fake-patio")).state, "stopped");
+    assert.equal((await bg.playVideo("fake-unpaired", { url: link, title: "x" })).reason, "unsupported");
+
+    const off = createBarGames({ gameId: "movies", coreUrl: "", token: "" });
+    assert.equal((await off.playVideo("tv", { url: link, title: "x" })).reason, "unsupported", "off a box: nothing happens");
+  } finally {
+    console.log = log;
+    box.core.close();
+    box.gateway.close();
+  }
+});

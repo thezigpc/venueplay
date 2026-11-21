@@ -21,6 +21,25 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.17.0 (video links on TVs)
+
+- **Most modules: nothing to change.**
+- **Video on TVs** (box 0.27.0): declare `"video": { "play": true }`. Then:
+  - `bg.tvs()` entries carry `video: { kind: "appletv" | "roku", model }` for TVs the box
+    can hand a link to.
+  - `bg.playVideo(displayId, { url, mime?, title, poster?, startAt? })` hands the TV the
+    link; the TV streams it straight from the link's server.
+  - `bg.videoControl(displayId, "pause" | "resume" | "stop" | { seek })`. Seek is absolute
+    seconds, and Apple TV only.
+  - `bg.videoStatus(displayId)` returns `{ state, position?, duration?, message? }`.
+  - A Roku can't seek or start part-way through: playVideo says so in `message`.
+  - An Apple TV not yet paired for AirPlay returns `reason: "needs-pairing"`.
+  - Never log the link or put it in events: it may carry a server key.
+- **Events:** `video_started { tv, title }` and `video_stopped { tv }` are standard now.
+- **Media providers** may declare `"media": { "launch": [] }` (they launch no TV app).
+- **Mock box:** fake-bar is a Roku 3930X with no seek, and fake-patio an Apple TV 4K. A video
+  "plays" for 90 s, then stops.
+
 ## What's new in SDK 0.16.0 (guest hosts; team results)
 
 - **Most modules: nothing to change.** Don't re-pack for this unless you want one of these.

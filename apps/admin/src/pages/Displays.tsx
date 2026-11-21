@@ -747,8 +747,8 @@ export function inputLabel(input: string, driver?: string): string {
 function controlText(driver: string, paired: boolean): string {
   if (driver === "appletv")
     return paired
-      ? "Paired: the box can use this Apple TV's remote, open its apps, type into search boxes, and wake it or put it to sleep. Remove the pairing on the Apple TV in Settings > Remotes and Devices."
-      : "Pair once so the box can use this Apple TV's remote, open its apps, type into it, and wake it or put it to sleep. Someone needs to see the TV: the Apple TV shows a 4-digit PIN.";
+      ? "Paired: the box can use this Apple TV's remote, open its apps, type into search boxes, and wake it or put it to sleep. To let apps hand it movies, pair again and enter both PINs. Remove the pairing on the Apple TV in Settings > Remotes and Devices."
+      : "Pair once so the box can use this Apple TV's remote, open its apps, type into it, wake it or put it to sleep, and hand it movies to play. Someone needs to see the TV: the Apple TV shows a 4-digit PIN, then a second one for movies.";
   return paired
     ? "Paired: the box can switch this TV on and off, change its input and use its remote. To switch it on from off, the TV's Power Mode must be Quick Start (Menu > System > Power Mode)."
     : "Pair once so the box can switch this TV on and off, change its input and use its remote. Someone needs to see the TV: it shows a 4-digit PIN. For switching on from off, set the TV's Power Mode to Quick Start (Menu > System > Power Mode).";
@@ -780,7 +780,9 @@ function ControlPairing({ d, paired, reload }: { d: Display; paired: boolean; re
       const r = await api.pairControl(d.id, code);
       setCode("");
       setPhase(r.ok ? "idle" : "code");
-      setMsg(r.ok ? (r.message ?? "Paired.") : `${r.message ?? "Pairing failed."} Press "New PIN" for another try.`);
+      // Box 0.27.0: an Apple TV asks for a second PIN (AirPlay, for movies): not a failure.
+      const next = !r.ok && r.needsCode && /second PIN/.test(r.message ?? "");
+      setMsg(r.ok || next ? (r.message ?? "Paired.") : `${r.message ?? "Pairing failed."} Press "New PIN" for another try.`);
     } catch (e) {
       setPhase("code");
       setMsg((e as Error).message);

@@ -1,5 +1,5 @@
 import type { JsonStore } from "@bargames/common";
-import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamSettings, StreamState } from "./types.js";
+import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamSettings, StreamState, VideoAction, VideoInfo, VideoRequest, VideoResult, VideoStatus } from "./types.js";
 
 export interface DisplayRecord extends DisplayDevice {
   /** Venue's own label, e.g. "Bar left". */
@@ -28,6 +28,8 @@ export interface DisplayView extends DisplayRecord {
    * home), for TVs that can tell (Roku, Apple TV). Only with ?health=1, and only online TVs.
    */
   onScreen?: { id: string; name: string; home: boolean };
+  /** Box 0.27.0: the TV can be handed a video URL to play itself. */
+  video?: VideoInfo;
 }
 
 /** The screen a TV shows while it pairs: self-contained, no network needed. */
@@ -72,7 +74,8 @@ export class DisplayRegistry {
         if (!drv || d.ignored) return d;
         const [capabilities, health] = await Promise.all([drv.capabilities(d).catch(() => undefined), withHealth ? drv.health(d) : undefined]);
         const onScreen = withHealth && health?.online ? await this.onScreen(d) : undefined;
-        return { ...d, capabilities, health, stream: drv.streamState?.(d), launchable: drv.launchableApps?.(d) ?? [], ...(onScreen ? { onScreen } : {}) };
+        const video = drv.videoInfo?.(d);
+        return { ...d, capabilities, health, stream: drv.streamState?.(d), launchable: drv.launchableApps?.(d) ?? [], ...(onScreen ? { onScreen } : {}), ...(video ? { video } : {}) };
       }),
     );
   }
@@ -182,6 +185,35 @@ export class DisplayRegistry {
     const drv = this.driverFor(d);
     if (drv.streamState?.(d)) await drv.stop(d).catch(() => undefined);
     await this.setContent(id, { kind: "external", provider, app, ...(title ? { title } : {}) });
+  }
+
+  // ---- Box 0.27.0: video links a TV plays itself (apps with video.play, through core)
+
+  private videoTv(id: string): { d: DisplayRecord; drv: DisplayDriver } {
+    const d = this.get(id);
+    if (!d || d.ignored) throw Object.assign(new Error(`no display ${id}`), { status: 404 });
+    return { d, drv: this.driverFor(d) };
+  }
+
+  /** Hands the TV a video URL and records that it shows the provider's video (idle repaints skip it). Never logs or stores the URL. */
+  async playVideo(id: string, video: VideoRequest, provider: string): Promise<VideoResult> {
+    const { d, drv } = this.videoTv(id);
+    if (!drv.playVideo || !drv.videoInfo?.(d)) return { ok: false, reason: "unsupported", message: `${d.label || d.name} can't be handed a video to play` };
+    const r = await drv.playVideo(d, video);
+    if (r.ok) await this.setContent(id, { kind: "external", provider, app: "video", title: video.title.slice(0, 80) });
+    return r;
+  }
+
+  async videoControl(id: string, action: VideoAction): Promise<VideoResult> {
+    const { d, drv } = this.videoTv(id);
+    if (!drv.videoControl) return { ok: false, reason: "unsupported", message: `${d.label || d.name} can't be handed a video to play` };
+    return drv.videoControl(d, action);
+  }
+
+  async videoStatus(id: string): Promise<VideoStatus> {
+    const { d, drv } = this.videoTv(id);
+    if (!drv.videoStatus) return { state: "stopped" };
+    return drv.videoStatus(d);
   }
 
   /** DIAL screen id of an app on this TV (memory-only cache, 10 minutes). */

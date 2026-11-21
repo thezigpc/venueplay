@@ -59,6 +59,27 @@ export function parseApps(xml: string): RokuApp[] {
   return [...xml.matchAll(/<app\s+id="([^"]+)"[^>]*>([^<]*)<\/app>/g)].map((m) => ({ id: m[1], name: decode(m[2]) }));
 }
 
+export interface RokuPlayer {
+  /** none, startup, buffer, play, pause, stop, close, finished… (as the Roku says it). */
+  state: string;
+  error: boolean;
+  /** The channel playing it ("15985" for the built-in URL player). */
+  plugin?: string;
+  /** Seconds. */
+  position?: number;
+  duration?: number;
+}
+
+/** ECP's media-player XML: <player error="false" state="play"><plugin id="…"/><position>12345 ms</position>… */
+export function parseMediaPlayer(xml: string): RokuPlayer {
+  const attr = (tag: string, name: string) => new RegExp(`<${tag}\\b[^>]*\\s${name}="([^"]*)"`, "i").exec(xml)?.[1];
+  const ms = (tag: string) => {
+    const m = new RegExp(`<${tag}>\\s*(\\d+)\\s*ms\\s*</${tag}>`, "i").exec(xml);
+    return m ? Math.round(Number(m[1]) / 1000) : undefined;
+  };
+  return { state: (attr("player", "state") ?? "none").toLowerCase(), error: attr("player", "error") === "true", plugin: attr("plugin", "id"), position: ms("position"), duration: ms("duration") };
+}
+
 /** Input name → ECP key. Roku TVs only. */
 export function inputKey(input: string): string {
   const s = input.toLowerCase();
@@ -110,6 +131,28 @@ export class RokuEcp {
   launch(appId: string, params: Record<string, string> = {}): Promise<string> {
     const qs = new URLSearchParams(params).toString();
     return this.req("POST", `/launch/${encodeURIComponent(appId)}${qs ? `?${qs}` : ""}`);
+  }
+
+  /**
+   * Box 0.27.0: Roku's built-in URL player (the hidden "Play on Roku" channel, 15985).
+   * The query carries the video and poster URLs, which may hold the media server's key, so
+   * errors from here never include the path.
+   */
+  async playUrl(o: { url: string; title: string; poster?: string; format: string }): Promise<void> {
+    const qs = new URLSearchParams({ t: "v", u: o.url, videoName: o.title, k: o.poster || "(null)", videoFormat: o.format }).toString();
+    let res: Response;
+    try {
+      res = await this.doFetch(`${this.base.replace(/\/$/, "")}/input/15985?${qs}`, { method: "POST", signal: AbortSignal.timeout(this.timeoutMs) });
+    } catch (err) {
+      throw new Error(`Roku didn't answer (${err instanceof Error ? err.name : "error"})`);
+    }
+    if (res.status === 403) throw new Error("Roku refused: enable Control by mobile apps → Permissive");
+    if (!res.ok) throw new Error(`Roku refused the video: HTTP ${res.status}`);
+  }
+
+  /** What the Roku's player is doing (ECP query/media-player). */
+  async mediaPlayer(): Promise<RokuPlayer> {
+    return parseMediaPlayer(await this.req("GET", "/query/media-player"));
   }
 
   powerOn(): Promise<string> {

@@ -1030,3 +1030,40 @@ test("box shutdown: needs the confirm word and the host helper", async () => {
     b.close();
   }
 });
+
+test("0.17.0 video links: video.play apps only; forwarded to the broker; the link never logged", async () => {
+  const brokerBodies: { url: string; method: string; body?: Record<string, unknown> }[] = [];
+  const b = await boot((url, init) => {
+    if (url.startsWith("http://broker/displays/tv1/video")) {
+      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
+      brokerBodies.push({ url: url.replace("http://broker", ""), method: init?.method ?? "GET", body });
+      if ((init?.method ?? "GET") === "GET") return reply({ state: "playing", position: 5, duration: 60 });
+      return reply({ ok: true });
+    }
+    return undefined;
+  });
+  try {
+    Object.assign(b.displays[0], { driver: "roku", video: { kind: "roku", model: "3930X" } });
+    const movies = { id: "movies", name: "Movies", kind: "app", version: "0.1.0", image: "ghcr.io/x/movies:0.1.0", port: 3017, sdk: { version: "0.17.0", level: 3 }, routes: { player: "/", host: "/" }, commands: ["media_list", "media_play", "media_stop"], events: [], media: { launch: [] }, video: { play: true }, network: { internet: true } };
+    assert.equal((await b.json("POST", "/api/games/install", { manifest: movies, devTarget: "http://movies" }, b.authed)).status, 200);
+    await b.json("PATCH", "/api/games/movies", { enabled: true }, b.authed);
+    await b.json("POST", "/api/games/install", { manifest: bingo, devTarget: "http://bingo" }, b.authed);
+    const g = { authorization: `Bearer ${b.games.get("movies")!.token}` };
+    const notVideo = { authorization: `Bearer ${b.games.get("bingo")!.token}` };
+    const link = "http://media.example:8096/Videos/1/stream?api_key=SECRET";
+
+    assert.equal((await b.json("POST", "/internal/video/play", { displayId: "tv1", url: link, title: "A movie" }, notVideo)).status, 403);
+    const tvs = ((await (await b.json("GET", "/internal/tvs", undefined, g)).json()) as { tvs: { id: string; video?: unknown }[] }).tvs;
+    assert.deepEqual(tvs.find((t) => t.id === "tv1")?.video, { kind: "roku", model: "3930X" });
+
+    const play = (await (await b.json("POST", "/internal/video/play", { displayId: "tv1", url: link, title: "A movie", startAt: 30 }, g)).json()) as { ok: boolean };
+    assert.equal(play.ok, true);
+    assert.deepEqual(brokerBodies[0], { url: "/displays/tv1/video", method: "POST", body: { url: link, title: "A movie", startAt: 30, provider: "movies" } });
+    assert.deepEqual(await (await b.json("POST", "/internal/video/control", { displayId: "tv1", seek: 90 }, g)).json(), { ok: true });
+    assert.deepEqual(brokerBodies[1].body, { seek: 90 });
+    assert.deepEqual(await (await b.json("GET", "/internal/video/status?displayId=tv1", undefined, g)).json(), { state: "playing", position: 5, duration: 60 });
+    assert.equal((await b.json("POST", "/internal/video/play", { url: link, title: "x" }, g)).status, 400, "displayId required");
+  } finally {
+    b.close();
+  }
+});

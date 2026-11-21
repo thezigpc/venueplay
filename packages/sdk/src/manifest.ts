@@ -125,6 +125,12 @@ export interface GameManifest {
    */
   audio?: { play: boolean };
   /**
+   * SDK 0.17.0: hands venue TVs video links they play themselves (bg.playVideo): the Apple
+   * TV over AirPlay, Rokus with their built-in player. The TV streams straight from the
+   * link's server; the box never carries the video. Apps and games; not integrations.
+   */
+  video?: { play: boolean };
+  /**
    * SDK 0.15.0: this game can play one bracket match per room (create_room's args.match),
    * for this many players or teams. Tournaments list it as a game they can start matches in.
    */
@@ -277,6 +283,14 @@ export function validateManifest(input: unknown): ManifestResult {
     else audio = { play };
   }
 
+  let video: { play: boolean } | undefined;
+  if (m.video !== undefined) {
+    const play = isObj(m.video) ? m.video.play : undefined;
+    if (typeof play !== "boolean") errors.push('video: { "play": true }');
+    else if (integration) warnings.push("video: integrations can't play video on TVs; ignored");
+    else video = { play };
+  }
+
   // SDK 0.15.0: bracket matches.
   let matches: { players: [number, number] } | undefined;
   if (m.matches !== undefined) {
@@ -343,6 +357,7 @@ export function validateManifest(input: unknown): ManifestResult {
     ...(routing ? { routing } : {}),
     ...(spec ? { integration: spec } : {}),
     ...(audio?.play ? { audio } : {}),
+    ...(video?.play ? { video } : {}),
     ...(matches ? { matches } : {}),
     ...(tournaments ? { tournaments } : {}),
     ...(guests ? { guests } : {}),
