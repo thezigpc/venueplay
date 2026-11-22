@@ -160,3 +160,23 @@ test("apple tv 0.27.0: video links over AirPlay; asks for the second pairing; ne
   assert.equal(failed.ok, false);
   assert.doesNotMatch(failed.message!, /SECRET|media\.example/, "links are cut out of messages");
 });
+
+test("apple tv 0.29.7: video ops go to the video helper (patched pyatv); pairing and the remote stay on the main one", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "atv-"));
+  const main = fakeHelper();
+  const video = fakeHelper();
+  const auth = new JsonStore<AppleTvAuth>(path.join(dir, "appletv-auth.json"), { credentials: {} }, 0o600);
+  const atv = new AppleTvDriver(new PendingStreamService(), auth, { call: main.call, videoCall: video.call, reachable: async () => true });
+  const [dev] = await atv.discover(10);
+  await atv.pairControl(dev);
+  await atv.pairControl(dev, "4321");
+  await atv.pairControl(dev, "4321");
+  assert.deepEqual(await atv.playVideo(dev, { url: "http://media.example/v.mp4", title: "A movie", mime: "video/mp4" }), { ok: true });
+  await atv.videoControl(dev, "pause");
+  await atv.videoStatus(dev);
+  const ops = (calls: { op: string }[]) => calls.map((c) => c.op);
+  assert.deepEqual(ops(video.calls).filter((op) => op.startsWith("video_")), ["video_play", "video_control", "video_status"]);
+  assert.equal(ops(main.calls).some((op) => op.startsWith("video_")), false);
+  assert.ok(ops(main.calls).includes("pair_finish"));
+  assert.equal(video.calls.find((c) => c.op === "video_play")!.args.airplay, "air-1", "the stored AirPlay pairing goes with it");
+});

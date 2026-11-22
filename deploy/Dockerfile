@@ -49,9 +49,12 @@ ADD --checksum=sha256:e5418c1730677d3f8f6480c0c5fb4b4b68a85a408b36d9d29c30c4f010
 # Apple TV control (Companion protocol): pyatv (MIT) in its own venv, pinned with its
 # dependencies, driven by atv-helper.py. Only the broker image carries Python.
 COPY apps/broker/atv/requirements.txt /tmp/atv-requirements.txt
+COPY apps/broker/atv/requirements-video.txt /tmp/atv-requirements-video.txt
+COPY apps/broker/atv/vendor/ /tmp/atv-vendor/
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv && rm -rf /var/lib/apt/lists/* \
  && python3 -m venv /opt/pyatv && /opt/pyatv/bin/pip install --no-cache-dir -r /tmp/atv-requirements.txt \
- && rm /tmp/atv-requirements.txt
+ && python3 -m venv /opt/pyatv-video && /opt/pyatv-video/bin/pip install --no-cache-dir -r /tmp/atv-requirements-video.txt \
+ && rm -r /tmp/atv-requirements.txt /tmp/atv-requirements-video.txt /tmp/atv-vendor
 COPY apps/broker/atv/atv-helper.py /usr/local/lib/bargames/atv-helper.py
 COPY apps/broker/atv/atv-stream.py /usr/local/lib/bargames/atv-stream.py
 # Box 0.22.0: touchscreens on plugged-in screens (evdev → DevTools touch events).

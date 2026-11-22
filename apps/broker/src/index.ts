@@ -78,8 +78,11 @@ if (vizio) drivers.set(vizio.id, vizio);
 const atvPython = process.env.ATV_PYTHON ?? "/opt/pyatv/bin/python";
 const atvScript = process.env.ATV_HELPER ?? "/usr/local/lib/bargames/atv-helper.py";
 const atvHelper = enabled.includes("appletv") && existsSync(atvPython) && existsSync(atvScript) ? new AtvHelper({ python: atvPython, script: atvScript, log }) : undefined;
+// Box 0.29.7: Apple TV video runs in its own helper on our pyatv build (apps/broker/atv/vendor/README.md).
+const atvVideoPython = process.env.ATV_VIDEO_PYTHON ?? "/opt/pyatv-video/bin/python";
+const atvVideoHelper = atvHelper && existsSync(atvVideoPython) ? new AtvHelper({ python: atvVideoPython, script: atvScript, log }) : undefined;
 const appletv = atvHelper
-  ? new AppleTvDriver(streams, new JsonStore<AppleTvAuth>(path.join(dataDir, "appletv-auth.json"), { credentials: {} }, 0o600), { call: atvHelper.call, clientName: () => process.env.BOX_NAME ?? "Bar Games box" })
+  ? new AppleTvDriver(streams, new JsonStore<AppleTvAuth>(path.join(dataDir, "appletv-auth.json"), { credentials: {} }, 0o600), { call: atvHelper.call, videoCall: atvVideoHelper?.call, clientName: () => process.env.BOX_NAME ?? "Bar Games box" })
   : undefined;
 if (appletv) drivers.set(appletv.id, appletv);
 // Plugged-in screens (HDMI/DisplayPort): cage + Chromium on the real output.

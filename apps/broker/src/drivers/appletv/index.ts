@@ -48,7 +48,7 @@ export class AppleTvDriver implements DisplayDriver {
   constructor(
     private readonly streams: StreamService,
     private readonly auth: JsonStore<AppleTvAuth>,
-    private readonly o: { call: AtvCall; clientName?: () => string; reachable?: (host: string) => Promise<boolean> },
+    private readonly o: { call: AtvCall; /** Box 0.29.7: video ops, on the patched pyatv (else call). */ videoCall?: AtvCall; clientName?: () => string; reachable?: (host: string) => Promise<boolean> },
   ) {}
 
   /** Box 0.27.0: which PIN the Apple TV is showing now (Companion first, then AirPlay). */
@@ -209,7 +209,7 @@ export class AppleTvDriver implements DisplayDriver {
   }
 
   private async videoCall(device: DisplayDevice, op: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
-    return this.o.call(op, { ...this.target(device), credentials: this.creds(device), airplay: this.airplayCreds(device), ...args }, timeoutMs);
+    return (this.o.videoCall ?? this.o.call)(op, { ...this.target(device), credentials: this.creds(device), airplay: this.airplayCreds(device), ...args }, timeoutMs);
   }
 
   private videoFailure(device: DisplayDevice, err: unknown): VideoResult {
