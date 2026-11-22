@@ -88,6 +88,12 @@ export function CastFlow({ games, displays, media, preselect, onClose }: { games
         const r = await api.cast({ gameId: game.id, roomCode, displayIds: chosen, ...(isGame && room === NEW ? { firstJoinerHosts: true } : {}) });
         const entries = Object.entries(r.results);
         const failed = entries.filter(([, v]) => !v.ok);
+        // Box 0.30.0: whoever started a new room hosts it: this device opens its host screen.
+        if (r.created && r.hostUrl && entries.some(([, v]) => v.ok)) {
+          setResult({ ok: true, lines: [`New room ${r.roomCode} is on the TV. Opening the host screen…`] });
+          window.location.assign(r.hostUrl);
+          return;
+        }
         const head = isGame ? `${r.created ? "New room" : "Room"} ${r.roomCode}` : game.context.game.displayName;
         const lines = [`${head} on ${entries.length - failed.length} of ${entries.length} TV(s).`];
         if (r.created) lines.push("The first person to scan the TV's QR code hosts.");
@@ -128,7 +134,7 @@ export function CastFlow({ games, displays, media, preselect, onClose }: { games
             <>
               <h3>2 · Which room</h3>
               <div className="choice-list">
-                {canCreate && <Choice on={room === NEW} onClick={() => setRoom(NEW)} title="A new room" sub="The first player to scan the QR hosts" />}
+                {canCreate && <Choice on={room === NEW} onClick={() => setRoom(NEW)} title="A new room" sub="You host it from this device" />}
                 {rooms.map((r) => (
                   <Choice key={r.code} on={room === r.code} onClick={() => setRoom(r.code)} title={r.code} sub={`Open now · ${r.players} player${r.players === 1 ? "" : "s"}${r.title ? ` · ${r.title}` : ""}`} />
                 ))}

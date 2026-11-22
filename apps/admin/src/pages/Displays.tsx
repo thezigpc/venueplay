@@ -555,6 +555,14 @@ function ShowOnTv({ d, games, reload }: { d: Display; games: Game[]; reload: () 
     try {
       const r = await api.cast({ gameId: g.id, displayIds: [d.id], firstJoinerHosts: true });
       const res = r.results[d.id];
+      // Box 0.30.0: whoever started the room hosts it. This device goes to the room's host
+      // screen (that also closes the first-scanner-hosts offer). Same tab: a new tab opened
+      // after an await is blocked as a popup on iPhones and iPads.
+      if (res?.ok && r.created && r.hostUrl) {
+        setMsg(`Room ${r.roomCode} is on the TV. Opening the host screen…`);
+        window.location.assign(r.hostUrl);
+        return;
+      }
       setMsg(
         res && !res.ok
           ? (res.message ?? "The TV didn't start.")
@@ -580,15 +588,15 @@ function ShowOnTv({ d, games, reload }: { d: Display; games: Game[]; reload: () 
               {castable.map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.context.game.displayName}
-                  {isApp(g.manifest) ? "" : " (new room)"}
+                  {isApp(g.manifest) ? "" : " (new room, you host)"}
                 </option>
               ))}
             </optgroup>
-            <optgroup label="Players' pages (touch screens: kiosk, host screen)">
-              <option value="page:players">Players' page (all games)</option>
+            <optgroup label="Sign-in pages, for touch screens people tap (kiosk)">
+              <option value="page:players">Players' sign-in page (all games)</option>
               {pages.map((g) => (
                 <option key={g.id} value={`page:game:${g.id}`}>
-                  {g.context.game.displayName}: start page (join, host on this screen)
+                  {g.context.game.displayName}: sign-in page (join or host by tapping the screen)
                 </option>
               ))}
             </optgroup>
