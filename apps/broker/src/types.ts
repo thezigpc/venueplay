@@ -185,6 +185,8 @@ export interface VideoFormats {
   passthrough?: string[];
   /** Box 0.28.1: "sdr" "hdr10" "hdr10plus" "hlg" "dovi" the device shows correctly. */
   ranges?: string[];
+  /** Box 0.29.0: it takes tracks (picks audio and subtitles inside the stream, loads subtitle files). */
+  tracks?: boolean;
 }
 
 /** A video for the TV to play itself. `url` and `poster` may carry the media server's key: never log or store them. */
@@ -196,10 +198,46 @@ export interface VideoRequest {
   poster?: string;
   /** Resume point in seconds. */
   startAt?: number;
+  /** Box 0.29.0: the audio tracks and subtitles staff can pick, and the ones on now. */
+  tracks?: VideoTracks;
 }
 
-/** pause, resume, stop, or seek to a position in seconds from the start. */
-export type VideoAction = "pause" | "resume" | "stop" | { seek: number };
+/** Box 0.29.0: one audio track or subtitle. A subtitle `url` carries the media server's key too: never log it. */
+export interface VideoTrack {
+  id: string;
+  label: string;
+  language?: string;
+  /** Where it is inside the stream being played: 0-based among tracks of its kind. Absent: not in this stream. */
+  index?: number;
+  /** Subtitles only: a side file the player loads. */
+  url?: string;
+  format?: string;
+  forced?: boolean;
+  default?: boolean;
+}
+export interface VideoTracks {
+  audio?: VideoTrack[];
+  subtitles?: VideoTrack[];
+  audioId?: string;
+  subtitleId?: string | null;
+}
+
+/** pause, resume, stop, seek to a position in seconds from the start, or (0.29.0) another audio track / subtitle (null: off). */
+export type VideoAction = "pause" | "resume" | "stop" | { seek: number } | { audio: string } | { subtitle: string | null };
+/** Box 0.29.0: asked from the TV's own remote, for the app to do (the player couldn't). */
+export type VideoRemote = "next" | "previous" | { audio: string } | { subtitle: string | null };
+export const isSeek = (a: VideoAction): a is { seek: number } => typeof a === "object" && "seek" in a;
+
+/** Box 0.29.0: the remote keys that drive a playing video, and what each does now. */
+export const VIDEO_KEYS = ["Play", "Rev", "Fwd", "Back"] as const;
+export function videoKeyAction(key: string, st: VideoStatus): VideoAction | undefined {
+  if (st.state !== "playing" && st.state !== "paused") return undefined;
+  if (key === "Play") return st.state === "paused" ? "resume" : "pause";
+  if (key === "Back") return "stop";
+  if (key === "Rev") return { seek: Math.max(0, (st.position ?? 0) - 30) };
+  if (key === "Fwd") return { seek: (st.position ?? 0) + 30 };
+  return undefined;
+}
 
 export interface VideoResult {
   ok: boolean;
@@ -214,6 +252,57 @@ export interface VideoStatus {
   position?: number;
   duration?: number;
   message?: string;
+  /** Box 0.29.0: the audio track and subtitle on now (ids from the request's tracks; null: subtitles off). */
+  audio?: string;
+  subtitle?: string | null;
+  /** Box 0.29.0: asked from the TV's remote since the last status, for the app to do. Handed over once. */
+  remote?: VideoRemote[];
+}
+
+const TRACK_ID = /^[\w.:-]{1,64}$/;
+function checkTrackList(v: unknown, subtitles: boolean): VideoTrack[] | string {
+  if (v === undefined) return [];
+  if (!Array.isArray(v) || v.length > 32) return "tracks: up to 32 audio tracks and 32 subtitles";
+  const out: VideoTrack[] = [];
+  for (const raw of v as Record<string, unknown>[]) {
+    if (!raw || typeof raw.id !== "string" || !TRACK_ID.test(raw.id)) return "tracks: each needs an id (letters, digits, . : - _)";
+    if (typeof raw.label !== "string" || !raw.label.trim()) return "tracks: each needs a label";
+    const t: VideoTrack = { id: raw.id, label: raw.label.trim().slice(0, 80) };
+    if (typeof raw.language === "string" && raw.language) t.language = raw.language.slice(0, 16);
+    if (typeof raw.index === "number" && Number.isInteger(raw.index) && raw.index >= 0 && raw.index < 64) t.index = raw.index;
+    if (subtitles && raw.url !== undefined) {
+      if (typeof raw.url !== "string" || raw.url.length > 4096 || !/^https?:\/\/[^\s]+$/i.test(raw.url)) return "tracks: a subtitle url must be an http or https link";
+      t.url = raw.url;
+      if (typeof raw.format === "string" && /^[a-z0-9]{1,8}$/.test(raw.format)) t.format = raw.format;
+    }
+    if (raw.forced === true) t.forced = true;
+    if (raw.default === true) t.default = true;
+    out.push(t);
+  }
+  return new Set(out.map((t) => t.id)).size === out.length ? out : "tracks: ids must be different";
+}
+function checkTracks(v: unknown): VideoTracks | undefined | string {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "object") return "tracks: { audio, subtitles, audioId, subtitleId }";
+  const o = v as Record<string, unknown>;
+  const audio = checkTrackList(o.audio, false);
+  if (typeof audio === "string") return audio;
+  const subtitles = checkTrackList(o.subtitles, true);
+  if (typeof subtitles === "string") return subtitles;
+  const t: VideoTracks = { audio, subtitles };
+  if (typeof o.audioId === "string" && audio.some((a) => a.id === o.audioId)) t.audioId = o.audioId;
+  if (o.subtitleId === null) t.subtitleId = null;
+  else if (typeof o.subtitleId === "string" && subtitles.some((a) => a.id === o.subtitleId)) t.subtitleId = o.subtitleId;
+  return audio.length || subtitles.length ? t : undefined;
+}
+
+/** A control request's action ({ action } | { seek } | { audio } | { subtitle }), or undefined if it's none of them. */
+export function checkVideoAction(b: unknown): VideoAction | undefined {
+  const o = (b ?? {}) as Record<string, unknown>;
+  if (typeof o.seek === "number" && Number.isFinite(o.seek) && o.seek >= 0) return { seek: Math.floor(o.seek) };
+  if (typeof o.audio === "string" && TRACK_ID.test(o.audio)) return { audio: o.audio };
+  if (o.subtitle === null || (typeof o.subtitle === "string" && TRACK_ID.test(o.subtitle))) return { subtitle: o.subtitle };
+  return o.action === "pause" || o.action === "resume" || o.action === "stop" ? o.action : undefined;
 }
 
 /** Checks a video request from core: the request, or what's wrong with it. */
@@ -227,6 +316,8 @@ export function checkVideo(b: unknown): { video: VideoRequest; provider: string 
   if (v.poster !== undefined && v.poster !== null && v.poster !== "" && !httpUrl(v.poster)) return "poster: an http or https link";
   if (v.mime !== undefined && (typeof v.mime !== "string" || !/^[\w.+-]+\/[\w.+-]+$/.test(v.mime))) return "mime: like video/mp4";
   if (v.startAt !== undefined && !(typeof v.startAt === "number" && Number.isFinite(v.startAt) && v.startAt >= 0)) return "startAt: seconds";
+  const tracks = checkTracks(v.tracks);
+  if (typeof tracks === "string") return tracks;
   return {
     provider: v.provider,
     video: {
@@ -235,6 +326,7 @@ export function checkVideo(b: unknown): { video: VideoRequest; provider: string 
       ...(typeof v.mime === "string" ? { mime: v.mime } : {}),
       ...(typeof v.poster === "string" && v.poster ? { poster: v.poster } : {}),
       ...(typeof v.startAt === "number" && v.startAt > 0 ? { startAt: Math.floor(v.startAt) } : {}),
+      ...(tracks ? { tracks } : {}),
     },
   };
 }

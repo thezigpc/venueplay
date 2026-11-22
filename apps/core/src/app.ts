@@ -746,9 +746,9 @@ export function createApp(d: AppDeps) {
     "/internal/video/play",
     h(async (req, res) => {
       const game = videoAuth(req);
-      const { displayId, url, mime, title, poster, startAt } = (req.body ?? {}) as Record<string, unknown>;
+      const { displayId, url, mime, title, poster, startAt, tracks } = (req.body ?? {}) as Record<string, unknown>;
       const id = tvId(displayId);
-      const r = (await videoBroker(id, "POST", "", { url, mime, title, poster, startAt, provider: game.id })) as { ok?: boolean; reason?: string };
+      const r = (await videoBroker(id, "POST", "", { url, mime, title, poster, startAt, tracks, provider: game.id })) as { ok?: boolean; reason?: string };
       d.log.info("video", "play", { game: game.id, display: id, title: typeof title === "string" ? title.slice(0, 80) : undefined, ok: r.ok, reason: r.reason });
       res.json(r);
     }),
@@ -757,10 +757,12 @@ export function createApp(d: AppDeps) {
     "/internal/video/control",
     h(async (req, res) => {
       const game = videoAuth(req);
-      const { displayId, action, seek } = (req.body ?? {}) as Record<string, unknown>;
+      const { displayId, action, seek, audio, subtitle } = (req.body ?? {}) as Record<string, unknown>;
       const id = tvId(displayId);
-      const r = (await videoBroker(id, "POST", "/control", typeof seek === "number" ? { seek } : { action })) as { ok?: boolean };
-      d.log.info("video", "control", { game: game.id, display: id, action: typeof seek === "number" ? "seek" : action, ok: r.ok });
+      // Box 0.29.0: audio / subtitle switch a track (subtitle null: off).
+      const body = typeof seek === "number" ? { seek } : typeof audio === "string" ? { audio } : subtitle !== undefined ? { subtitle } : { action };
+      const r = (await videoBroker(id, "POST", "/control", body)) as { ok?: boolean };
+      d.log.info("video", "control", { game: game.id, display: id, action: typeof seek === "number" ? "seek" : typeof audio === "string" ? "audio" : subtitle !== undefined ? "subtitle" : action, ok: r.ok });
       res.json(r);
     }),
   );

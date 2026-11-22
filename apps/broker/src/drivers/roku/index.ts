@@ -1,4 +1,4 @@
-import { redactUrls, type Capabilities, type DeliveryMethod, type DisplayContent, type DisplayDevice, type DisplayDriver, type Health, type ShowResult, type StreamService, type StreamState, type VideoAction, type VideoInfo, type VideoRequest, type VideoResult, type VideoStatus } from "../../types.js";
+import { isSeek, redactUrls, type Capabilities, type DeliveryMethod, type DisplayContent, type DisplayDevice, type DisplayDriver, type Health, type ShowResult, type StreamService, type StreamState, type VideoAction, type VideoInfo, type VideoRequest, type VideoResult, type VideoStatus } from "../../types.js";
 import { RokuEcp, type RokuPlayer } from "./ecp.js";
 import { ssdpSearch } from "./ssdp.js";
 
@@ -175,7 +175,7 @@ export class RokuDriver implements DisplayDriver {
   async videoControl(device: DisplayDevice, action: VideoAction): Promise<VideoResult> {
     try {
       const ecp = this.ecp(device);
-      if (typeof action === "object") return { ok: false, reason: "unsupported", message: `${device.name} can't seek (a Roku's built-in player can't); use pause and resume` };
+      if (typeof action === "object") return { ok: false, reason: "unsupported", message: isSeek(action) ? `${device.name} can't seek (a Roku's built-in player can't); use pause and resume` : `${device.name} can't switch tracks by itself` };
       if (action === "stop") {
         await ecp.keypress("Home");
         return { ok: true };

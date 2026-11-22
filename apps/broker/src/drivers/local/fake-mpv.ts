@@ -72,6 +72,8 @@ const server = createServer((sock) => {
       else if (name === "loadfile") {
         ok();
         play(args[0] as string);
+      } else if (name === "sub-add") {
+        ok();
       } else if (name === "seek") {
         set("time-pos", args[0]);
         send({ event: "seek" });

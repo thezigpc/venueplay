@@ -153,7 +153,8 @@ test("video 0.28.0: a Venuebox app with a player gets the link over its channel;
     ws.send(
       JSON.stringify({
         type: "hello", v: 1, token, platform: "android", screens, deliveries: ["native-url"],
-        video: { containers: ["MP4", "mkv", "hls", "bad name!"], video: ["h264", "hevc"], audio: ["aac", "eac3"], maxHeight: 2160, seek: true, passthrough: ["eac3"], ranges: ["SDR", "hdr10", "HLG"] },
+        video: { containers: ["MP4", "mkv", "hls", "bad name!"], video: ["h264", "hevc"], audio: ["aac", "eac3"], maxHeight: 2160, seek: true, passthrough: ["eac3"], ranges: ["SDR", "hdr10", "HLG"], tracks: true },
+        keys: ["Up", "Select", "Nonsense"],
       }),
     );
     await new Promise((r) => setTimeout(r, 80));
@@ -162,8 +163,9 @@ test("video 0.28.0: a Venuebox app with a player gets the link over its channel;
     assert.deepEqual(views.find((v) => v.id === id)!.video, {
       kind: "venuebox",
       model: "android · Chromecast with Google TV",
-      formats: { containers: ["mp4", "mkv", "hls"], video: ["h264", "hevc"], audio: ["aac", "eac3"], maxHeight: 2160, seek: true, passthrough: ["eac3"], ranges: ["sdr", "hdr10", "hlg"] },
+      formats: { containers: ["mp4", "mkv", "hls"], video: ["h264", "hevc"], audio: ["aac", "eac3"], maxHeight: 2160, seek: true, passthrough: ["eac3"], ranges: ["sdr", "hdr10", "hlg"], tracks: true },
     });
+    assert.deepEqual(views.find((v) => v.id === id)!.capabilities!.remoteKeys, ["Up", "Select", "Play", "Rev", "Fwd", "Back"], "its own keys plus the video keys");
 
     answer = () => ({ ok: true });
     const r = await reg.playVideo(id, { url: LINK, title: "A movie", mime: "video/x-matroska", startAt: 30 }, "movies");
@@ -178,11 +180,38 @@ test("video 0.28.0: a Venuebox app with a player gets the link over its channel;
     answer = (m) => (m.op === "status" ? { ok: true, state: "playing", position: 612.9, duration: 5400 } : { ok: true });
     assert.deepEqual(await reg.videoStatus(id), { state: "playing", position: 612, duration: 5400 });
 
+    // Box 0.29.0: tracks go with play; the player switches by itself; the remote's keys drive the video.
+    const TRACKS = { audio: [{ id: "a1", label: "English", index: 0 }, { id: "a2", label: "Commentary", index: 1 }], subtitles: [{ id: "s1", label: "English", url: "http://media.example/sub.vtt?api_key=SECRET", format: "vtt" }], audioId: "a1", subtitleId: null };
+    answer = () => ({ ok: true });
+    assert.deepEqual(await reg.playVideo(id, { url: LINK, title: "A movie", tracks: TRACKS }, "movies"), { ok: true });
+    assert.deepEqual(got.findLast((m) => m.op === "play")!.tracks, TRACKS);
+    assert.deepEqual(await reg.videoControl(id, { audio: "a2" }), { ok: true });
+    assert.deepEqual({ op: got.at(-1)!.op, id: got.at(-1)!.id }, { op: "audio", id: "a2" });
+    answer = (m) => (m.op === "status" ? { ok: true, state: "playing", position: 100, duration: 5400 } : { ok: true });
+    assert.deepEqual(await reg.videoStatus(id), { state: "playing", position: 100, duration: 5400, audio: "a2", subtitle: null });
+    await hub.keypress(reg.get(id)!, "Fwd");
+    assert.deepEqual({ op: got.at(-1)!.op, position: got.at(-1)!.position }, { op: "seek", position: 130 });
+    await hub.keypress(reg.get(id)!, "Play");
+    assert.equal(got.at(-1)!.op, "pause");
+    await hub.keypress(reg.get(id)!, "Up");
+    await new Promise((r) => setTimeout(r, 30));
+    assert.deepEqual(got.at(-1), { type: "key", screen: "hdmi", key: "Up" }, "a key the client takes goes to it");
+    // Asked on the device: the app hears it once; a switch made there shows as the new track.
+    ws.send(JSON.stringify({ type: "video-remote", screen: "hdmi", action: "next" }));
+    ws.send(JSON.stringify({ type: "video-state", screen: "hdmi", state: "playing", position: 101, subtitle: "s1" }));
+    await new Promise((r) => setTimeout(r, 30));
+    const asked = await reg.videoStatus(id);
+    assert.deepEqual(asked.remote, ["next"]);
+    assert.equal((await reg.videoStatus(id)).remote, undefined, "handed over once");
+    answer = () => undefined;
+    await new Promise((r) => setTimeout(r, 10));
+
     // The player reports by itself (ended); a client that stops answering falls back to that.
     ws.send(JSON.stringify({ type: "video-state", screen: "hdmi", state: "stopped", position: 5400, duration: 5400 }));
     answer = () => undefined;
     await new Promise((r) => setTimeout(r, 30));
-    assert.deepEqual(await reg.videoStatus(id), { state: "stopped", position: 5400, duration: 5400 });
+    assert.deepEqual(await reg.videoStatus(id), { state: "stopped", position: 5400, duration: 5400, audio: "a2", subtitle: "s1" });
+    await assert.rejects(hub.keypress(reg.get(id)!, "Play"), /Nothing is playing/);
 
     // A failure echoing the link: the link never comes back out.
     answer = () => ({ ok: false, reason: "error", message: `can't open ${LINK}` });
@@ -207,7 +236,7 @@ test("video 0.28.2: a screen plugged into the box plays links in mpv (in its cag
 
   const hw = vaapiDecoders("vainfo: Driver version: Intel iHD driver\n      VAProfileH264Main               :\tVAEntrypointVLD\n      VAProfileH264Main               :\tVAEntrypointEncSliceLP\n      VAProfileHEVCMain10             :\tVAEntrypointVLD\n      VAProfileVP9Profile0            :\tVAEntrypointVLD\n      VAProfileAV1Profile0            :\tVAEntrypointEncSlice\n");
   assert.deepEqual([...hw].sort(), ["h264", "hevc", "vp9"], "decoders only (VLD), not encoders");
-  assert.deepEqual(localFormats(hw, 2160), { containers: ["mp4", "mkv", "mov", "webm", "ts", "hls"], video: ["h264", "hevc", "vp9"], audio: ["aac", "mp3", "ac3", "eac3", "dts", "truehd", "opus", "flac"], maxHeight: 2160, seek: true, ranges: ["sdr"] });
+  assert.deepEqual(localFormats(hw, 2160), { containers: ["mp4", "mkv", "mov", "webm", "ts", "hls"], video: ["h264", "hevc", "vp9"], audio: ["aac", "mp3", "ac3", "eac3", "dts", "truehd", "opus", "flac"], maxHeight: 2160, seek: true, ranges: ["sdr"], tracks: true });
   assert.equal(localFormats(new Set(), 2160).maxHeight, 1080, "4K needs a hardware decoder");
   assert.deepEqual(localFormats(new Set(), 1080).video, ["h264"]);
 
@@ -245,6 +274,22 @@ test("video 0.28.2: a screen plugged into the box plays links in mpv (in its cag
     assert.match(argv, /--audio-device=alsa\/plughw:0,3/);
     assert.match(argv, /--start=20/);
     assert.match(log, /CMD \["loadfile","http:\/\/media\.example/, "it goes over IPC");
+
+    // Box 0.29.0: tracks: aid/sid by position in the file, a subtitle file once the video is open.
+    const tracks = { audio: [{ id: "a1", label: "English", index: 0 }, { id: "a2", label: "Commentary", index: 1 }, { id: "a3", label: "Not in this stream" }], subtitles: [{ id: "s1", label: "PGS", index: 0 }, { id: "s2", label: "English", url: "http://media.example/sub.vtt?api_key=SECRET" }], audioId: "a2", subtitleId: "s2" };
+    assert.deepEqual(await v.play(surface, { url: LINK, title: "A movie", tracks }), { ok: true });
+    await new Promise((r) => setTimeout(r, 250));
+    assert.deepEqual({ audio: v.status().audio, subtitle: v.status().subtitle }, { audio: "a2", subtitle: "s2" });
+    assert.deepEqual(await v.control({ subtitle: "s1" }), { ok: true });
+    assert.deepEqual(await v.control({ subtitle: null }), { ok: true });
+    assert.equal((await v.control({ audio: "a3" })).reason, "unsupported");
+    assert.equal(v.status().subtitle, null);
+    const cmds = readFileSync(logFile, "utf8");
+    assert.match(cmds, /CMD \["set_property","aid",2\]/);
+    assert.match(cmds, /CMD \["sub-add","http:\/\/media\.example\/sub\.vtt\?api_key=SECRET","cached","English"\]/);
+    assert.match(cmds, /CMD \["set_property","sid",1\]/);
+    assert.match(cmds, /CMD \["set_property","sid","no"\]/);
+    await v.control("stop");
 
     // A link the server refuses: the player closes and says why, without the link.
     assert.deepEqual(await v.play(surface, { url: "http://media.example/fail?api_key=SECRET", title: "Bad" }), { ok: true });

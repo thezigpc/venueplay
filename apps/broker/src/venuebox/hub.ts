@@ -5,15 +5,17 @@ import type { Logger } from "@bargames/common";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { redactUrls, type Capabilities, type DisplayContent, type DisplayDevice, type DisplayDriver, type Health, type ShowResult, type StreamState, type VideoAction, type VideoInfo, type VideoRequest, type VideoResult, type VideoStatus } from "../types.js";
+import { isSeek, redactUrls, VIDEO_KEYS, videoKeyAction, type VideoRemote, type VideoTracks, type Capabilities, type DisplayContent, type DisplayDevice, type DisplayDriver, type Health, type ShowResult, type StreamState, type VideoAction, type VideoInfo, type VideoRequest, type VideoResult, type VideoStatus } from "../types.js";
 import { type Device, type DeviceStore, type Pairings } from "./devices.js";
-import { checkScreens, checkVideoCaps, CLIENT_PROTOCOL, CLOSE, type BoxMsg, type ClientMsg, type Delivery, type Screen, type VideoCaps, type VideoMsg, type VideoReplyMsg, type VideoState } from "./protocol.js";
+import { checkKeys, checkRemoteAsk, checkScreens, checkVideoCaps, CLIENT_PROTOCOL, CLOSE, type BoxMsg, type ClientMsg, type Delivery, type Screen, type VideoCaps, type VideoMsg, type VideoReplyMsg, type VideoState } from "./protocol.js";
 
 /** Box 0.28.0: how long a client gets to accept a video op (play: until its player is loading). */
 const VIDEO_TIMEOUT = { play: 15_000, other: 5_000, status: 3_000 };
 type VideoOp =
-  | { op: "play"; url: string; title: string; mime?: string; poster?: string; startAt?: number }
+  | { op: "play"; url: string; title: string; mime?: string; poster?: string; startAt?: number; tracks?: VideoTracks }
   | { op: "pause" | "resume" | "stop" | "status" }
+  | { op: "audio"; id: string }
+  | { op: "subtitle"; id: string | null }
   | { op: "seek"; position: number };
 
 export const DRIVER_ID = "venuebox";
@@ -31,7 +33,10 @@ interface Session {
   /** Box 0.28.0: what its video player plays (absent: no player). */
   video?: VideoCaps;
   /** Last video state each screen reported. */
-  videoState: Map<string, { state: VideoState; position?: number; duration?: number; message?: string }>;
+  videoState: Map<string, VideoSeen>;
+  /** Box 0.29.0: remote keys it takes, and what was asked on the device for the app to do. */
+  keys: string[];
+  remote: Map<string, VideoRemote[]>;
   replies: Map<string, (r: VideoReplyMsg | undefined) => void>;
 }
 
@@ -130,7 +135,7 @@ export class VenueboxHub implements DisplayDriver {
         if (!device) return fail(CLOSE.badToken, { type: "error", code: "bad-token", message: "not paired with this box (or revoked): pair again" });
         const screens = checkScreens(msg.screens) ?? device.screens;
         const deliveries = (Array.isArray(msg.deliveries) ? msg.deliveries : ["native-url"]).filter((x): x is Delivery => x === "native-url" || x === "hls");
-        session = { ws, device, screens, deliveries, state: new Map(), previews: new Map(), alive: true, video: checkVideoCaps(msg.video), videoState: new Map(), replies: new Map() };
+        session = { ws, device, screens, deliveries, state: new Map(), previews: new Map(), alive: true, video: checkVideoCaps(msg.video), videoState: new Map(), replies: new Map(), keys: checkKeys(msg.keys), remote: new Map() };
         void this.connected(session, msg, req);
         return;
       }
@@ -185,7 +190,10 @@ export class VenueboxHub implements DisplayDriver {
       s.replies.delete(msg.requestId);
       done(msg);
     } else if (msg.type === "video-state" && typeof msg.screen === "string" && VIDEO_STATES.has(msg.state)) {
-      s.videoState.set(msg.screen, { state: msg.state, position: seconds(msg.position), duration: seconds(msg.duration), message: clean(msg.message) });
+      s.videoState.set(msg.screen, { ...seenTracks(msg, s.videoState.get(msg.screen)), state: msg.state, position: seconds(msg.position), duration: seconds(msg.duration), message: clean(msg.message) });
+    } else if (msg.type === "video-remote" && typeof msg.screen === "string") {
+      const ask = checkRemoteAsk(msg.action);
+      if (ask) s.remote.set(msg.screen, [...(s.remote.get(msg.screen) ?? []), ask].slice(-8));
     } else if (msg.type === "preview" && typeof msg.requestId === "string") {
       const done = s.previews.get(msg.requestId);
       if (!done) return;
@@ -301,7 +309,28 @@ export class VenueboxHub implements DisplayDriver {
   async capabilities(device: DisplayDevice): Promise<Capabilities> {
     const { s } = this.find(device);
     // Offline devices keep their last declared ability (native-url for every v1 client).
-    return { delivery: s ? s.deliveries.filter((x) => x === "native-url") : ["native-url"], power: false, inputs: [] };
+    // Box 0.29.0: a remote for it: the keys it takes, plus the ones that drive its video player.
+    const remoteKeys = s ? [...new Set([...s.keys, ...(s.video ? VIDEO_KEYS : [])])] : [];
+    return { delivery: s ? s.deliveries.filter((x) => x === "native-url") : ["native-url"], power: false, inputs: [], ...(remoteKeys.length ? { remoteKeys } : {}) };
+  }
+
+  /** Box 0.29.0: a remote key. While a video plays, Play/Rev/Fwd/Back drive it; other keys go to the client if it takes them. */
+  async keypress(device: DisplayDevice, key: string): Promise<void> {
+    const { s, screen } = this.find(device);
+    if (!s || !screen) throw Object.assign(new Error(`${device.name} isn't connected to the box right now.`), { status: 409 });
+    if (s.video && (VIDEO_KEYS as readonly string[]).includes(key)) {
+      const seen = s.videoState.get(screen.id);
+      if (seen && seen.state !== "stopped" && seen.state !== "error") {
+        const action = videoKeyAction(key, await this.videoStatus(device));
+        if (action) {
+          const r = await this.videoControl(device, action);
+          if (!r.ok) throw Object.assign(new Error(r.message ?? "The player couldn't do that."), { status: 409 });
+          return;
+        }
+      }
+    }
+    if (!s.keys.includes(key)) throw Object.assign(new Error(s.video ? "Nothing is playing on this screen." : `${device.name} doesn't take that key`), { status: 409 });
+    this.post(s, { type: "key", screen: screen.id, key });
   }
 
   async power(): Promise<void> {
@@ -352,6 +381,11 @@ export class VenueboxHub implements DisplayDriver {
     return { kind: "venuebox", model: `${s.device.platform}${s.device.model ? ` · ${s.device.model}` : ""}`, formats: s.video };
   }
 
+  /** The ids on now, as the app sent them, until the client says otherwise. */
+  private startTracks(t?: VideoTracks): { audio?: string; subtitle?: string | null } {
+    return { ...(t?.audioId ? { audio: t.audioId } : {}), ...(t?.subtitleId !== undefined ? { subtitle: t.subtitleId } : {}) };
+  }
+
   /** Sends a video op and waits for the client's reply (no reply: timed out or disconnected). */
   private videoAsk(device: DisplayDevice, body: VideoOp): Promise<{ reply?: VideoReplyMsg; s?: Session; offline?: boolean }> {
     const { s, screen } = this.find(device);
@@ -389,15 +423,27 @@ export class VenueboxHub implements DisplayDriver {
       ...(video.mime ? { mime: video.mime } : {}),
       ...(video.poster ? { poster: video.poster } : {}),
       ...(video.startAt ? { startAt: video.startAt } : {}),
+      ...(video.tracks && this.videoInfo(device)?.formats?.tracks ? { tracks: video.tracks } : {}),
     });
     const { screen } = this.find(device);
-    if (r.reply?.ok && r.s && screen) r.s.videoState.set(screen.id, { state: "loading" });
+    if (r.reply?.ok && r.s && screen) {
+      r.s.videoState.set(screen.id, { state: "loading", ...this.startTracks(video.tracks) });
+      r.s.remote.delete(screen.id);
+    }
     return this.videoResult(device, r);
   }
 
   async videoControl(device: DisplayDevice, action: VideoAction): Promise<VideoResult> {
     const info = this.videoInfo(device);
     if (!info) return { ok: false, reason: "unsupported", message: `${device.name} has no video player` };
+    if (typeof action === "object" && !isSeek(action)) {
+      if (!info.formats?.tracks) return { ok: false, reason: "unsupported", message: `${device.name} can't switch tracks by itself` };
+      const r = await this.videoAsk(device, "audio" in action ? { op: "audio", id: action.audio } : { op: "subtitle", id: action.subtitle });
+      const { s, screen } = this.find(device);
+      const seen = screen && s?.videoState.get(screen.id);
+      if (r.reply?.ok && seen) Object.assign(seen, "audio" in action ? { audio: action.audio } : { subtitle: action.subtitle });
+      return this.videoResult(device, r);
+    }
     if (typeof action === "object" && !info.formats?.seek) return { ok: false, reason: "unsupported", message: `${device.name} can't jump to a position` };
     return this.videoResult(device, await this.videoAsk(device, typeof action === "object" ? { op: "seek", position: Math.max(0, Math.floor(action.seek)) } : { op: action }));
   }
@@ -407,8 +453,8 @@ export class VenueboxHub implements DisplayDriver {
     if (!s || !screen) return { state: "stopped", message: "not connected" };
     const r = await this.videoAsk(device, { op: "status" });
     const fresh = r.reply?.ok && r.reply.state && VIDEO_STATES.has(r.reply.state);
-    const st = fresh
-      ? { state: r.reply!.state!, position: seconds(r.reply!.position), duration: seconds(r.reply!.duration), message: clean(r.reply!.message) }
+    const st: VideoSeen | undefined = fresh
+      ? { ...seenTracks(r.reply!, s.videoState.get(screen.id)), state: r.reply!.state!, position: seconds(r.reply!.position), duration: seconds(r.reply!.duration), message: clean(r.reply!.message) }
       : s.videoState.get(screen.id);
     if (fresh && st) s.videoState.set(screen.id, st);
     if (!st) return { state: "stopped" };
@@ -416,6 +462,13 @@ export class VenueboxHub implements DisplayDriver {
     if (st.position !== undefined) out.position = st.position;
     if (st.duration !== undefined) out.duration = st.duration;
     if (st.message) out.message = st.message;
+    if (st.audio !== undefined) out.audio = st.audio;
+    if (st.subtitle !== undefined) out.subtitle = st.subtitle;
+    const asked = s.remote.get(screen.id);
+    if (asked?.length) {
+      out.remote = asked;
+      s.remote.delete(screen.id);
+    }
     return out;
   }
 
@@ -438,6 +491,21 @@ export class VenueboxHub implements DisplayDriver {
   }
 }
 
+interface VideoSeen {
+  state: VideoState;
+  position?: number;
+  duration?: number;
+  message?: string;
+  audio?: string;
+  subtitle?: string | null;
+}
+const TRACK = /^[\w.:-]{1,64}$/;
+/** The track ids a client reported, else the ones known before. */
+function seenTracks(m: { audio?: unknown; subtitle?: unknown }, before?: VideoSeen): { audio?: string; subtitle?: string | null } {
+  const audio = typeof m.audio === "string" && TRACK.test(m.audio) ? m.audio : before?.audio;
+  const subtitle = m.subtitle === null || (typeof m.subtitle === "string" && TRACK.test(m.subtitle)) ? (m.subtitle as string | null) : before?.subtitle;
+  return { ...(audio !== undefined ? { audio } : {}), ...(subtitle !== undefined ? { subtitle } : {}) };
+}
 const VIDEO_STATES = new Set<string>(["loading", "playing", "paused", "stopped", "error"]);
 const seconds = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined);
 /** A client's message, short and with any link taken out (it may echo the media server's key). */

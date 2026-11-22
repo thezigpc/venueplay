@@ -21,6 +21,31 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.19.0 (audio tracks, subtitles, the TV's remote)
+
+- **Most modules: nothing to change.**
+- **Video apps** (box 0.29.0). Players with `video.formats.tracks: true` (screens on the box
+  now; Venuebox apps as they update) switch audio and subtitles by themselves:
+  - `bg.playVideo(id, { ..., tracks })`, `tracks = { audio?: VideoTrack[], subtitles?:
+    VideoTrack[], audioId?, subtitleId? }` (`subtitleId: null` = off), `VideoTrack = { id,
+    label, language?, index?, url?, format?, forced?, default? }`. Up to 32 of each.
+  - `index`: the track's place inside the stream you send, 0-based among tracks of its kind
+    in container order. Send it only when the stream really carries the track (direct play
+    or a remux of every track). A subtitle `url` (+ `format` "vtt" | "srt" | "ass") is a side
+    file the player loads; it's kept out of logs like the link.
+  - `bg.videoControl(id, { audio: trackId })`, `{ subtitle: trackId | null }` → `{ ok: true }`,
+    or `reason: "unsupported"` when the player can't (Apple TV, Roku, a track with no
+    index/url): start the video again with that track, as before.
+  - `bg.videoStatus(id)` adds `audio`, `subtitle` (what's on now, also after a change from
+    the TV's own remote) and `remote?: VideoRemote[]`: `"next"`, `"previous"`, `{ audio }` or
+    `{ subtitle }` asked on the TV that only you can do. Each is handed over once. Poll about
+    every 2 seconds while something plays.
+  - TVs without `formats.tracks` ignore `tracks`.
+- Staff also get a remote for these players on the TVs page (play/pause, skip 30 s, stop).
+  You see its effect in `videoStatus`, as with any other change.
+- Mock box: `fake-den` takes tracks. `POST http://localhost:<gateway>/__bargames/dev/video-remote`
+  with `{ "displayId": "fake-den", "action": "next" }` acts as the TV's remote.
+
 ## What's new in SDK 0.18.2
 
 - `video.kind` can be `"local"` (box 0.28.2): a screen plugged into the box itself, played

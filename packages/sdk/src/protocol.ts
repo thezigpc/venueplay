@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.18.2";
+export const SDK_VERSION = "0.19.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -716,12 +716,13 @@ export interface BoxTv {
  * `seek` false: no seek and no start part-way (like a Roku).
  * SDK 0.18.1: `ranges`, the picture ranges it shows correctly ("sdr" "hdr10" "hdr10plus"
  * "hlg" "dovi"). Absent: the client didn't say; assume SDR.
+ * SDK 0.19.0: `tracks` true: it takes playVideo's `tracks` and switches them by itself.
  */
 export interface BoxTvVideo {
   /** SDK 0.18.2: "local", a screen plugged into the box itself (has `formats` too). */
   kind: "appletv" | "roku" | "venuebox" | "local";
   model: string;
-  formats?: { containers: string[]; video: string[]; audio: string[]; maxHeight?: number; seek: boolean; passthrough?: string[]; ranges?: string[] };
+  formats?: { containers: string[]; video: string[]; audio: string[]; maxHeight?: number; seek: boolean; passthrough?: string[]; ranges?: string[]; tracks?: boolean };
 }
 
 /** SDK 0.17.0: a video link for a TV to play itself (bg.playVideo). The TV fetches `url` and `poster` straight from their server. */
@@ -731,12 +732,49 @@ export interface VideoRequest {
   mime?: string;
   title: string;
   poster?: string;
-  /** Resume point in seconds. Apple TV only (a Roku starts from the beginning and says so in `message`). */
+  /** Resume point in seconds. Not on a Roku (it starts from the beginning and says so in `message`). */
   startAt?: number;
+  /**
+   * SDK 0.19.0: the audio tracks and subtitles of this video, for players with
+   * `video.formats.tracks` (Venuebox apps, screens on the box): they switch by themselves,
+   * with no new stream, and the TV's own remote can offer them. Other TVs ignore it.
+   */
+  tracks?: VideoTracks;
 }
 
-/** pause, resume, stop, or seek to a position in seconds from the start (Apple TV only). */
-export type VideoAction = "pause" | "resume" | "stop" | { seek: number };
+/**
+ * SDK 0.19.0: one audio track or subtitle. `index`: where it is inside the stream you're
+ * sending, 0-based among tracks of its kind in container order; leave it out when the
+ * stream doesn't carry it (a transcode with one audio track). A subtitle `url` is a side
+ * file (`format` "vtt" | "srt" | "ass") the player loads; it's never logged, like the link.
+ */
+export interface VideoTrack {
+  id: string;
+  label: string;
+  language?: string;
+  index?: number;
+  url?: string;
+  format?: string;
+  forced?: boolean;
+  default?: boolean;
+}
+export interface VideoTracks {
+  audio?: VideoTrack[];
+  subtitles?: VideoTrack[];
+  /** The ones on when it starts (subtitleId null: off). */
+  audioId?: string;
+  subtitleId?: string | null;
+}
+
+/**
+ * pause, resume, stop, seek to a position in seconds from the start (not on a Roku), or
+ * (SDK 0.19.0) another audio track / subtitle by id (subtitle null: off). A track switch
+ * answers `reason: "unsupported"` when the player can't do it by itself (Apple TV, Roku, a
+ * track with no index or url): start the video again with that track.
+ */
+export type VideoAction = "pause" | "resume" | "stop" | { seek: number } | { audio: string } | { subtitle: string | null };
+/** SDK 0.19.0: asked from the TV's own remote, for you to do: the next or previous item, or a track the player couldn't switch to. */
+export type VideoRemote = "next" | "previous" | { audio: string } | { subtitle: string | null };
 
 export interface VideoResult {
   ok: boolean;
@@ -751,6 +789,11 @@ export interface VideoStatus {
   position?: number;
   duration?: number;
   message?: string;
+  /** SDK 0.19.0: the audio track and subtitle on now (ids from your `tracks`; null: subtitles off), also after a change from the TV's remote. */
+  audio?: string;
+  subtitle?: string | null;
+  /** SDK 0.19.0: asked from the TV's remote since your last videoStatus. Handed over once: act on them (poll about every 2 s while playing). */
+  remote?: VideoRemote[];
 }
 
 export type LaunchResult = { ok: true } | { ok: false; reason: "not-allowed" | "unsupported" | "offline" | "ecp-blocked" | "error"; message: string };

@@ -194,6 +194,37 @@ optional: a client that doesn't declare it keeps working, and the box never send
   that screen's monitor, driven over its JSON IPC (direct play of nearly everything: MKV, HEVC,
   AV1, HDR, hardware decoding, audio passthrough).
 
+## Tracks and the remote (box 0.29.0, still protocol v1)
+
+All optional: a client that declares none of it keeps working as in 0.28.
+
+- **Tracks.** Declare `video.tracks: true` in `hello`. `play` then carries
+  `tracks: { audio: Track[], subtitles: Track[], audioId?, subtitleId? }`, with
+  `Track = { id, label, language?, index?, url?, format?, forced?, default? }`:
+  - `index`: the track is inside the stream, 0-based among tracks of its kind in container
+    order (mpv: `aid`/`sid` = index + 1; ExoPlayer: the n-th audio / text track group).
+  - a subtitle `url` (+ `format` `vtt` | `srt` | `ass`): a side file to load (mpv `sub-add`,
+    ExoPlayer `SubtitleConfiguration`). It carries the key: same never-log rules as the link.
+  - neither `index` nor `url`: not in this stream. The player can't switch to it.
+  - Start with `audioId` / `subtitleId` (`null`: subtitles off).
+- **Ops** `video { op: "audio", id }` and `{ op: "subtitle", id | null }`: switch and answer
+  `video-reply { ok: true }`, or `{ ok: false, reason: "unsupported" }` for a track with no
+  `index`/`url` (the app then restarts the stream with it).
+- **Report** `audio` and `subtitle` (ids; `null` = off) in `status` replies and `video-state`,
+  also after a change made on the device.
+- **On the device:** the player shows an "Audio & subtitles" menu built from `tracks`
+  (labels as given). Picking a track it has switches locally. Picking one it doesn't have,
+  or "next" / "previous" (the remote's skip keys, where the device has them), sends
+  **`video-remote { screen, action }`**, action `"next"` | `"previous"` | `{ audio: id }` |
+  `{ subtitle: id | null }`: the box hands it to the app, which starts the new stream.
+- **Remote keys from the box.** The TVs page shows a remote for the screen. Play, Rev, Fwd
+  and Back need nothing from the client while a video plays: the box turns them into
+  `pause`/`resume`, `seek` ±30 s and `stop`. To take more keys, declare
+  `keys: [...]` in `hello` (from Up Down Left Right Select Back Home Play Rev Fwd VolumeUp
+  VolumeDown VolumeMute) and handle **`key { screen, key }`**: in the player while a video
+  plays (arrows open or move in its menu), otherwise as that key in the page (WebView
+  `dispatchKeyEvent` / Electron `sendInputEvent`: arrow keys, Enter, Escape).
+
 ## Box side (when building starts)
 
 1. Core: pairing endpoints and the device registry (data/core/devices.json), LAN-only.

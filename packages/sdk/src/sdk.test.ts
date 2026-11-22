@@ -1046,6 +1046,19 @@ test("0.17.0 video: manifest video.play; the mock box's fake video TVs (a Roku w
     assert.deepEqual(await bg.playVideo("fake-den", { url: "http://media.example/v.mkv?api_key=k", title: "A movie", startAt: 30 }), { ok: true });
     assert.equal((await bg.videoStatus("fake-den")).position, 30);
     await bg.videoControl("fake-den", "stop");
+    // SDK 0.19.0: tracks: the player switches to one in the stream; another is yours to restart; the TV's remote asks.
+    assert.equal(den.video?.formats?.tracks, true);
+    const tracks = { audio: [{ id: "a1", label: "English", index: 0 }, { id: "a2", label: "Dub" }], subtitles: [{ id: "s1", label: "English", url: "http://media.example/s.vtt" }], audioId: "a1", subtitleId: null };
+    await bg.playVideo("fake-den", { url: "http://media.example/v.mkv?api_key=k", title: "A movie", tracks });
+    assert.deepEqual(await bg.videoControl("fake-den", { subtitle: "s1" }), { ok: true });
+    assert.equal((await bg.videoControl("fake-den", { audio: "a2" })).reason, "unsupported");
+    const mock = `http://127.0.0.1:${(box.gateway.address() as AddressInfo).port}/__bargames/dev/video-remote`;
+    assert.equal((await fetch(mock, { method: "POST", body: JSON.stringify({ displayId: "fake-den", action: "next" }) })).status, 200);
+    const withRemote = await bg.videoStatus("fake-den");
+    assert.deepEqual({ audio: withRemote.audio, subtitle: withRemote.subtitle, remote: withRemote.remote }, { audio: "a1", subtitle: "s1", remote: ["next"] });
+    assert.equal((await bg.videoStatus("fake-den")).remote, undefined);
+    assert.equal((await bg.videoControl("fake-bar", { audio: "a1" })).ok, false);
+    await bg.videoControl("fake-den", "stop");
     const link = "http://media.example/Videos/1/master.m3u8?api_key=k";
     assert.match((await bg.playVideo("fake-bar", { url: link, title: "A movie", startAt: 40 })).message ?? "", /from the beginning/);
     assert.equal((await bg.videoControl("fake-bar", { seek: 10 })).reason, "unsupported");

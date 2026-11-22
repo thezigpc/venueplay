@@ -19,6 +19,7 @@ import { TOUCH_PAGE_SCRIPT } from "./touchPage.js";
 import path from "node:path";
 import type { Logger } from "@bargames/common";
 import type { Proc, ProcRunner } from "../../airplay.js";
+import { VIDEO_KEYS, videoKeyAction } from "../../types.js";
 import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamState, VideoAction, VideoInfo, VideoRequest, VideoResult, VideoStatus } from "../../types.js";
 import { localFormats, waylandSocket, type LocalVideo } from "./video.js";
 import { NotBuiltYet } from "../../types.js";
@@ -284,7 +285,15 @@ export class LocalScreenDriver implements DisplayDriver {
     } catch {
       /* no /proc here (tests) */
     }
-    return { delivery: ["local" as DeliveryMethod], power: false, inputs: [], touch: { devices } };
+    // Box 0.29.0: a small remote for the movie player (play/pause, skip, stop).
+    return { delivery: ["local" as DeliveryMethod], power: false, inputs: [], touch: { devices }, ...(this.o.video?.available && this.o.runner ? { remoteKeys: [...VIDEO_KEYS] } : {}) };
+  }
+
+  async keypress(_device: DisplayDevice, key: string): Promise<void> {
+    const action = this.o.video ? videoKeyAction(key, this.o.video.status()) : undefined;
+    if (!action) throw Object.assign(new Error("Nothing is playing on this screen."), { status: 409 });
+    const r = await this.o.video!.control(action);
+    if (!r.ok) throw Object.assign(new Error(r.message ?? "The player couldn't do that."), { status: 409 });
   }
 
   async power(): Promise<void> {

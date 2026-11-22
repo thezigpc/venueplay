@@ -47,7 +47,30 @@ export interface VideoCaps {
    * and panel): "sdr" "hdr10" "hdr10plus" "hlg" "dovi". Absent: apps guess (SDR to be safe).
    */
   ranges?: string[];
+  /** Box 0.29.0: it takes play's `tracks` and the "audio" / "subtitle" ops. */
+  tracks?: boolean;
 }
+
+/** Box 0.29.0: an audio track or subtitle of the video (types.ts VideoTrack). A subtitle `url` carries the key: never log it. */
+export interface Track {
+  id: string;
+  label: string;
+  language?: string;
+  /** In the stream: 0-based among tracks of its kind, container order. Absent: not in this stream. */
+  index?: number;
+  url?: string;
+  format?: string;
+  forced?: boolean;
+  default?: boolean;
+}
+export interface Tracks {
+  audio?: Track[];
+  subtitles?: Track[];
+  audioId?: string;
+  subtitleId?: string | null;
+}
+/** Box 0.29.0: asked on the device (its remote or menu) that the player can't do itself: the app does it. */
+export type RemoteAsk = "next" | "previous" | { audio: string } | { subtitle: string | null };
 
 // ---------------------------------------------------------------- client → box
 
@@ -62,6 +85,13 @@ export interface HelloMsg {
   deliveries: Delivery[];
   /** Box 0.28.0: present when the client plays video links itself. */
   video?: VideoCaps;
+  /**
+   * Box 0.29.0: remote keys the client takes as "key" messages (the admin's remote for this
+   * screen), from: Up Down Left Right Select Back Home Play Rev Fwd VolumeUp VolumeDown
+   * VolumeMute. Play, Rev, Fwd and Back need no declaring while a video plays: the box turns
+   * them into video ops itself.
+   */
+  keys?: string[];
 }
 /** A screen was plugged in or unplugged (desktop): the full current list. */
 export interface ScreensMsg {
@@ -96,6 +126,9 @@ export interface VideoReplyMsg {
   state?: VideoState;
   position?: number;
   duration?: number;
+  /** Box 0.29.0: the track ids on now (subtitle null: off). */
+  audio?: string;
+  subtitle?: string | null;
 }
 export type VideoState = "loading" | "playing" | "paused" | "stopped" | "error";
 /** Box 0.28.0: the player changed by itself (started, ended, failed, staff used the TV's remote). Send at most every few seconds while playing. */
@@ -106,8 +139,17 @@ export interface VideoStateMsg {
   position?: number;
   duration?: number;
   message?: string;
+  /** Box 0.29.0: the track ids on now, also after a change made on the device. */
+  audio?: string;
+  subtitle?: string | null;
 }
-export type ClientMsg = HelloMsg | ScreensMsg | StateMsg | PreviewMsg | VideoReplyMsg | VideoStateMsg;
+/** Box 0.29.0: someone asked on the device for something only the app can do (next episode, a track not in this stream). */
+export interface VideoRemoteMsg {
+  type: "video-remote";
+  screen: string;
+  action: RemoteAsk;
+}
+export type ClientMsg = HelloMsg | ScreensMsg | StateMsg | PreviewMsg | VideoReplyMsg | VideoStateMsg | VideoRemoteMsg;
 
 // ---------------------------------------------------------------- box → client
 
@@ -135,13 +177,16 @@ export interface ShowMsg {
  * key: never log them, store them or report them in "state".showing.
  */
 export type VideoMsg =
-  | { type: "video"; screen: string; requestId: string; op: "play"; url: string; title: string; mime?: string; poster?: string; startAt?: number }
+  | { type: "video"; screen: string; requestId: string; op: "play"; url: string; title: string; mime?: string; poster?: string; startAt?: number; tracks?: Tracks }
   | { type: "video"; screen: string; requestId: string; op: "pause" | "resume" | "stop" | "status" }
+  | { type: "video"; screen: string; requestId: string; op: "audio"; id: string }
+  | { type: "video"; screen: string; requestId: string; op: "subtitle"; id: string | null }
   | { type: "video"; screen: string; requestId: string; op: "seek"; position: number };
 export type BoxMsg =
   | WelcomeMsg
   | ShowMsg
   | VideoMsg
+  | { type: "key"; screen: string; key: string }
   | { type: "off"; screen: string }
   | { type: "reload"; screen: string }
   | { type: "identify"; screen: string; label: string }
@@ -165,7 +210,20 @@ export function checkVideoCaps(v: unknown): VideoCaps | undefined {
   if (pass.length) caps.passthrough = pass;
   const ranges = names(o.ranges);
   if (ranges.length) caps.ranges = ranges;
+  if (o.tracks === true) caps.tracks = true;
   return caps;
+}
+
+export const CLIENT_KEYS = ["Up", "Down", "Left", "Right", "Select", "Back", "Home", "Play", "Rev", "Fwd", "VolumeUp", "VolumeDown", "VolumeMute"];
+export const checkKeys = (v: unknown): string[] => (Array.isArray(v) ? CLIENT_KEYS.filter((k) => v.includes(k)) : []);
+const ID = /^[\w.:-]{1,64}$/;
+/** A video-remote's action, or undefined. */
+export function checkRemoteAsk(v: unknown): RemoteAsk | undefined {
+  if (v === "next" || v === "previous") return v;
+  const o = (v ?? {}) as Record<string, unknown>;
+  if (typeof o.audio === "string" && ID.test(o.audio)) return { audio: o.audio };
+  if (o.subtitle === null || (typeof o.subtitle === "string" && ID.test(o.subtitle))) return { subtitle: o.subtitle };
+  return undefined;
 }
 
 export function checkScreens(v: unknown): Screen[] | undefined {

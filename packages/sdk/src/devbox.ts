@@ -9,7 +9,7 @@
 import { createServer, request, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { connect } from "node:net";
 import { isApp, isIntegration, MANIFEST_FILE, tableUrl, validateManifest, type GameManifest } from "./manifest.js";
-import { AUDIO_PATHS, GUEST_PATHS, HEADERS, INTEGRATION_PATHS, MATCH_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type AudioEndReason, type AudioOutput, type AudioPlayOptions, type MatchRecord, type MatchStart, type GuestLinkInfo, type GuestRole, type AudioSession, type BoxTvVideo, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
+import { AUDIO_PATHS, GUEST_PATHS, HEADERS, INTEGRATION_PATHS, MATCH_PATHS, PATHS, PROTOCOL_VERSION, STANDARD_EVENTS, type AudioEndReason, type AudioOutput, type AudioPlayOptions, type MatchRecord, type MatchStart, type GuestLinkInfo, type GuestRole, type AudioSession, type BoxTvVideo, type VideoRemote, type VideoTracks, type IntegrationCatalog, type IntegrationMessage, type IntegrationReport, type CastDisplay, type CastTargets, type Countdown, type GameStatus, type MediaItem, type VenueContext, type VenueTheme } from "./protocol.js";
 import { DEFAULT_THEME } from "./theme.js";
 import { joinUrl, normalizeBasePath } from "./base.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -319,13 +319,14 @@ export function mockBox(o: MockBoxOptions) {
     "fake-den": {
       kind: "venuebox",
       model: "android · Chromecast with Google TV (4K)",
-      formats: { containers: ["mp4", "mkv", "mov", "webm", "ts", "hls"], video: ["h264", "hevc", "vp9", "av1"], audio: ["aac", "mp3", "ac3", "eac3", "opus", "flac"], maxHeight: 2160, seek: true, passthrough: ["ac3", "eac3"], ranges: ["sdr", "hdr10", "hlg", "dovi"] },
+      formats: { containers: ["mp4", "mkv", "mov", "webm", "ts", "hls"], video: ["h264", "hevc", "vp9", "av1"], audio: ["aac", "mp3", "ac3", "eac3", "opus", "flac"], maxHeight: 2160, seek: true, passthrough: ["ac3", "eac3"], ranges: ["sdr", "hdr10", "hlg", "dovi"], tracks: true },
     },
   };
   /** SDK 0.18.0: TVs only video apps see (a Venuebox app with a video player). */
   const VIDEO_ONLY_TVS = [{ id: "fake-den", name: "Den (fake Venuebox Android TV)", group: "Main room" }];
   const FAKE_VIDEO_SECONDS = 90;
-  const videos = new Map<string, { title: string; base: number; since: number; paused: boolean }>();
+  type FakeVideo = { title: string; base: number; since: number; paused: boolean; tracks?: VideoTracks; audio?: string; subtitle?: string | null; remote: VideoRemote[] };
+  const videos = new Map<string, FakeVideo>();
   const videoPos = (v: { base: number; since: number; paused: boolean }) => Math.min(FAKE_VIDEO_SECONDS, v.base + (v.paused ? 0 : Math.floor((Date.now() - v.since) / 1000)));
   const base = normalizeBasePath(o.basePath);
   const origin = `http://localhost:${o.gatewayPort}`;
@@ -486,7 +487,9 @@ export function mockBox(o: MockBoxOptions) {
           videos.delete(id);
           return json(200, { state: "stopped", position, duration: FAKE_VIDEO_SECONDS });
         }
-        return json(200, { state: v.paused ? "paused" : "playing", position, duration: FAKE_VIDEO_SECONDS });
+        // SDK 0.19.0: the tracks on now, and what was asked from the TV's remote (handed over once).
+        const remote = v.remote.splice(0);
+        return json(200, { state: v.paused ? "paused" : "playing", position, duration: FAKE_VIDEO_SECONDS, ...(v.audio !== undefined ? { audio: v.audio } : {}), ...(v.subtitle !== undefined ? { subtitle: v.subtitle } : {}), ...(remote.length ? { remote } : {}) });
       }
       if (!tv) return json(200, { ok: false, reason: "unsupported", message: `${name} can't be handed a video (fake video TVs: ${Object.keys(FAKE_VIDEO).join(", ")})` });
       if (url.pathname === "/internal/video/play") {
@@ -496,7 +499,8 @@ export function mockBox(o: MockBoxOptions) {
           return json(200, { ok: false, reason: "error", message: bad });
         }
         const start = tv.kind !== "roku" && typeof body.startAt === "number" ? Math.max(0, Math.floor(body.startAt)) : 0;
-        videos.set(id, { title: String(body.title), base: start, since: Date.now(), paused: false });
+        const tracks = tv.formats?.tracks && body.tracks && typeof body.tracks === "object" ? (body.tracks as VideoTracks) : undefined;
+        videos.set(id, { title: String(body.title), base: start, since: Date.now(), paused: false, tracks, ...(tracks?.audioId ? { audio: tracks.audioId } : {}), ...(tracks?.subtitleId !== undefined ? { subtitle: tracks.subtitleId } : {}), remote: [] });
         console.log(`${c.ok("video")} "${body.title}" on ${name}${start ? ` from ${start} s` : ""} (pretend, ${FAKE_VIDEO_SECONDS} s; link not shown)`);
         return json(200, tv.kind === "roku" && body.startAt ? { ok: true, message: `${name} starts from the beginning (a Roku can't start part-way through)` } : { ok: true });
       }
@@ -508,6 +512,17 @@ export function mockBox(o: MockBoxOptions) {
           return json(200, { ok: true });
         }
         if (!v) return json(200, { ok: false, reason: "error", message: "nothing is playing" });
+        // SDK 0.19.0: a player with tracks switches to one that's in the stream (index) or a subtitle file (url).
+        if (typeof body.audio === "string" || body.subtitle !== undefined) {
+          const audio = typeof body.audio === "string";
+          const t = audio ? v.tracks?.audio?.find((x) => x.id === body.audio) : v.tracks?.subtitles?.find((x) => x.id === body.subtitle);
+          const can = audio ? t?.index !== undefined : body.subtitle === null ? Boolean(v.tracks) : t !== undefined && (t.index !== undefined || Boolean(t.url));
+          if (!can) return json(200, { ok: false, reason: "unsupported", message: `${name} can't switch to that track by itself: start the video again with it` });
+          if (audio) v.audio = body.audio as string;
+          else v.subtitle = body.subtitle as string | null;
+          console.log(`${c.ok("video")} ${audio ? "audio" : "subtitles"} on ${name}: ${t?.label ?? "off"}`);
+          return json(200, { ok: true });
+        }
         if (typeof body.seek === "number") {
           if (tv.kind === "roku") return json(200, { ok: false, reason: "unsupported", message: `${name} can't seek (a Roku's built-in player can't); use pause and resume` });
           Object.assign(v, { base: Math.max(0, Math.min(FAKE_VIDEO_SECONDS, Math.floor(body.seek))), since: Date.now() });
@@ -808,6 +823,25 @@ export function mockBox(o: MockBoxOptions) {
       return void res.end();
     }
     if (req.url?.split("?")[0].startsWith(MOCK_INTEGRATION_PATH)) return void integrationControl(req, res);
+    // SDK 0.19.0: POST /__bargames/dev/video-remote { displayId, action }: as if someone used the TV's own remote
+    // ("next" | "previous" | { audio: id } | { subtitle: id | null }); your next videoStatus carries it in `remote`.
+    if (req.url?.split("?")[0] === "/__bargames/dev/video-remote" && req.method === "POST") {
+      return void readBody(req).then((raw) => {
+        res.setHeader("content-type", "application/json");
+        let b: { displayId?: string; action?: VideoRemote } = {};
+        try {
+          b = JSON.parse(raw || "{}");
+        } catch {
+          /* empty */
+        }
+        const v = videos.get(String(b.displayId ?? ""));
+        if (!v) return void res.writeHead(404).end(JSON.stringify({ error: "nothing is playing on that TV" }));
+        if (b.action === undefined) return void res.writeHead(400).end(JSON.stringify({ error: 'action: "next" | "previous" | { audio } | { subtitle }' }));
+        v.remote.push(b.action);
+        console.log(`${c.ok("video")} remote on ${b.displayId}: ${JSON.stringify(b.action)}`);
+        res.end(JSON.stringify({ ok: true }));
+      });
+    }
     // SDK 0.15.0: POST /__bargames/dev/matches/<id>/result { winner? | cancel? }
     const mr = /^\/__bargames\/dev\/matches\/([^/]+)\/result$/.exec(req.url?.split("?")[0] ?? "");
     if (mr && req.method === "POST") {

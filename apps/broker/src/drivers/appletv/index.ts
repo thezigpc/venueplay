@@ -8,7 +8,7 @@
 
 import type { JsonStore } from "@bargames/common";
 import { connect } from "node:net";
-import { redactUrls, type Capabilities, type DeliveryMethod, type DisplayContent, type DisplayDevice, type DisplayDriver, type Health, type ShowResult, type StreamService, type StreamState, type VideoAction, type VideoInfo, type VideoRequest, type VideoResult, type VideoStatus } from "../../types.js";
+import { isSeek, redactUrls, type Capabilities, type DeliveryMethod, type DisplayContent, type DisplayDevice, type DisplayDriver, type Health, type ShowResult, type StreamService, type StreamState, type VideoAction, type VideoInfo, type VideoRequest, type VideoResult, type VideoStatus } from "../../types.js";
 import { AtvError, type AtvCall } from "./helper.js";
 
 /** Pairing credentials per Apple TV (Companion). Kept out of displays.json. */
@@ -236,6 +236,7 @@ export class AppleTvDriver implements DisplayDriver {
   }
 
   async videoControl(device: DisplayDevice, action: VideoAction): Promise<VideoResult> {
+    if (typeof action === "object" && !isSeek(action)) return { ok: false, reason: "unsupported", message: `${device.name} can't switch tracks by itself` };
     try {
       await this.videoCall(device, "video_control", typeof action === "object" ? { action: "seek", position: action.seek } : { action });
       return { ok: true };

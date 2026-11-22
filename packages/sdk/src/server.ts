@@ -27,6 +27,9 @@ import {
   type AudioOutput,
   type BoxTv,
   type BoxTvVideo,
+  type VideoTrack,
+  type VideoTracks,
+  type VideoRemote,
   type Countdown,
   type GameResult,
   type LaunchResult,
@@ -573,7 +576,7 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
     async videoControl(displayId, action) {
       if (!connected) return { ok: false, reason: "unsupported", message: "not running on a Bar Games box" };
       try {
-        const r = await core("POST", "/internal/video/control", { displayId, ...(typeof action === "object" ? { seek: action.seek } : { action }) });
+        const r = await core("POST", "/internal/video/control", { displayId, ...(typeof action === "object" ? action : { action }) });
         return (await r.json()) as VideoResult;
       } catch (err) {
         return { ok: false, reason: "error", message: String(err) };
@@ -613,6 +616,9 @@ export type {
   AudioOutput,
   BoxTv,
   BoxTvVideo,
+  VideoTrack,
+  VideoTracks,
+  VideoRemote,
   CastDisplay,
   CastResult,
   CastTargets,

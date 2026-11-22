@@ -101,13 +101,17 @@ export function Remote({ d, keys, embedded = false }: { d: Display; keys: string
         {btn("Home", "⌂", "small")}
         {btn("Info", "✱", "small")}
       </div>
-      <div className="dpad-ring">
-        {btn("Up", "▲", "up")}
-        {btn("Left", "◀", "left")}
-        {btn("Select", "OK", "ok")}
-        {btn("Right", "▶", "right")}
-        {btn("Down", "▼", "down")}
-      </div>
+      {/* Box 0.29.0: a movie-only remote (a Venuebox app or a screen on the box) has no arrows. */}
+      {(has.has("Up") || has.has("Select")) && (
+        <div className="dpad-ring">
+          {btn("Up", "▲", "up")}
+          {btn("Left", "◀", "left")}
+          {btn("Select", "OK", "ok")}
+          {btn("Right", "▶", "right")}
+          {btn("Down", "▼", "down")}
+        </div>
+      )}
+      {!has.has("Up") && has.has("Play") && <p className="muted small-print">Play/pause, skip 30 seconds and Back (stop) work while a movie plays here.</p>}
       <div className="rk-row">
         {btn("InstantReplay", "↺", "small")}
         {btn("Search", "🔍", "small")}

@@ -13,7 +13,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import type { Logger } from "@bargames/common";
-import type { VideoAction, VideoFormats, VideoRequest, VideoResult, VideoStatus } from "../../types.js";
+import { isSeek, type VideoAction, type VideoFormats, type VideoRequest, type VideoResult, type VideoStatus, type VideoTrack, type VideoTracks } from "../../types.js";
 import { MpvIpc, type MpvEvent } from "./mpv-ipc.js";
 
 export interface LocalVideoOptions {
@@ -48,6 +48,12 @@ interface Player {
   position?: number;
   duration?: number;
   done: boolean;
+  /** Box 0.29.0: the video's tracks, the ids on now, and a subtitle file to load once the video is open. */
+  tracks?: VideoTracks;
+  audio?: string;
+  subtitle?: string | null;
+  loaded: boolean;
+  pendingSub?: VideoTrack;
   /** How it ended: shown by status until the next play. */
   end?: { state: "stopped" | "error"; message?: string };
 }
@@ -105,6 +111,7 @@ export function localFormats(hw: Set<string>, tallestMode: number): VideoFormats
     maxHeight: tallestMode >= 2160 && (hw.has("hevc") || hw.has("h264")) ? 2160 : 1080,
     seek: true,
     ranges: ["sdr"],
+    tracks: true,
   };
 }
 
@@ -173,7 +180,7 @@ export class LocalVideo {
     const proc = spawn(this.o.mpv, args, { stdio: "ignore", env });
     const ipc = new MpvIpc();
     const title = video.title.slice(0, 200);
-    const p: Player = { proc, ipc, title, started: false, paused: false, buffering: false, done: false };
+    const p: Player = { proc, ipc, title, started: false, paused: false, buffering: false, done: false, loaded: false, tracks: video.tracks };
     this.player = p;
     this.last = p;
     this.o.log?.info("local", "video: starting the player", { connector: surface.connector, title, startAt: start });
@@ -189,6 +196,10 @@ export class LocalVideo {
       let id = 1;
       for (const prop of ["pause", "time-pos", "duration", "paused-for-cache"]) await ipc.observe(prop, id++);
       await ipc.command(["set_property", "force-media-title", title]);
+      // Box 0.29.0: the tracks to start with (set before the file opens; a subtitle file loads after).
+      const t = video.tracks;
+      if (t?.audioId) await this.setAudio(p, t.audioId).catch(() => undefined);
+      if (t?.subtitleId !== undefined) await this.setSubtitle(p, t.subtitleId).catch(() => undefined);
       await ipc.command(["loadfile", video.url, "replace"]);
     })();
     let timer: NodeJS.Timeout | undefined;
@@ -212,6 +223,10 @@ export class LocalVideo {
     }
     if (!p) return { ok: false, reason: "error", message: "nothing is playing on this screen" };
     try {
+      if (typeof action === "object" && !isSeek(action)) {
+        const ok = "audio" in action ? await this.setAudio(p, action.audio) : await this.setSubtitle(p, action.subtitle);
+        return ok ? { ok: true } : { ok: false, reason: "unsupported", message: "that track isn't in the stream that's playing" };
+      }
       if (typeof action === "object") {
         await p.ipc.command(["seek", Math.max(0, Math.floor(action.seek)), "absolute"]);
         p.position = Math.max(0, Math.floor(action.seek));
@@ -222,12 +237,42 @@ export class LocalVideo {
     }
   }
 
+  /** mpv numbers tracks of a kind from 1, in the file's order: aid/sid = index + 1. False: not in this stream. */
+  private async setAudio(p: Player, id: string): Promise<boolean> {
+    const t = p.tracks?.audio?.find((x) => x.id === id);
+    if (t?.index === undefined) return false;
+    await p.ipc.command(["set_property", "aid", t.index + 1]);
+    p.audio = id;
+    return true;
+  }
+
+  private async setSubtitle(p: Player, id: string | null): Promise<boolean> {
+    if (id === null) {
+      p.pendingSub = undefined;
+      await p.ipc.command(["set_property", "sid", "no"]);
+      p.subtitle = null;
+      return true;
+    }
+    const t = p.tracks?.subtitles?.find((x) => x.id === id);
+    if (!t || (t.index === undefined && !t.url)) return false;
+    if (t.url) {
+      // A side file: mpv can only add it to an open video. "cached" picks it again if it's already there.
+      if (p.loaded) await p.ipc.command(["sub-add", t.url, "cached", t.label, ...(t.language ? [t.language] : [])]);
+      else p.pendingSub = t;
+    } else {
+      p.pendingSub = undefined;
+      await p.ipc.command(["set_property", "sid", t.index! + 1]);
+    }
+    p.subtitle = id;
+    return true;
+  }
+
   status(): VideoStatus {
     const p = this.player ?? this.last;
     if (!p) return { state: "stopped" };
     const pos = { ...(p.position !== undefined ? { position: p.position } : {}), ...(p.duration !== undefined ? { duration: p.duration } : {}) };
     if (p.done) return { state: p.end?.state ?? "stopped", ...pos, ...(p.end?.message ? { message: p.end.message } : {}) };
-    return { state: p.paused && p.started ? "paused" : "playing", ...pos };
+    return { state: p.paused && p.started ? "paused" : "playing", ...pos, ...(p.audio !== undefined ? { audio: p.audio } : {}), ...(p.subtitle !== undefined ? { subtitle: p.subtitle } : {}) };
   }
 
   /** A new page, off, or the kiosk stopping: close the player. */
@@ -244,7 +289,12 @@ export class LocalVideo {
 
   private onEvent(p: Player, e: MpvEvent) {
     if (p.done) return;
-    if (e.event === "playback-restart" && !p.started) {
+    if (e.event === "file-loaded") {
+      p.loaded = true;
+      const t = p.pendingSub;
+      p.pendingSub = undefined;
+      if (t?.url) void p.ipc.command(["sub-add", t.url, "cached", t.label, ...(t.language ? [t.language] : [])]).catch(() => this.o.log?.warn("local", "video: the subtitle file didn't load", { title: p.title }));
+    } else if (e.event === "playback-restart" && !p.started) {
       p.started = true;
       this.o.log?.info("local", "video: playing", { title: p.title });
     } else if (e.event === "end-file") {
