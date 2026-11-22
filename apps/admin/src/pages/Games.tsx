@@ -156,6 +156,7 @@ function GameRow({ game, busy, run, update, rooms, open, toggle }: { game: Game;
           </div>
         </div>
         {hasUpdate ? <span className="pill warn">Update ready</span> : game.enabled && update && !update.error ? <span className="pill ok">Up to date</span> : null}
+        {staffPage(game) && game.enabled && <OpenStaffPage game={game} />}
         {adminPath(game.manifest) && game.enabled && <OpenSettings game={game} compact />}
         <label className="toggle" title={game.enabled ? "On" : "Off"}>
           <input type="checkbox" role="switch" checked={game.enabled} disabled={busy} onChange={(e) => setOn(e.target.checked)} aria-label={`${name} is ${game.enabled ? "on" : "off"}`} />
@@ -208,6 +209,38 @@ function UpdateBanner({ game, update, busy, run, rooms = 0, named = false }: { g
       </button>
       {update.note && <span className="muted">{update.note}</span>}
     </div>
+  );
+}
+
+/**
+ * Box 0.29.4: an app's staff page (routes.host) when its public address is a guest page
+ * (routes.player at another path, e.g. Movies "/" for guests, "/staff" for staff).
+ */
+const staffPage = (game: Game): string | undefined => {
+  const r = game.manifest.routes;
+  return isApp(game.manifest) && r.host && r.host !== r.player && r.host !== adminPath(game.manifest) ? r.host : undefined;
+};
+
+/** Opens the app's staff page, signed in as staff, in a new tab. */
+function OpenStaffPage({ game, long = false }: { game: Game; long?: boolean }) {
+  const [note, setNote] = useState("");
+  const open = () => {
+    const tab = window.open("about:blank", "_blank");
+    api.staffLink(game.id, staffPage(game)).then(
+      (r) => {
+        if (tab) tab.location.href = r.url;
+        else window.location.href = r.url;
+      },
+      (e: Error) => {
+        tab?.close();
+        setNote(e.message);
+      },
+    );
+  };
+  return (
+    <button type="button" className={long ? "primary" : undefined} onClick={open} title={note || `Open ${game.context.game.displayName}'s staff page`}>
+      {long ? `Open ${game.context.game.displayName} (staff) ↗` : "Open"}
+    </button>
   );
 }
 
@@ -332,6 +365,11 @@ function GameCard({ game, busy, run, update, embedded = false }: { game: Game; b
         {game.host} · SDK level {game.manifest.sdk.level} · {game.state} · {game.verified ? "verified" : <span className="warn">unverified source</span>}
       </p>
       <UpdateBanner game={game} update={update} busy={busy} run={run} />
+      {!embedded && staffPage(game) && game.enabled && (
+        <p>
+          <OpenStaffPage game={game} long />
+        </p>
+      )}
       {!embedded && adminPath(game.manifest) && <OpenSettings game={game} />}
       {game.manifest.guests && <GuestHostsCard gameId={game.id} embedded />}
       <SecretSettings game={game} />
