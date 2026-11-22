@@ -19,7 +19,8 @@ import { TOUCH_PAGE_SCRIPT } from "./touchPage.js";
 import path from "node:path";
 import type { Logger } from "@bargames/common";
 import type { Proc, ProcRunner } from "../../airplay.js";
-import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamState } from "../../types.js";
+import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamState, VideoAction, VideoInfo, VideoRequest, VideoResult, VideoStatus } from "../../types.js";
+import { localFormats, waylandSocket, type LocalVideo } from "./video.js";
 import { NotBuiltYet } from "../../types.js";
 
 export interface Connector {
@@ -190,6 +191,10 @@ export interface LocalOptions {
    * "devtools".
    */
   touchMode?: "native" | "devtools";
+  /** Box 0.28.2: the video player (mpv in the screen's cage session); absent: no video. */
+  video?: LocalVideo;
+  /** Box 0.28.2: the codecs the GPU decodes (hardwareDecoders(); read once, lazily). */
+  hardwareDecoders?: () => Set<string>;
 }
 
 /** A touch frame from touch-reader.py: 0..1 across and down the screen. */
@@ -298,6 +303,7 @@ export class LocalScreenDriver implements DisplayDriver {
 
   private async showNow(device: DisplayDevice, content: DisplayContent): Promise<ShowResult> {
     if (content.kind === "external") return { ok: false, message: "A plugged-in screen has no apps of its own." };
+    await this.o.video?.close(); // Box 0.28.2: anything the box sends replaces a movie
     const url = content.kind === "off" ? BLACK_PAGE : content.kind === "idle" ? content.url : content.url;
     if (!url) return { ok: false, message: "Nothing to show" };
     const runner = this.o.runner;
@@ -609,8 +615,50 @@ export class LocalScreenDriver implements DisplayDriver {
     });
   }
 
+  // ---------------------------------------------------------------- video (box 0.28.2)
+
+  private hw?: Set<string>;
+
+  videoInfo(device: DisplayDevice): VideoInfo | undefined {
+    if (!this.o.video?.available || !this.o.runner) return undefined;
+    const c = readConnectors(this.drmDir).find((x) => `local:${x.name}` === device.id);
+    if (!c?.connected) return undefined;
+    this.hw ??= this.o.hardwareDecoders?.() ?? new Set();
+    const tallest = Math.max(0, ...c.modes.map((m) => Number(m.split("x")[1]) || 0));
+    return { kind: "local", model: `plugged into the box (${c.name})`, formats: localFormats(this.hw, tallest) };
+  }
+
+  async playVideo(device: DisplayDevice, video: VideoRequest): Promise<VideoResult> {
+    const video_ = this.o.video;
+    if (!video_ || !this.videoInfo(device)) return { ok: false, reason: "unsupported", message: `${device.name} can't play video (no player, or unplugged)` };
+    const run = this.queue.then(async (): Promise<VideoResult> => {
+      // The movie plays in the screen's cage: start the kiosk (black) if it isn't running.
+      const s = this.session;
+      if (!s || !s.proc.alive || `local:${s.connector}` !== device.id) {
+        const r = await this.showNow(device, { kind: "off" });
+        if (!r.ok) return { ok: false, reason: "error", message: r.message ?? "the screen didn't start" };
+      }
+      const xdg = `${this.runDir}/xdg`;
+      const display = waylandSocket(xdg);
+      if (!display) return { ok: false, reason: "error", message: "the screen's display server isn't ready" };
+      return video_.play({ xdg, display, connector: this.session!.connector }, video);
+    });
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  async videoControl(_device: DisplayDevice, action: VideoAction): Promise<VideoResult> {
+    if (!this.o.video?.available) return { ok: false, reason: "unsupported", message: "no video player" };
+    return this.o.video.control(action);
+  }
+
+  async videoStatus(): Promise<VideoStatus> {
+    return this.o.video?.status() ?? { state: "stopped" };
+  }
+
   async stop(device: DisplayDevice): Promise<void> {
     if (this.session && `local:${this.session.connector}` === device.id) {
+      await this.o.video?.close();
       this.session.guard?.close();
       this.stopRetry(this.session);
       this.session.reader?.kill();

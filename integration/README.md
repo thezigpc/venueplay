@@ -21,6 +21,12 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.18.2
+
+- `video.kind` can be `"local"` (box 0.28.2): a screen plugged into the box itself, played
+  with mpv. It carries `formats` like a Venuebox app (SDR only, seek works): build the stream
+  from `formats` whatever the kind, not only for `"venuebox"`.
+
 ## What's new in SDK 0.18.1
 
 - `video.formats.ranges` (Venuebox apps, box 0.28.1): picture ranges the device shows

@@ -170,7 +170,8 @@ export interface DisplayDriver {
 
 /** Box 0.27.0: what kind of player a TV has, for apps choosing a stream (bg.tvs().video). */
 export interface VideoInfo {
-  kind: "appletv" | "roku" | "venuebox";
+  /** Box 0.28.2: "local", a screen plugged into the box (mpv). */
+  kind: "appletv" | "roku" | "venuebox" | "local";
   model: string;
   /** Box 0.28.0, Venuebox apps: what the player plays (direct play vs transcode). */
   formats?: VideoFormats;

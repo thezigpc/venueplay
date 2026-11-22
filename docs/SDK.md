@@ -70,6 +70,8 @@ venue TV a video link that the TV plays itself, streaming straight from the link
   have `video.kind: "venuebox"` and `video.formats` (containers, video and audio codecs,
   `maxHeight`, `seek`, `passthrough`): what they play directly, so ask the media server for
   that or for a transcode. With `seek: true`, seek and `startAt` work.
+- **Screens plugged into the box** (SDK 0.18.2, box 0.28.2) have `video.kind: "local"` and
+  `formats` too (mpv on the box; SDR only). Treat them like Venuebox apps.
 
 The calls:
 - `bg.tvs()[].video` (`{ kind: "appletv" | "roku", model }`) says which TVs can take a link.

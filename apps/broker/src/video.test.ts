@@ -198,3 +198,67 @@ test("video 0.28.0: a Venuebox app with a player gets the link over its channel;
     server.close();
   }
 });
+
+test("video 0.28.2: a screen plugged into the box plays links in mpv (in its cage); formats from the GPU; the link only over IPC", async () => {
+  const { localFormats, vaapiDecoders, LocalVideo, waylandSocket } = await import("./drivers/local/video.js");
+  const { randomBytes } = await import("node:crypto");
+  const { writeFileSync, mkdirSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+
+  const hw = vaapiDecoders("vainfo: Driver version: Intel iHD driver\n      VAProfileH264Main               :\tVAEntrypointVLD\n      VAProfileH264Main               :\tVAEntrypointEncSliceLP\n      VAProfileHEVCMain10             :\tVAEntrypointVLD\n      VAProfileVP9Profile0            :\tVAEntrypointVLD\n      VAProfileAV1Profile0            :\tVAEntrypointEncSlice\n");
+  assert.deepEqual([...hw].sort(), ["h264", "hevc", "vp9"], "decoders only (VLD), not encoders");
+  assert.deepEqual(localFormats(hw, 2160), { containers: ["mp4", "mkv", "mov", "webm", "ts", "hls"], video: ["h264", "hevc", "vp9"], audio: ["aac", "mp3", "ac3", "eac3", "dts", "truehd", "opus", "flac"], maxHeight: 2160, seek: true, ranges: ["sdr"] });
+  assert.equal(localFormats(new Set(), 2160).maxHeight, 1080, "4K needs a hardware decoder");
+  assert.deepEqual(localFormats(new Set(), 1080).video, ["h264"]);
+
+  const dir = mkdtempSync(path.join(tmpdir(), "video-local-"));
+  const xdg = path.join(dir, "xdg");
+  mkdirSync(xdg);
+  writeFileSync(path.join(xdg, "wayland-0"), "");
+  writeFileSync(path.join(xdg, "wayland-0.lock"), "");
+  assert.equal(waylandSocket(xdg), "wayland-0");
+
+  const fake = fileURLToPath(new URL("./drivers/local/fake-mpv.ts", import.meta.url));
+  const logFile = path.join(dir, "mpv.log");
+  process.env.FAKE_MPV_LOG = logFile;
+  const sock = () => (process.platform === "win32" ? `\\\\.\\pipe\\bg-mpv-${randomBytes(6).toString("hex")}` : path.join(dir, `m-${randomBytes(4).toString("hex")}.sock`));
+  const v = new LocalVideo({ mpv: process.execPath, prefixArgs: ["--import", "tsx", fake], socketPath: sock, audioDevice: () => "plughw:0,3" });
+  const surface = { xdg, display: "wayland-0", connector: "HDMI-A-1" };
+  try {
+    assert.deepEqual(await v.play(surface, { url: LINK, title: "A movie", startAt: 20 }), { ok: true });
+    await new Promise((r) => setTimeout(r, 250));
+    const st = v.status();
+    assert.equal(st.state, "playing");
+    assert.ok(st.position! >= 20 && st.duration === 120);
+    assert.deepEqual(await v.control("pause"), { ok: true });
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(v.status().state, "paused");
+    assert.deepEqual(await v.control({ seek: 90.6 }), { ok: true });
+    assert.equal(v.status().position, 90);
+    assert.deepEqual(await v.control("stop"), { ok: true });
+    assert.equal(v.status().state, "stopped");
+
+    const log = readFileSync(logFile, "utf8");
+    const argv = log.split("\n").filter((l) => l.startsWith("ARGV")).join("\n");
+    assert.ok(!argv.includes("SECRET"), "the link is never on mpv's command line");
+    assert.match(argv, /--gpu-context=wayland/);
+    assert.match(argv, /--audio-device=alsa\/plughw:0,3/);
+    assert.match(argv, /--start=20/);
+    assert.match(log, /CMD \["loadfile","http:\/\/media\.example/, "it goes over IPC");
+
+    // A link the server refuses: the player closes and says why, without the link.
+    assert.deepEqual(await v.play(surface, { url: "http://media.example/fail?api_key=SECRET", title: "Bad" }), { ok: true });
+    await new Promise((r) => setTimeout(r, 300));
+    const failed = v.status();
+    assert.equal(failed.state, "error");
+    assert.match(failed.message!, /couldn't open the stream/);
+    assert.doesNotMatch(JSON.stringify(failed), /SECRET/);
+    assert.equal((await v.control("pause")).ok, false, "nothing playing");
+
+    // No mpv on the box: not offered.
+    assert.equal((await new LocalVideo({}).play(surface, { url: LINK, title: "x" })).reason, "unsupported");
+  } finally {
+    await v.close();
+    delete process.env.FAKE_MPV_LOG;
+  }
+});

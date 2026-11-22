@@ -83,3 +83,21 @@ touchscreen the box found).
 
 **Limits:** the box's Intel graphics drive about 3 screens (it depends on the model's
 ports). 4K at 60 fps on DisplayPort; older HDMI ports top out at 4K30.
+
+## Movies on a plugged-in screen (box 0.28.2)
+
+Apps with `video.play` (the Movies app) can hand a plugged-in screen a video link, like a TV.
+The broker runs **mpv** as a second Wayland client in the screen's cage session: cage shows
+the newest window, so the movie covers the kiosk's Chromium, and the page is back when mpv
+quits (end, stop, or anything else the box sends to the screen). The kiosk starts (black)
+first if nothing was showing.
+
+- `bg.tvs()`: `video: { kind: "local", model, formats }`. Formats come from the GPU: h264
+  always; hevc/vp9/av1 only where VA-API (`vainfo`) or Nvidia's NVDEC decodes them; 4K when
+  the screen has a 4K mode and the GPU decodes HEVC or H.264; `ranges: ["sdr"]` (cage has no
+  HDR output; mpv tone-maps); seek and `startAt` work.
+- mpv: `--vo=gpu-next --gpu-context=wayland --fs --hwdec=auto-safe`, no config, no scripts,
+  no yt-dlp. The link goes to it over its IPC socket only, never on its command line, and is
+  never logged.
+- Sound: the box's HDMI output (the first one `aplay -l` lists while a screen is plugged in).
+  `LOCAL_VIDEO_AUDIO=plughw:0,7` picks another ALSA device. `LOCAL_VIDEO=off` turns movies off.

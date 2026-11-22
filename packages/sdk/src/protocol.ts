@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.18.1";
+export const SDK_VERSION = "0.18.2";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -718,7 +718,8 @@ export interface BoxTv {
  * "hlg" "dovi"). Absent: the client didn't say; assume SDR.
  */
 export interface BoxTvVideo {
-  kind: "appletv" | "roku" | "venuebox";
+  /** SDK 0.18.2: "local", a screen plugged into the box itself (has `formats` too). */
+  kind: "appletv" | "roku" | "venuebox" | "local";
   model: string;
   formats?: { containers: string[]; video: string[]; audio: string[]; maxHeight?: number; seek: boolean; passthrough?: string[]; ranges?: string[] };
 }

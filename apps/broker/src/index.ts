@@ -8,6 +8,8 @@ import { MockDriver } from "./drivers/mock.js";
 import { AirplayDriver } from "./drivers/airplay/index.js";
 import { RokuDriver } from "./drivers/roku/index.js";
 import { LocalScreenDriver } from "./drivers/local/index.js";
+import { hardwareDecoders, LocalVideo } from "./drivers/local/video.js";
+import { boxOutputs } from "./audio/boxOutputs.js";
 import { VizioDriver, type VizioAuth } from "./drivers/vizio/index.js";
 import { AppleTvDriver, type AppleTvAuth } from "./drivers/appletv/index.js";
 import { AtvHelper } from "./drivers/appletv/helper.js";
@@ -83,7 +85,10 @@ if (appletv) drivers.set(appletv.id, appletv);
 // Plugged-in screens (HDMI/DisplayPort): cage + Chromium on the real output.
 if (enabled.includes("local")) {
   const localDir = process.env.LOCAL_RUN_DIR ?? "/tmp/bargames-local";
-  drivers.set("local", new LocalScreenDriver({ runner: existsSync("/usr/bin/cage") ? new NodeProcRunner(log, localDir) : undefined, log, runDir: localDir }));
+  // Box 0.28.2: movies on the plugged-in screen with mpv; sound on the box's HDMI (LOCAL_VIDEO_AUDIO: an ALSA device instead).
+  const mpv = process.env.LOCAL_VIDEO === "off" || !existsSync("/usr/bin/mpv") ? undefined : "/usr/bin/mpv";
+  const video = new LocalVideo({ mpv, log, audioDevice: () => process.env.LOCAL_VIDEO_AUDIO || boxOutputs().find((o) => o.available && /HDMI/.test(o.name))?.address });
+  drivers.set("local", new LocalScreenDriver({ runner: existsSync("/usr/bin/cage") ? new NodeProcRunner(log, localDir) : undefined, log, runDir: localDir, video, hardwareDecoders }));
 }
 const mockCount = envNum("MOCK_DISPLAYS", 0);
 if (mockCount) drivers.set("mock", new MockDriver(mockCount));
