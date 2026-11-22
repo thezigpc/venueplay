@@ -608,6 +608,11 @@ test("box password: logging in signs staff in venue-wide; games can check it; gu
     assert.doesNotMatch(ip.headers.getSetCookie().join(" | "), /bg_staff=/);
     const out = await b.json("POST", "/api/auth/logout", undefined, { "x-forwarded-host": "admin.example.com" });
     assert.match(out.headers.getSetCookie().join(" | "), /bg_staff=;.*Domain=example\.com/, "logout clears it");
+    // Box 0.29.3: opening the admin again renews it (the admin session can outlast the 12-hour staff cookie).
+    const st = await b.json("GET", "/api/auth/status", undefined, { ...b.authed, "x-forwarded-host": "admin.example.com" });
+    assert.match(st.headers.getSetCookie().join(" | "), /bg_staff=staff\.\d+\.[\w-]+\.[\w-]+; Max-Age=43200; Domain=example\.com/);
+    const anon = await b.json("GET", "/api/auth/status", undefined, { "x-forwarded-host": "admin.example.com" });
+    assert.doesNotMatch(anon.headers.getSetCookie().join(" | "), /bg_staff=/, "not signed in: nothing");
 
     // A game asks whether what was typed is the box password.
     await b.json("POST", "/api/games/install", { manifest: menu, devTarget: "http://menu" }, b.authed);

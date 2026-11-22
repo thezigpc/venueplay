@@ -485,8 +485,12 @@ export function createApp(d: AppDeps) {
   };
 
   app.get("/api/auth/status", (req, res) => {
+    const loggedIn = d.auth.check(adminSession(req));
+    // Box 0.29.3: the staff cookie lasts 12 hours but "keep me signed in" keeps the admin for 30
+    // days, so apps asked for their password again. Each time the admin opens, renew it.
+    if (loggedIn) setStaffCookie(req, res);
     // title: the venue's own name for this admin (shown on the sign-in screen too, so it's public).
-    res.json({ setup: d.auth.isSetup(), loggedIn: d.auth.check(adminSession(req)), canSetup: fromLan(req), title: d.state.venue.get().adminTitle || undefined });
+    res.json({ setup: d.auth.isSetup(), loggedIn, canSetup: fromLan(req), title: d.state.venue.get().adminTitle || undefined });
   });
 
   /** The client's address: the gateway's word when it proves itself, else the socket. */
@@ -520,15 +524,21 @@ export function createApp(d: AppDeps) {
     // went nowhere. Lax still keeps it off cross-site POSTs (every admin change is a JSON POST/PUT/DELETE).
     const session = d.auth.issue(Date.now(), ttl);
     res.cookie(ADMIN_COOKIE, session, { httpOnly: true, sameSite: "lax", secure, maxAge: ttl, path: `${adminPrefix(req)}/` });
-    // Signed in here = signed in to every game's and app's own admin (SDK 0.7.0+): the
-    // gateway checks this cookie and tells games "staff", never passing the cookie on.
-    const domain = staffCookieDomain(req);
-    if (domain) {
-      const token = signToken(d.config.gatewayToken, "staff", Date.now() + STAFF_TTL_MS, randomBytes(8).toString("base64url"));
-      res.cookie(STAFF_COOKIE, token, { httpOnly: true, sameSite: "lax", secure, maxAge: STAFF_TTL_MS, path: "/", domain, encode: String });
-    }
+    setStaffCookie(req, res);
     return session;
   };
+
+  /**
+   * Signed in here = signed in to every game's and app's own admin (SDK 0.7.0+): the gateway
+   * checks this cookie and tells games "staff", never passing the cookie on. Only on the
+   * venue's domain (admin.example.com); by IP the Settings hand-off covers it.
+   */
+  function setStaffCookie(req: Request, res: Response): void {
+    const domain = staffCookieDomain(req);
+    if (!domain) return;
+    const token = signToken(d.config.gatewayToken, "staff", Date.now() + STAFF_TTL_MS, randomBytes(8).toString("base64url"));
+    res.cookie(STAFF_COOKIE, token, { httpOnly: true, sameSite: "lax", secure: req.headers["x-forwarded-proto"] === "https", maxAge: STAFF_TTL_MS, path: "/", domain, encode: String });
+  }
 
   app.post(
     "/api/auth/setup",
