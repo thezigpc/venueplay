@@ -269,18 +269,34 @@ button.tv-tile.selected { border-color: var(--primary); }
   .tv-layout.has-panel .tv-tile > b { align-self: end; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tv-layout.has-panel .tv-tile > .tv-sub { align-self: start; font-size: 0.8rem; }
 }
-/* Box 0.27.1, portrait: the panel is a sheet over the bottom of the TV wall; the wall stays where it was. */
-@media (max-width: 1000px) {
+/* Box 0.29.1, a tablet in portrait: a slim column of TVs on the left (picture and name), the panel fills the rest,
+   so it works like landscape. Each side scrolls on its own. */
+@media (min-width: 761px) and (max-width: 1000px) {
+  .tv-layout.has-panel { gap: 12px; }
+  .tv-layout.has-panel .tv-main { flex: 0 0 148px; position: sticky; top: 16px; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow-y: auto; padding-right: 2px; }
+  .tv-layout.has-panel .tv-panel { flex: 1; min-width: 0; width: auto; max-height: calc(100dvh - 32px); padding: 14px; }
+  .tv-layout.has-panel .page-head { flex-direction: column; align-items: stretch; gap: 6px; margin-bottom: 10px; }
+  .tv-layout.has-panel .page-head h1 { font-size: 1.4rem; }
+  .tv-layout.has-panel .page-head button { padding: 6px 4px; font-size: 0.78rem; min-height: 44px; }
+  .tv-layout.has-panel .chips { flex-wrap: wrap; gap: 4px; }
+  .tv-layout.has-panel .chips .chip { flex: 1 1 100%; font-size: 0.8rem; }
+  .tv-layout.has-panel .tv-wall { grid-template-columns: 1fr; gap: 8px; }
+  .tv-layout.has-panel button.tv-tile { padding: 6px; gap: 4px; }
+  .tv-layout.has-panel .tv-tile > .tv-screen { font-size: 0.68rem; padding: 3px; }
+  .tv-layout.has-panel .tv-tile > b { font-size: 0.88rem; overflow-wrap: anywhere; }
+  .tv-layout.has-panel .tv-tile > .tv-sub { display: none; }
+  .tv-layout.has-panel .tv-main > p, .tv-layout.has-panel .ignored-tvs { font-size: 0.8rem; }
+  .tv-layout.has-panel .tv-control .tv-screen.big, .tv-layout.has-panel .tv-control .tv-preview { max-width: 340px; }
+}
+/* A phone: the panel is a sheet over the bottom of the TV wall (box 0.27.1). */
+@media (max-width: 760px) {
   .tv-layout.has-panel .tv-main { padding-bottom: 64vh; padding-bottom: 64dvh; }
   .tv-layout.has-panel .tv-panel {
-    position: fixed; z-index: 10; left: 96px; right: 0; bottom: 0; top: auto; width: auto;
-    max-height: 62vh; max-height: 62dvh; border-radius: 18px 18px 0 0; padding-bottom: max(18px, env(safe-area-inset-bottom));
+    position: fixed; z-index: 10; left: 0; right: 0; top: auto; bottom: calc(66px + env(safe-area-inset-bottom)); width: auto;
+    max-height: calc(100dvh - 140px); border-radius: 18px 18px 0 0; padding-bottom: 18px;
     border-top: 1px solid #343d70; box-shadow: 0 -12px 32px rgba(5, 8, 20, 0.6);
   }
   .tv-layout.has-panel .tv-panel-head { position: sticky; top: 0; margin: -18px -18px 0; padding: 14px 18px 8px; background: var(--surface); z-index: 1; }
-}
-@media (max-width: 760px) {
-  .tv-layout.has-panel .tv-panel { left: 0; bottom: calc(66px + env(safe-area-inset-bottom)); max-height: calc(100dvh - 140px); padding-bottom: 18px; }
 }
 
 /* Tonight */
