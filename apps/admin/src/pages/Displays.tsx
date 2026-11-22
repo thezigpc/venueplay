@@ -128,6 +128,20 @@ export function DisplaysPage({ selected, tab }: { selected?: string; tab?: strin
   );
 }
 
+/** Box 0.29.2: a phone-width screen (the same 760 px the layout switches at). */
+function usePhone(): boolean {
+  const q = "(max-width: 760px)";
+  const [phone, setPhone] = useState(() => window.matchMedia?.(q).matches ?? false);
+  useEffect(() => {
+    const m = window.matchMedia?.(q);
+    if (!m) return;
+    const on = () => setPhone(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return phone;
+}
+
 const STREAM_LABEL: Record<string, string> = {
   streaming: "casting",
   connecting: "connecting…",
@@ -240,8 +254,10 @@ function AddTvCard({ busy, run, setNote, previews, togglePreviews, hasStartup }:
 }
 
 // Box 0.27.1: what's on, the buttons and the remote share one Control tab (old #…/now and #…/remote links land there).
+// Box 0.29.2: on a phone the remote has a tab (and the page) to itself.
 const PANEL_TABS = [
   { id: "control", label: "Control" },
+  { id: "remote", label: "Remote" },
   { id: "apps", label: "Apps" },
   { id: "setup", label: "Setup" },
 ] as const;
@@ -286,7 +302,8 @@ function TvPanel({
   const canPair = d.capabilities?.delivery.includes("airplay");
   const hasRemote = (d.capabilities?.remoteKeys?.length ?? 0) > 0;
   const hasApps = Boolean(d.capabilities?.apps);
-  const tabs = PANEL_TABS.filter((t) => (t.id === "apps" ? hasApps : true));
+  const phone = usePhone();
+  const tabs = PANEL_TABS.filter((t) => (t.id === "apps" ? hasApps : t.id === "remote" ? phone && hasRemote : true));
   const active = tabs.find((t) => t.id === tab)?.id ?? "control";
   const keepTab = active === "control" ? undefined : active;
   const now = describeTv(d, media);
@@ -294,6 +311,11 @@ function TvPanel({
   return (
     <aside className="tv-panel" aria-label={d.label || d.name}>
       <div className="tv-panel-head">
+        {phone && (
+          <button type="button" className="ghost step" aria-label="Back to all TVs" onClick={() => go("tvs")}>
+            ‹
+          </button>
+        )}
         <div>
           <h2>{d.label || d.name}</h2>
           <span className="muted">
@@ -302,17 +324,19 @@ function TvPanel({
         </div>
         {prev && (
           <button type="button" className="ghost step" aria-label="Previous TV" onClick={() => go("tvs", prev, ...(keepTab ? [keepTab] : []))}>
-            ‹
+            {phone ? "▲" : "‹"}
           </button>
         )}
         {next && (
           <button type="button" className="ghost step" aria-label="Next TV" onClick={() => go("tvs", next, ...(keepTab ? [keepTab] : []))}>
-            ›
+            {phone ? "▼" : "›"}
           </button>
         )}
-        <button type="button" className="ghost close" aria-label="Close" onClick={() => go("tvs")}>
-          ×
-        </button>
+        {!phone && (
+          <button type="button" className="ghost close" aria-label="Close" onClick={() => go("tvs")}>
+            ×
+          </button>
+        )}
       </div>
       <div className="seg" role="tablist" aria-label="TV controls">
         {tabs.map((t) => (
@@ -377,11 +401,20 @@ function TvPanel({
             </p>
           )}
         </div>
-        {hasRemote && (
+        {hasRemote && !phone && (
           <div className="tv-panel-body tv-control-remote">
             <Remote d={d} keys={d.capabilities!.remoteKeys!} embedded />
           </div>
         )}
+        </div>
+      )}
+
+      {active === "remote" && phone && hasRemote && (
+        <div className="tv-panel-body">
+          <p className={now.warn ? "warn" : "muted"}>
+            On now: <b>{now.text}</b>
+          </p>
+          <Remote d={d} keys={d.capabilities!.remoteKeys!} embedded />
         </div>
       )}
 

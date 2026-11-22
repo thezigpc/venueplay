@@ -288,15 +288,17 @@ button.tv-tile.selected { border-color: var(--primary); }
   .tv-layout.has-panel .tv-main > p, .tv-layout.has-panel .ignored-tvs { font-size: 0.8rem; }
   .tv-layout.has-panel .tv-control .tv-screen.big, .tv-layout.has-panel .tv-control .tv-preview { max-width: 340px; }
 }
-/* A phone: the panel is a sheet over the bottom of the TV wall (box 0.27.1). */
+/* Box 0.29.2, a phone: the TVs are a list; tapping one opens its own page (the list is hidden until Back). */
 @media (max-width: 760px) {
-  .tv-layout.has-panel .tv-main { padding-bottom: 64vh; padding-bottom: 64dvh; }
-  .tv-layout.has-panel .tv-panel {
-    position: fixed; z-index: 10; left: 0; right: 0; top: auto; bottom: calc(66px + env(safe-area-inset-bottom)); width: auto;
-    max-height: calc(100dvh - 140px); border-radius: 18px 18px 0 0; padding-bottom: 18px;
-    border-top: 1px solid #343d70; box-shadow: 0 -12px 32px rgba(5, 8, 20, 0.6);
-  }
-  .tv-layout.has-panel .tv-panel-head { position: sticky; top: 0; margin: -18px -18px 0; padding: 14px 18px 8px; background: var(--surface); z-index: 1; }
+  .tv-wall { grid-template-columns: 1fr; gap: 8px; }
+  button.tv-tile { display: grid; grid-template-columns: 96px 1fr; column-gap: 10px; row-gap: 2px; align-items: center; padding: 8px; }
+  button.tv-tile > .tv-screen, button.tv-tile > .tv-preview { grid-row: span 2; font-size: 0.68rem; padding: 3px; }
+  button.tv-tile > b { align-self: end; }
+  button.tv-tile > .tv-sub { align-self: start; font-size: 0.82rem; }
+  .tv-layout.has-panel .tv-main { display: none; }
+  .tv-layout.has-panel .tv-panel { position: static; width: 100%; max-height: none; overflow: visible; background: none; padding: 0; border-radius: 0; }
+  .tv-layout.has-panel .tv-panel-head { align-items: center; }
+  .tv-layout.has-panel .tv-panel-head .step { font-size: 1.2rem; min-width: 44px; border: 1px solid #343d70; border-radius: 999px; background: var(--surface-2); }
 }
 
 /* Tonight */
