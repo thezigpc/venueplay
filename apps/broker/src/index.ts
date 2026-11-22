@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createBrokerApp } from "./app.js";
 import { MockDriver } from "./drivers/mock.js";
 import { AirplayDriver } from "./drivers/airplay/index.js";
-import { RokuDriver } from "./drivers/roku/index.js";
+import { RokuDriver, type RokuAirplayAuth } from "./drivers/roku/index.js";
 import { LocalScreenDriver } from "./drivers/local/index.js";
 import { hardwareDecoders, LocalVideo } from "./drivers/local/video.js";
 import { boxOutputs } from "./audio/boxOutputs.js";
@@ -65,7 +65,22 @@ const airplay = airplayReady
 const streams: StreamService = airplay ?? new PendingStreamService();
 const drivers = new Map<string, DisplayDriver>();
 const enabled = (process.env.DRIVERS ?? "roku,airplay,vizio,appletv").split(",").map((s) => s.trim());
-const roku = enabled.includes("roku") ? new RokuDriver(streams) : undefined;
+// Apple TVs: AirPlay for content, Companion (pyatv, PIN-paired) for remote, apps, power, typing.
+const atvPython = process.env.ATV_PYTHON ?? "/opt/pyatv/bin/python";
+const atvScript = process.env.ATV_HELPER ?? "/usr/local/lib/bargames/atv-helper.py";
+const atvHelper = (enabled.includes("appletv") || enabled.includes("roku")) && existsSync(atvPython) && existsSync(atvScript) ? new AtvHelper({ python: atvPython, script: atvScript, log }) : undefined;
+// Box 0.29.7: Apple TV video runs in its own helper on our pyatv build (apps/broker/atv/vendor/README.md).
+const atvVideoPython = process.env.ATV_VIDEO_PYTHON ?? "/opt/pyatv-video/bin/python";
+const atvVideoHelper = atvHelper && existsSync(atvVideoPython) ? new AtvHelper({ python: atvVideoPython, script: atvScript, log }) : undefined;
+// Box 0.29.8: Rokus without a built-in player for links get movies over AirPlay (pyatv).
+const roku = enabled.includes("roku")
+  ? new RokuDriver(streams, fetch, {
+      atv: atvHelper?.call,
+      video: (atvVideoHelper ?? atvHelper)?.call,
+      auth: new JsonStore<RokuAirplayAuth>(path.join(dataDir, "roku-airplay.json"), { airplay: {} }, 0o600),
+      clientName: () => process.env.BOX_NAME ?? "Bar Games box",
+    })
+  : undefined;
 if (roku) drivers.set(roku.id, roku);
 const airplayDriver = enabled.includes("airplay") ? new AirplayDriver(streams) : undefined;
 if (airplayDriver) drivers.set(airplayDriver.id, airplayDriver);
@@ -74,14 +89,7 @@ const vizio = enabled.includes("vizio")
   ? new VizioDriver(streams, new JsonStore<VizioAuth>(path.join(dataDir, "vizio-auth.json"), { clientId: "", tokens: {} }, 0o600), { clientName: () => process.env.BOX_NAME ?? "Bar Games box" })
   : undefined;
 if (vizio) drivers.set(vizio.id, vizio);
-// Apple TVs: AirPlay for content, Companion (pyatv, PIN-paired) for remote, apps, power, typing.
-const atvPython = process.env.ATV_PYTHON ?? "/opt/pyatv/bin/python";
-const atvScript = process.env.ATV_HELPER ?? "/usr/local/lib/bargames/atv-helper.py";
-const atvHelper = enabled.includes("appletv") && existsSync(atvPython) && existsSync(atvScript) ? new AtvHelper({ python: atvPython, script: atvScript, log }) : undefined;
-// Box 0.29.7: Apple TV video runs in its own helper on our pyatv build (apps/broker/atv/vendor/README.md).
-const atvVideoPython = process.env.ATV_VIDEO_PYTHON ?? "/opt/pyatv-video/bin/python";
-const atvVideoHelper = atvHelper && existsSync(atvVideoPython) ? new AtvHelper({ python: atvVideoPython, script: atvScript, log }) : undefined;
-const appletv = atvHelper
+const appletv = atvHelper && enabled.includes("appletv")
   ? new AppleTvDriver(streams, new JsonStore<AppleTvAuth>(path.join(dataDir, "appletv-auth.json"), { credentials: {} }, 0o600), { call: atvHelper.call, videoCall: atvVideoHelper?.call, clientName: () => process.env.BOX_NAME ?? "Bar Games box" })
   : undefined;
 if (appletv) drivers.set(appletv.id, appletv);

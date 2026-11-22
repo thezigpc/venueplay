@@ -474,6 +474,7 @@ function TvPanel({
           </div>
           <StartupChoice d={d} rule={startup} games={games} run={run} busy={busy} media={media.filter((p) => p.targets.some((t) => t.displayId === d.id))} />
           {d.capabilities?.control && <ControlPairing d={d} paired={d.capabilities.control.paired} reload={reload} />}
+          {d.capabilities?.moviePairing && <ControlPairing d={d} paired={d.capabilities.moviePairing.paired} reload={reload} movies />}
           {canPair && <Pairing d={d} needsCode={Boolean(stream?.needsCode)} reload={reload} />}
           <div className="forget-tv">
             <h3 className="sub-head">Ignore this TV</h3>
@@ -800,7 +801,11 @@ export function inputLabel(input: string, driver?: string): string {
   return names[input.toLowerCase()] ?? input;
 }
 
-function controlText(driver: string, paired: boolean): string {
+function controlText(driver: string, paired: boolean, movies = false): string {
+  if (movies)
+    return paired
+      ? "Paired: apps can hand this TV movies over AirPlay (its Roku OS has no built-in player for links). Pair again if movies ask for it."
+      : "This TV's Roku OS has no built-in player for links, so movies go over AirPlay. If a movie asks for pairing, pair once here: someone needs to see the TV, it shows a PIN. On the Roku, Settings > Apple AirPlay and HomeKit must have AirPlay on.";
   if (driver === "appletv")
     return paired
       ? "Paired: the box can use this Apple TV's remote, open its apps, type into search boxes, and wake it or put it to sleep. To let apps hand it movies, pair again and enter both PINs. Remove the pairing on the Apple TV in Settings > Remotes and Devices."
@@ -814,7 +819,7 @@ function controlText(driver: string, paired: boolean): string {
  * TV control (Vizio, Apple TV): Pair → the TV shows a 4-digit PIN → enter it here. Needed once per TV;
  * after that the box can switch it on and off, change its input and use its remote.
  */
-function ControlPairing({ d, paired, reload }: { d: Display; paired: boolean; reload: () => unknown }) {
+function ControlPairing({ d, paired, reload, movies = false }: { d: Display; paired: boolean; reload: () => unknown; movies?: boolean }) {
   const [phase, setPhase] = useState<"idle" | "starting" | "code" | "sending">("idle");
   const [code, setCode] = useState("");
   const [msg, setMsg] = useState("");
@@ -847,8 +852,8 @@ function ControlPairing({ d, paired, reload }: { d: Display; paired: boolean; re
   };
   return (
     <div className="pairing">
-      <h3 className="sub-head">TV control</h3>
-      <p className="muted small-print">{controlText(d.driver, paired)}</p>
+      <h3 className="sub-head">{movies ? "Movies over AirPlay" : "TV control"}</h3>
+      <p className="muted small-print">{controlText(d.driver, paired, movies)}</p>
       {phase === "code" || phase === "sending" ? (
         <div className="buttons">
           <input inputMode="numeric" autoComplete="one-time-code" placeholder="PIN on the TV" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))} />

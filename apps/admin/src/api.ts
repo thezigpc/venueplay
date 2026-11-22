@@ -286,7 +286,7 @@ export interface Display {
   model?: string;
   isTv?: boolean;
   delivery?: string;
-  capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[]; apps?: boolean; text?: boolean; tvChannels?: boolean; control?: { paired: boolean }; touch?: { devices: string[] } };
+  capabilities?: { delivery: string[]; power: boolean; inputs: string[]; remoteKeys?: string[]; apps?: boolean; text?: boolean; tvChannels?: boolean; control?: { paired: boolean }; moviePairing?: { paired: boolean }; touch?: { devices: string[] } };
   /** Box 0.21.0: a plugged-in screen people may touch. */
   touch?: boolean;
   streamSettings?: StreamSettings;

@@ -81,6 +81,8 @@ export interface Capabilities {
   tvChannels?: boolean;
   /** TV control (power, input, remote) needs a one-time PIN pairing (Vizio, Apple TV). */
   control?: { paired: boolean };
+  /** Box 0.29.8, Rokus: movies over AirPlay, paired once (Setup > Movies over AirPlay). */
+  moviePairing?: { paired: boolean };
   /** Box 0.21.0, plugged-in screens: touch can be switched on; `devices`: touchscreens the box sees. */
   touch?: { devices: string[] };
 }

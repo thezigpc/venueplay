@@ -6,10 +6,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { parseMediaPlayer } from "./drivers/roku/ecp.js";
-import { RokuDriver, rokuFormat } from "./drivers/roku/index.js";
+import { AtvError } from "./drivers/appletv/helper.js";
+import { RokuDriver, rokuFormat, type RokuAirplayAuth } from "./drivers/roku/index.js";
 import { DisplayRegistry, type DisplayRecord } from "./registry.js";
 import { PendingStreamService } from "./streams.js";
-import { checkVideo, redactUrls } from "./types.js";
+import { checkVideo, redactUrls, type DisplayDevice } from "./types.js";
 
 const LINK = "http://media.example:8096/Videos/abc/stream?static=true&api_key=SECRET";
 
@@ -306,4 +307,60 @@ test("video 0.28.2: a screen plugged into the box plays links in mpv (in its cag
     await v.close();
     delete process.env.FAKE_MPV_LOG;
   }
+});
+
+test("video 0.29.8: a Roku without a built-in player (404) gets the movie over AirPlay; pairing; controls; nothing echoed", async () => {
+  const ecp: string[] = [];
+  const doFetch = (async (input: string | URL | Request) => {
+    const u = new URL(String(input));
+    ecp.push(u.pathname);
+    if (u.pathname === "/input/15985") return new Response("", { status: 404 });
+    return new Response("");
+  }) as typeof fetch;
+  const dir = mkdtempSync(path.join(tmpdir(), "video-"));
+  const calls: { op: string; args: Record<string, unknown> }[] = [];
+  let paired = false;
+  const fake = (helper: string) => async (op: string, args: Record<string, unknown> = {}) => {
+    calls.push({ op: `${helper}:${op}`, args });
+    if (op === "pair_begin") return { pin: true };
+    if (op === "pair_finish") {
+      if (args.pin !== "1234") throw new AtvError("that PIN didn't work", "pin");
+      paired = true;
+      return { credentials: "roku-air" };
+    }
+    if (op === "video_play" && args.airplay !== "roku-air") throw new AtvError("the Apple TV wants the box paired for AirPlay video", "needs-pairing");
+    if (op === "video_status") return { state: "playing", position: 12, duration: 5400 };
+    return { ok: true };
+  };
+  const auth = new JsonStore<RokuAirplayAuth>(path.join(dir, "roku-airplay.json"), { airplay: {} }, 0o600);
+  const roku = new RokuDriver(new PendingStreamService(), doFetch, { atv: fake("main"), video: fake("video"), auth });
+  const dev = { id: "roku:T1", driver: "roku", name: "Bar TV", address: "http://192.0.2.71:8060", isTv: true, meta: { supportsAirplay: true } } as DisplayDevice;
+
+  assert.deepEqual((await roku.capabilities(dev)).moviePairing, { paired: false });
+  const first = await roku.playVideo(dev, { url: LINK, title: "A movie", mime: "video/mp4" });
+  assert.equal(first.reason, "needs-pairing");
+  assert.match(first.message!, /Movies over AirPlay/);
+  assert.doesNotMatch(JSON.stringify(first), /SECRET/);
+  assert.equal(ecp.filter((p) => p === "/input/15985").length, 1);
+
+  assert.deepEqual(await roku.pairControl(dev), { ok: false, needsCode: true, message: "Enter the PIN the TV is showing." });
+  assert.equal((await roku.pairControl(dev, "9999")).needsCode, true);
+  assert.equal((await roku.pairControl(dev, "1234")).ok, true);
+  assert.ok(paired);
+  assert.deepEqual((await roku.capabilities(dev)).moviePairing, { paired: true });
+  assert.ok(calls.filter((c) => c.op.endsWith(":pair_begin") || c.op.endsWith(":pair_finish")).every((c) => c.op.startsWith("main:")), "pairing on stock pyatv");
+  assert.equal(calls.find((c) => c.op === "main:pair_begin")!.args.address, "192.0.2.71");
+
+  assert.deepEqual(await roku.playVideo(dev, { url: LINK, title: "A movie", mime: "video/mp4", startAt: 95 }), { ok: true });
+  assert.equal(ecp.filter((p) => p === "/input/15985").length, 1, "no second try of the missing player");
+  const play = calls.filter((c) => c.op === "video:video_play").pop()!;
+  assert.deepEqual([play.args.address, play.args.url, play.args.startAt, play.args.airplay], ["192.0.2.71", LINK, 95, "roku-air"]);
+
+  assert.deepEqual(await roku.videoStatus(dev), { state: "playing", position: 12, duration: 5400 });
+  assert.deepEqual(await roku.videoControl(dev, { seek: 300 }), { ok: true }, "seek works over AirPlay");
+  assert.deepEqual(await roku.videoControl(dev, "pause"), { ok: true });
+  assert.deepEqual(await roku.videoControl(dev, "stop"), { ok: true });
+  assert.deepEqual(calls.filter((c) => c.op === "video:video_control").map((c) => c.args.action), ["seek", "pause", "stop"]);
+  assert.ok(!ecp.includes("/keypress/Home"), "stop goes over AirPlay, not ECP");
+  assert.equal(readFileSync(path.join(dir, "roku-airplay.json"), "utf8").includes("SECRET"), false);
 });

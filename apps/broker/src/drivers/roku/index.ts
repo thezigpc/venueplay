@@ -1,4 +1,6 @@
 import { isSeek, redactUrls, type Capabilities, type DeliveryMethod, type DisplayContent, type DisplayDevice, type DisplayDriver, type Health, type ShowResult, type StreamService, type StreamState, type VideoAction, type VideoInfo, type VideoRequest, type VideoResult, type VideoStatus } from "../../types.js";
+import { AtvError, type AtvCall } from "../appletv/helper.js";
+import type { JsonStore } from "@bargames/common";
 import { RokuEcp, type RokuPlayer } from "./ecp.js";
 import { ssdpSearch } from "./ssdp.js";
 
@@ -14,13 +16,77 @@ export const ROKU_APPS: Record<string, string> = { youtube: "837" };
 export const DIAL_NAMES: Record<string, string> = { youtube: "YouTube" };
 export const ROKU_TV_KEYS = ["VolumeUp", "VolumeDown", "VolumeMute", "ChannelUp", "ChannelDown"] as const;
 
+/** Box 0.29.8: AirPlay pairings for movies, by display id (roku-airplay.json, 0600). */
+export interface RokuAirplayAuth {
+  airplay: Record<string, string>;
+}
+
 export class RokuDriver implements DisplayDriver {
   readonly id = "roku";
+  /** Playing a movie over AirPlay right now (not Roku's own player). */
+  private readonly viaAirplay = new Set<string>();
+  /** Answered 404 for Roku's own player: straight to AirPlay next time. */
+  private readonly noPlayer = new Set<string>();
 
   constructor(
     private readonly streams: StreamService,
     private readonly doFetch: typeof fetch = fetch,
+    /**
+     * Box 0.29.8: movies over AirPlay when the Roku has no built-in player for links (Roku OS 15+
+     * answers /input/15985 with 404). `atv` pairs (stock pyatv), `video` plays (our pyatv build).
+     */
+    private readonly air: { atv?: AtvCall; video?: AtvCall; auth?: JsonStore<RokuAirplayAuth>; clientName?: () => string } = {},
   ) {}
+
+  private canAirplay(device: DisplayDevice): boolean {
+    return Boolean(this.air.video && this.air.auth) && device.meta?.supportsAirplay !== false;
+  }
+
+  private airTarget(device: DisplayDevice) {
+    return { address: new URL(device.address).hostname };
+  }
+
+  private airCreds(device: DisplayDevice): string | undefined {
+    return this.air.auth?.get().airplay[device.id];
+  }
+
+  private airCall(device: DisplayDevice, op: string, args: Record<string, unknown>, timeoutMs?: number) {
+    return this.air.video!(op, { ...this.airTarget(device), airplay: this.airCreds(device), ...args }, timeoutMs);
+  }
+
+  private airFailure(device: DisplayDevice, err: unknown): VideoResult {
+    if (err instanceof AtvError) {
+      if (err.code === "needs-pairing" || err.code === "auth")
+        return { ok: false, reason: "needs-pairing", message: `${device.name} plays movies over AirPlay and wants the box paired once: TVs > ${device.name} > Setup > Movies over AirPlay (the TV shows a PIN)` };
+      if (err.code === "offline") return { ok: false, reason: "offline", message: `${device.name} isn't answering over AirPlay` };
+      if (err.code === "unsupported") return { ok: false, reason: "unsupported", message: `${device.name}: ${redactUrls(err.message)}` };
+      return { ok: false, reason: "error", message: `${device.name}: ${redactUrls(err.message)}` };
+    }
+    return { ok: false, reason: "error", message: `${device.name}: ${redactUrls(String(err instanceof Error ? err.message : err))}` };
+  }
+
+  /** Box 0.29.8: AirPlay pairing for movies (Setup > Movies over AirPlay). The Roku shows a PIN. */
+  async pairControl(device: DisplayDevice, pin?: string): Promise<ShowResult> {
+    if (!this.air.atv || !this.canAirplay(device)) return { ok: false, message: `${device.name} doesn't need pairing` };
+    const name = this.air.clientName?.() ?? "Bar Games box";
+    const done = async (r: { credentials: string }): Promise<ShowResult> => {
+      await this.air.auth!.update((s) => {
+        s.airplay[device.id] = r.credentials;
+      });
+      return { ok: true, message: `Paired. The box can hand ${device.name} movies over AirPlay.` };
+    };
+    try {
+      if (!pin) {
+        const r = (await this.air.atv("pair_begin", { ...this.airTarget(device), name, protocol: "airplay" })) as { pin?: boolean };
+        if (r.pin === false) return await done((await this.air.atv("pair_finish", this.airTarget(device))) as { credentials: string });
+        return { ok: false, needsCode: true, message: "Enter the PIN the TV is showing." };
+      }
+      return await done((await this.air.atv("pair_finish", { ...this.airTarget(device), pin })) as { credentials: string });
+    } catch (err) {
+      if (err instanceof AtvError) return { ok: false, needsCode: err.code === "pin", message: `${device.name}: ${redactUrls(err.message)}` };
+      throw err;
+    }
+  }
 
   ecp(device: DisplayDevice): RokuEcp {
     return new RokuEcp(device.address, this.doFetch);
@@ -70,6 +136,7 @@ export class RokuDriver implements DisplayDriver {
       apps: true,
       text: true,
       tvChannels: Boolean(device.isTv),
+      ...(this.canAirplay(device) ? { moviePairing: { paired: Boolean(this.airCreds(device)) } } : {}),
     };
   }
 
@@ -164,16 +231,40 @@ export class RokuDriver implements DisplayDriver {
 
   async playVideo(device: DisplayDevice, v: VideoRequest): Promise<VideoResult> {
     if (this.streams.state?.(device.id)) await this.streams.stopFor(device.id).catch(() => undefined);
-    try {
-      await this.ecp(device).playUrl({ url: v.url, title: v.title, poster: v.poster, format: rokuFormat(v.mime, v.url) });
-    } catch (err) {
-      return rokuFailure(device, err);
+    if (this.viaAirplay.has(device.id)) await this.airCall(device, "video_control", { action: "stop" }).catch(() => undefined);
+    this.viaAirplay.delete(device.id);
+    if (!(this.noPlayer.has(device.id) && this.canAirplay(device))) {
+      try {
+        await this.ecp(device).playUrl({ url: v.url, title: v.title, poster: v.poster, format: rokuFormat(v.mime, v.url) });
+        // The built-in player can't start part-way through or seek.
+        return v.startAt ? { ok: true, message: `${device.name} starts from the beginning (a Roku can't start part-way through)` } : { ok: true };
+      } catch (err) {
+        const noPlayer = /no built-in video player/.test(err instanceof Error ? err.message : String(err));
+        if (!(noPlayer && this.canAirplay(device))) return rokuFailure(device, err);
+        this.noPlayer.add(device.id);
+      }
     }
-    // The built-in player can't start part-way through or seek.
-    return v.startAt ? { ok: true, message: `${device.name} starts from the beginning (a Roku can't start part-way through)` } : { ok: true };
+    // Box 0.29.8: no built-in player (Roku OS 15+): the Roku's AirPlay plays the link instead.
+    try {
+      await this.airCall(device, "video_play", { url: v.url, ...(v.startAt ? { startAt: v.startAt } : {}) }, 40_000);
+      this.viaAirplay.add(device.id);
+      return { ok: true };
+    } catch (err) {
+      return this.airFailure(device, err);
+    }
   }
 
   async videoControl(device: DisplayDevice, action: VideoAction): Promise<VideoResult> {
+    if (this.viaAirplay.has(device.id)) {
+      if (typeof action === "object" && !isSeek(action)) return { ok: false, reason: "unsupported", message: `${device.name} can't switch tracks by itself` };
+      try {
+        await this.airCall(device, "video_control", typeof action === "object" ? { action: "seek", position: action.seek } : { action });
+        if (action === "stop") this.viaAirplay.delete(device.id);
+        return { ok: true };
+      } catch (err) {
+        return this.airFailure(device, err);
+      }
+    }
     try {
       const ecp = this.ecp(device);
       if (typeof action === "object") return { ok: false, reason: "unsupported", message: isSeek(action) ? `${device.name} can't seek (a Roku's built-in player can't); use pause and resume` : `${device.name} can't switch tracks by itself` };
@@ -193,6 +284,15 @@ export class RokuDriver implements DisplayDriver {
   }
 
   async videoStatus(device: DisplayDevice): Promise<VideoStatus> {
+    if (this.viaAirplay.has(device.id)) {
+      try {
+        const st = (await this.airCall(device, "video_status", {})) as VideoStatus;
+        if (st.state === "stopped" || st.state === "error") this.viaAirplay.delete(device.id);
+        return st;
+      } catch (err) {
+        return { state: "error", message: this.airFailure(device, err).message };
+      }
+    }
     let p: RokuPlayer;
     try {
       p = await this.ecp(device).mediaPlayer();

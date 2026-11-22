@@ -77,6 +77,11 @@ class Helper:
         self.locks = {}
         self.videos = {}  # identifier -> {"atv", "task", "error"} (box 0.27.0)
 
+    @staticmethod
+    def key(req):
+        # Box 0.29.8: an AirPlay-only TV (a Roku) has no Apple TV identifier: its address is the key.
+        return str(req.get("identifier") or req["address"])
+
     def lock(self, identifier):
         return self.locks.setdefault(identifier, asyncio.Lock())
 
@@ -109,11 +114,11 @@ class Helper:
         return out
 
     async def pair_begin(self, req):
-        ident = req["identifier"]
+        ident = self.key(req)
         old = self.pairings.pop(ident, None)
         if old:
             await old[0].close()
-        conf = await self.find(req["address"], ident)
+        conf = await self.find(req["address"], req.get("identifier"))
         # Box 0.27.0: "airplay" pairs AirPlay (for handing the Apple TV video links).
         protocol = Protocol.AirPlay if req.get("protocol") == "airplay" else Protocol.Companion
         handler = await pyatv.pair(conf, protocol, self.loop, name=req.get("name") or "Bar Games box")
@@ -122,12 +127,13 @@ class Helper:
         return {"pin": bool(handler.device_provides_pin)}
 
     async def pair_finish(self, req):
-        ident = req["identifier"]
+        ident = self.key(req)
         entry = self.pairings.get(ident)
         if not entry:
-            raise Fail("error", "start pairing first: the Apple TV shows a new PIN")
+            raise Fail("error", "start pairing first: the TV shows a new PIN")
         handler = entry[0]
-        handler.pin(int(req["pin"]))
+        if req.get("pin") is not None:  # a TV that shows no PIN pairs without one
+            handler.pin(int(req["pin"]))
         try:
             await handler.finish()
         except exceptions.PairingError as err:
@@ -233,9 +239,9 @@ class Helper:
     # ---- video (box 0.27.0)
 
     async def video_open(self, req):
-        ident = req["identifier"]
+        ident = self.key(req)
         await self.video_close(ident)
-        conf = await self.find(req["address"], ident)
+        conf = await self.find(req["address"], req.get("identifier"))
         if req.get("credentials"):
             conf.set_credentials(Protocol.Companion, req["credentials"])
         if req.get("airplay"):
@@ -263,7 +269,7 @@ class Helper:
             pass
 
     async def video_play(self, req):
-        ident = req["identifier"]
+        ident = self.key(req)
         url = str(req.get("url", ""))
         if not url.startswith(("http://", "https://")):
             raise Fail("unsupported", "only http and https video links")
@@ -311,7 +317,7 @@ class Helper:
         return {"ok": True}
 
     async def video_status(self, req):
-        v = self.videos.get(req["identifier"])
+        v = self.videos.get(self.key(req))
         if not v:
             return {"state": "stopped"}
         out = {}
@@ -337,7 +343,7 @@ class Helper:
         return out
 
     async def video_control(self, req):
-        ident = req["identifier"]
+        ident = self.key(req)
         action = req.get("action")
         v = self.videos.get(ident)
         if action == "stop":
