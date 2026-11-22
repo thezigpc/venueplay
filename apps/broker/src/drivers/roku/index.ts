@@ -92,7 +92,8 @@ export class RokuDriver implements DisplayDriver {
     } catch (err) {
       const msg = String(err instanceof Error ? err.message : err);
       if (/Permissive|403/.test(msg)) return { ok: false, reason: "ecp-blocked", message: `${device.name} refused: on the Roku, set Settings → System → Advanced system settings → Control by mobile apps → Network access to Permissive` };
-      if (/abort|timeout|ECONNREFUSED|EHOSTUNREACH|fetch failed/i.test(msg)) return { ok: false, reason: "offline", message: `${device.name} isn't answering` };
+      if (/no built-in video player/.test(msg)) return { ok: false, reason: "unsupported", message: `${device.name} has no built-in video player for links (its Roku OS answers 404). Installing "Roku Media Player" from the Roku channel store may add it; other TVs can play this` };
+  if (/abort|timeout|ECONNREFUSED|EHOSTUNREACH|fetch failed/i.test(msg)) return { ok: false, reason: "offline", message: `${device.name} isn't answering` };
       return { ok: false, reason: "error", message: msg };
     }
   }
@@ -292,6 +293,7 @@ export function rokuFormat(mime?: string, url?: string): string {
 function rokuFailure(device: DisplayDevice, err: unknown): VideoResult {
   const msg = redactUrls(String(err instanceof Error ? err.message : err));
   if (/Permissive|403/.test(msg)) return { ok: false, reason: "not-allowed", message: `${device.name} refused: on the Roku, set Settings → System → Advanced system settings → Control by mobile apps → Network access to Permissive` };
+  if (/no built-in video player/.test(msg)) return { ok: false, reason: "unsupported", message: `${device.name} has no built-in video player for links (its Roku OS answers 404). Installing "Roku Media Player" from the Roku channel store may add it; other TVs can play this` };
   if (/abort|timeout|ECONNREFUSED|EHOSTUNREACH|fetch failed|didn't answer/i.test(msg)) return { ok: false, reason: "offline", message: `${device.name} isn't answering` };
   return { ok: false, reason: "error", message: `${device.name}: ${msg}` };
 }

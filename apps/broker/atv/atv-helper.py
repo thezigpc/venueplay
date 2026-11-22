@@ -245,6 +245,7 @@ class Helper:
         try:
             atv = await pyatv.connect(conf, self.loop)
         except exceptions.AuthenticationError as err:
+            log("video connect refused:", str(err)[:120])
             raise Fail("needs-pairing", f"the Apple TV wants the box paired for AirPlay video ({err})")
         v = {"atv": atv, "task": None, "error": None}
         self.videos[ident] = v
@@ -278,8 +279,19 @@ class Helper:
                         await v["atv"].stream.play_url(url)
                 except asyncio.CancelledError:
                     raise
-                except exceptions.AuthenticationError:
-                    v["error"] = "needs-pairing"
+                except exceptions.AuthenticationError as err:
+                    # pyatv 0.18 raises AuthenticationError("status code: N") for ANY 4xx/5xx
+                    # answer to /play (its own TODO). Only 401/403/470 are about pairing; the
+                    # rest mean the Apple TV turned down this video (format, link, server).
+                    msg = str(err)
+                    safe = msg[:120] if "://" not in msg else type(err).__name__
+                    code = msg[len("status code: "):] if msg.startswith("status code: ") else ""
+                    if code and code not in ("401", "403", "470"):
+                        v["error"] = f"refused the video, AirPlay status {code}"
+                    else:
+                        v["error"] = "needs-pairing"
+                        v["detail"] = safe
+                    log("video play refused:", safe)
                 except Exception as err:  # noqa: BLE001 - reported through video_status
                     # Never the URL: the error's type, and its text only when it holds no link.
                     msg = str(err)
@@ -293,7 +305,8 @@ class Helper:
                 err = v["error"]
                 await self.video_close(ident)
                 if err == "needs-pairing":
-                    raise Fail("needs-pairing", "the Apple TV wants the box paired for AirPlay video")
+                    detail = v.get("detail")
+                    raise Fail("needs-pairing", "the Apple TV wants the box paired for AirPlay video" + (f" ({detail})" if detail else ""))
                 raise Fail("error", f"the Apple TV couldn't play it ({err})")
         return {"ok": True}
 

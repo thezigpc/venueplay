@@ -758,8 +758,9 @@ export function createApp(d: AppDeps) {
       const game = videoAuth(req);
       const { displayId, url, mime, title, poster, startAt, tracks } = (req.body ?? {}) as Record<string, unknown>;
       const id = tvId(displayId);
-      const r = (await videoBroker(id, "POST", "", { url, mime, title, poster, startAt, tracks, provider: game.id })) as { ok?: boolean; reason?: string };
-      d.log.info("video", "play", { game: game.id, display: id, title: typeof title === "string" ? title.slice(0, 80) : undefined, ok: r.ok, reason: r.reason });
+      const r = (await videoBroker(id, "POST", "", { url, mime, title, poster, startAt, tracks, provider: game.id })) as { ok?: boolean; reason?: string; message?: string };
+      // The broker's message has its links redacted already: it says why a TV refused.
+      d.log.info("video", "play", { game: game.id, display: id, title: typeof title === "string" ? title.slice(0, 80) : undefined, ok: r.ok, reason: r.reason, ...(r.ok ? {} : { message: typeof r.message === "string" ? r.message.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<link>").slice(0, 200) : undefined }) });
       res.json(r);
     }),
   );

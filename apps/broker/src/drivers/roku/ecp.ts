@@ -147,6 +147,8 @@ export class RokuEcp {
       throw new Error(`Roku didn't answer (${err instanceof Error ? err.name : "error"})`);
     }
     if (res.status === 403) throw new Error("Roku refused: enable Control by mobile apps → Permissive");
+    // Box 0.29.6: some Roku TVs (seen on a TCL with Roku OS 15.3) answer 404: no built-in player.
+    if (res.status === 404) throw new Error("no built-in video player (ECP /input/15985: 404)");
     if (!res.ok) throw new Error(`Roku refused the video: HTTP ${res.status}`);
   }
 
