@@ -21,6 +21,7 @@ button,.btn{display:block;width:100%;padding:14px;border:0;border-radius:10px;ba
 .entry{background:var(--venue-surface);border-radius:var(--venue-radius,12px);border-left:6px solid var(--venue-accent);overflow:hidden}.entry .game{border-left:0;background:none}
 .rooms{list-style:none;margin:0;padding:0 16px 12px;text-align:left}.rooms li{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid rgba(127,127,127,.25)}
 .rooms .code{font-weight:700;letter-spacing:.08em}.rooms .who{opacity:.75;flex:1}.rooms a{padding:6px 14px;border-radius:8px;background:var(--venue-primary);color:#111;font-weight:700;text-decoration:none}
+.staff-bar{text-align:right;margin:0}.staff-bar a{display:inline-block;padding:10px 16px;border-radius:999px;border:1px solid currentColor;color:inherit;text-decoration:none;font-weight:600;opacity:.85}
 .modules{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:12px 0}.module{background:var(--venue-primary);color:var(--venue-on-primary,#111);font-weight:700;text-decoration:none;border-radius:999px;padding:10px 20px}
 .news{background:var(--venue-primary);color:var(--venue-on-primary,#111);font-weight:700;border-radius:var(--venue-radius,12px);padding:12px 16px;margin:12px 0}
 </style></head><body><main>${logo}${body}</main></body></html>`;
@@ -68,7 +69,8 @@ function hubRooms(g: HubGame): string {
   return `<ul class="rooms" aria-label="Open rooms">${li}</ul>`;
 }
 
-export function hubPage(venue: VenueInfo | undefined, games: HubGame[]): string {
+/** Box 0.29.5: `staffAdminUrl`: the visitor is signed-in staff; show them a way back to the box admin. */
+export function hubPage(venue: VenueInfo | undefined, games: HubGame[], staffAdminUrl?: string): string {
   const isApp = (g: HubGame) => g.kind === "app" || g.kind === "display";
   const live = games.filter((g) => g.enabled && !isApp(g));
   const modules = games.filter((g) => g.enabled && isApp(g));
@@ -94,7 +96,7 @@ export function hubPage(venue: VenueInfo | undefined, games: HubGame[]): string 
   return page(
     venue,
     venue?.name ?? "Games",
-    `<h1>${esc(venue?.name ?? "Games")}</h1>${news ? `<div class="news" role="status">${esc(news.text)}</div>` : ""}${countdown}${moduleLinks}<p>Pick a game to start a room, or join one that's open.</p>${list}${board}`,
+    `${staffAdminUrl ? `<p class="staff-bar"><a href="${esc(staffAdminUrl)}">Box admin</a></p>` : ""}<h1>${esc(venue?.name ?? "Games")}</h1>${news ? `<div class="news" role="status">${esc(news.text)}</div>` : ""}${countdown}${moduleLinks}<p>Pick a game to start a room, or join one that's open.</p>${list}${board}`,
   );
 }
 

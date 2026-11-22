@@ -256,7 +256,8 @@ export function createGateway(d: GatewayDeps) {
         }
         return send(res, matches.length ? 200 : 404, roomLinkPage(cfg.venue, code, matches));
       }
-      return send(res, 200, hubPage(cfg.venue, cfg.hub.games));
+      // Box 0.29.5: staff (the box's staff cookie) also get a link back to the box admin. Guests never see it.
+      return send(res, 200, hubPage(cfg.venue, cfg.hub.games, isStaff(req) ? cfg.adminUrl : undefined));
     }
     if (!route.enabled) return send(res, 503, closedPage(cfg.venue, ctx?.game.displayName ?? "This game", cfg.venue.playUrl));
     if (!route.target) return send(res, 502, simplePage(cfg.venue, "Misconfigured", "No upstream for this address."));

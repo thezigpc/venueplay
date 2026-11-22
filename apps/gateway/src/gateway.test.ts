@@ -207,6 +207,10 @@ test("games list: menus get their own link, not a game card (SDK 0.5.0)", async 
   assert.match(html, /<a class="module" href="https:\/\/menu.example.com">Menu<\/a>/);
   assert.doesNotMatch(html, /class="game" href="https:\/\/menu/);
   assert.match(html, /class="game" href="https:\/\/pool/, "no kind (older core): a game");
+  // Box 0.29.5: staff get a link back to the box admin; guests don't.
+  assert.doesNotMatch(html, /Box admin/);
+  const staff = hubPage({ name: "Kava", theme: DEFAULT_THEME }, [], "https://admin.example.com/");
+  assert.match(staff, /<p class="staff-bar"><a href="https:\/\/admin.example.com\/">Box admin<\/a><\/p>/);
 });
 
 test("staff sign-in: a box-signed link sets the staff cookie; games get the header, never the cookie", async () => {
