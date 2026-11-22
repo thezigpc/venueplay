@@ -180,3 +180,12 @@ test("apple tv 0.29.7: video ops go to the video helper (patched pyatv); pairing
   assert.ok(ops(main.calls).includes("pair_finish"));
   assert.equal(video.calls.find((c) => c.op === "video_play")!.args.airplay, "air-1", "the stored AirPlay pairing goes with it");
 });
+
+test("atv-helper.py: no two Helper methods share a name (0.29.8's key() shadowed the key op and lost video sessions)", () => {
+  const src = readFileSync(new URL("../../../atv/atv-helper.py", import.meta.url), "utf8");
+  const body = src.split(/^class /m).find((c) => c.startsWith("Helper")) ?? "";
+  const names = [...body.matchAll(/^ {4}(?:async )?def (\w+)\(/gm)].map((m) => m[1]);
+  const dupes = names.filter((n, i) => names.indexOf(n) !== i);
+  assert.deepEqual(dupes, []);
+  assert.ok(names.includes("dev_key") && names.includes("key"));
+});

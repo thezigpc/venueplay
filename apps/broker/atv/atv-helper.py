@@ -78,7 +78,8 @@ class Helper:
         self.videos = {}  # identifier -> {"atv", "task", "error"} (box 0.27.0)
 
     @staticmethod
-    def key(req):
+    def dev_key(req):
+        # Not "key": that name is the remote-control key op below (0.29.8 shadowed it).
         # Box 0.29.8: an AirPlay-only TV (a Roku) has no Apple TV identifier: its address is the key.
         return str(req.get("identifier") or req["address"])
 
@@ -114,7 +115,7 @@ class Helper:
         return out
 
     async def pair_begin(self, req):
-        ident = self.key(req)
+        ident = self.dev_key(req)
         old = self.pairings.pop(ident, None)
         if old:
             await old[0].close()
@@ -127,7 +128,7 @@ class Helper:
         return {"pin": bool(handler.device_provides_pin)}
 
     async def pair_finish(self, req):
-        ident = self.key(req)
+        ident = self.dev_key(req)
         entry = self.pairings.get(ident)
         if not entry:
             raise Fail("error", "start pairing first: the TV shows a new PIN")
@@ -239,7 +240,7 @@ class Helper:
     # ---- video (box 0.27.0)
 
     async def video_open(self, req):
-        ident = self.key(req)
+        ident = self.dev_key(req)
         await self.video_close(ident)
         conf = await self.find(req["address"], req.get("identifier"))
         if req.get("credentials"):
@@ -269,7 +270,7 @@ class Helper:
             pass
 
     async def video_play(self, req):
-        ident = self.key(req)
+        ident = self.dev_key(req)
         url = str(req.get("url", ""))
         if not url.startswith(("http://", "https://")):
             raise Fail("unsupported", "only http and https video links")
@@ -317,7 +318,7 @@ class Helper:
         return {"ok": True}
 
     async def video_status(self, req):
-        v = self.videos.get(self.key(req))
+        v = self.videos.get(self.dev_key(req))
         if not v:
             return {"state": "stopped"}
         out = {}
@@ -343,7 +344,7 @@ class Helper:
         return out
 
     async def video_control(self, req):
-        ident = self.key(req)
+        ident = self.dev_key(req)
         action = req.get("action")
         v = self.videos.get(ident)
         if action == "stop":
@@ -353,6 +354,13 @@ class Helper:
                 except Exception:  # noqa: BLE001 - closing the AirPlay session stops it anyway
                     pass
                 await self.video_close(ident)
+            elif req.get("identifier"):
+                # No session here (the helper restarted, or an older bug lost it): still tell the
+                # Apple TV to stop, so "stop" never leaves a movie playing.
+                try:
+                    await self.with_device(req, lambda atv: atv.remote_control.stop())
+                except Exception as ex:  # noqa: BLE001 - nothing was playing is fine too
+                    log("video stop without a session:", type(ex).__name__)
             return {"ok": True}
         if not v or v["task"] is None or v["task"].done():
             raise Fail("error", "nothing is playing")
