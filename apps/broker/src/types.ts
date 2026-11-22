@@ -182,6 +182,8 @@ export interface VideoFormats {
   maxHeight?: number;
   seek: boolean;
   passthrough?: string[];
+  /** Box 0.28.1: "sdr" "hdr10" "hdr10plus" "hlg" "dovi" the device shows correctly. */
+  ranges?: string[];
 }
 
 /** A video for the TV to play itself. `url` and `poster` may carry the media server's key: never log or store them. */

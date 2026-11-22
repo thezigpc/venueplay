@@ -153,7 +153,7 @@ test("video 0.28.0: a Venuebox app with a player gets the link over its channel;
     ws.send(
       JSON.stringify({
         type: "hello", v: 1, token, platform: "android", screens, deliveries: ["native-url"],
-        video: { containers: ["MP4", "mkv", "hls", "bad name!"], video: ["h264", "hevc"], audio: ["aac", "eac3"], maxHeight: 2160, seek: true, passthrough: ["eac3"] },
+        video: { containers: ["MP4", "mkv", "hls", "bad name!"], video: ["h264", "hevc"], audio: ["aac", "eac3"], maxHeight: 2160, seek: true, passthrough: ["eac3"], ranges: ["SDR", "hdr10", "HLG"] },
       }),
     );
     await new Promise((r) => setTimeout(r, 80));
@@ -162,7 +162,7 @@ test("video 0.28.0: a Venuebox app with a player gets the link over its channel;
     assert.deepEqual(views.find((v) => v.id === id)!.video, {
       kind: "venuebox",
       model: "android · Chromecast with Google TV",
-      formats: { containers: ["mp4", "mkv", "hls"], video: ["h264", "hevc"], audio: ["aac", "eac3"], maxHeight: 2160, seek: true, passthrough: ["eac3"] },
+      formats: { containers: ["mp4", "mkv", "hls"], video: ["h264", "hevc"], audio: ["aac", "eac3"], maxHeight: 2160, seek: true, passthrough: ["eac3"], ranges: ["sdr", "hdr10", "hlg"] },
     });
 
     answer = () => ({ ok: true });

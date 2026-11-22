@@ -42,6 +42,11 @@ export interface VideoCaps {
   seek: boolean;
   /** Surround audio passed through to the TV/receiver. */
   passthrough?: string[];
+  /**
+   * Box 0.28.1: picture ranges the device shows correctly, end to end (decoder, display mode
+   * and panel): "sdr" "hdr10" "hdr10plus" "hlg" "dovi". Absent: apps guess (SDR to be safe).
+   */
+  ranges?: string[];
 }
 
 // ---------------------------------------------------------------- client → box
@@ -158,6 +163,8 @@ export function checkVideoCaps(v: unknown): VideoCaps | undefined {
   if (Number.isInteger(h) && h >= 144 && h <= 4320) caps.maxHeight = h;
   const pass = names(o.passthrough);
   if (pass.length) caps.passthrough = pass;
+  const ranges = names(o.ranges);
+  if (ranges.length) caps.ranges = ranges;
   return caps;
 }
 

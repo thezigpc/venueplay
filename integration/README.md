@@ -21,6 +21,12 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.18.1
+
+- `video.formats.ranges` (Venuebox apps, box 0.28.1): picture ranges the device shows
+  correctly, `"sdr" "hdr10" "hdr10plus" "hlg" "dovi"`. Absent: assume SDR. Map to Jellyfin's
+  VideoRangeType (SDR, HDR10, HDR10Plus, HLG, DOVI).
+
 ## What's new in SDK 0.18.0 (video on Venuebox apps)
 
 - **Most modules: nothing to change.**

@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.18.0";
+export const SDK_VERSION = "0.18.1";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -714,11 +714,13 @@ export interface BoxTv {
  * directly, so ask your media server for that or a transcode. Lower-case names, as Jellyfin
  * uses them (containers "mp4" "mkv" "hls"…, video "h264" "hevc"…, audio "aac" "eac3"…).
  * `seek` false: no seek and no start part-way (like a Roku).
+ * SDK 0.18.1: `ranges`, the picture ranges it shows correctly ("sdr" "hdr10" "hdr10plus"
+ * "hlg" "dovi"). Absent: the client didn't say; assume SDR.
  */
 export interface BoxTvVideo {
   kind: "appletv" | "roku" | "venuebox";
   model: string;
-  formats?: { containers: string[]; video: string[]; audio: string[]; maxHeight?: number; seek: boolean; passthrough?: string[] };
+  formats?: { containers: string[]; video: string[]; audio: string[]; maxHeight?: number; seek: boolean; passthrough?: string[]; ranges?: string[] };
 }
 
 /** SDK 0.17.0: a video link for a TV to play itself (bg.playVideo). The TV fetches `url` and `poster` straight from their server. */

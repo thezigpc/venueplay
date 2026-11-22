@@ -319,7 +319,7 @@ export function mockBox(o: MockBoxOptions) {
     "fake-den": {
       kind: "venuebox",
       model: "android · Chromecast with Google TV (4K)",
-      formats: { containers: ["mp4", "mkv", "mov", "webm", "ts", "hls"], video: ["h264", "hevc", "vp9", "av1"], audio: ["aac", "mp3", "ac3", "eac3", "opus", "flac"], maxHeight: 2160, seek: true, passthrough: ["ac3", "eac3"] },
+      formats: { containers: ["mp4", "mkv", "mov", "webm", "ts", "hls"], video: ["h264", "hevc", "vp9", "av1"], audio: ["aac", "mp3", "ac3", "eac3", "opus", "flac"], maxHeight: 2160, seek: true, passthrough: ["ac3", "eac3"], ranges: ["sdr", "hdr10", "hlg", "dovi"] },
     },
   };
   /** SDK 0.18.0: TVs only video apps see (a Venuebox app with a video player). */

@@ -163,7 +163,10 @@ optional: a client that doesn't declare it keeps working, and the box never send
   Only list what the device plays **without** dropping frames (check the decoders:
   Android `MediaCodecList`, hardware HEVC/AV1 only). `maxHeight` 2160 for 4K, 1080 otherwise.
   `seek: true` when it can jump and start part-way. `passthrough`: surround formats sent to
-  the TV/receiver as-is. Apps choose direct play or a transcode from this, so be accurate.
+  the TV/receiver as-is. `ranges` (box 0.28.1): picture ranges shown correctly end to end,
+  `sdr` `hdr10` `hdr10plus` `hlg` `dovi` (Android: `Display.getHdrCapabilities()` plus a
+  decoder for the profile; mpv: what the monitor/OS HDR mode supports, or only `sdr` when
+  HDR is off; mpv tone-maps HDR to SDR well, so listing only `sdr` is safe). Apps choose direct play or a transcode from this, so be accurate.
 - **Box → client** `video { screen, requestId, op, ... }`:
   - `op: "play"`, `url`, `title`, `mime?`, `poster?`, `startAt?` (seconds): open the player
     over the page and start (from `startAt` when given). `mime` is a hint
