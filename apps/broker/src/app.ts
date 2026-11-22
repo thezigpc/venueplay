@@ -1,6 +1,7 @@
 import { bearer, safeEqual, type Logger } from "@bargames/common";
 import { readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import type { VirtualScreenDriver } from "./drivers/virtual.js";
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import type { AirplayDriver } from "./drivers/airplay/index.js";
 import type { RokuDriver } from "./drivers/roku/index.js";
@@ -21,7 +22,7 @@ const BACKUP_FILE = /^[a-z0-9-]+\.json$/;
 const httpErr = (status: number, message: string) => Object.assign(new Error(message), { status });
 
 /** Broker API. Only core calls it (bearer token); it never faces players. */
-export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDriver; airplay?: AirplayDriver; vizio?: VizioDriver; appletv?: AppleTvDriver; venuebox?: VenueboxHub; audio?: BoxAudio; token: string; log: Logger; dataDir?: string; restart?: () => void; setBoxName?: (name: string) => void }) {
+export function createBrokerApp(d: { registry: DisplayRegistry; virtual?: VirtualScreenDriver; roku?: RokuDriver; airplay?: AirplayDriver; vizio?: VizioDriver; appletv?: AppleTvDriver; venuebox?: VenueboxHub; audio?: BoxAudio; token: string; log: Logger; dataDir?: string; restart?: () => void; setBoxName?: (name: string) => void }) {
   const app = express();
   app.disable("x-powered-by");
   // Settings restores (box 0.16.0) carry every TV pairing file; everything else is small.
@@ -378,6 +379,67 @@ export function createBrokerApp(d: { registry: DisplayRegistry; roku?: RokuDrive
       if (!drv.typeText) return void res.status(400).json({ error: `${dev.label || dev.name} can't take typed text` });
       if (!/^[ -~]{1,100}$/.test(text)) return void res.status(400).json({ error: "text: 1-100 printable characters" });
       await drv.typeText(dev, text);
+      res.json({ ok: true });
+    }),
+  );
+
+  // ---- Box 0.30.1: the virtual test TV (drivers/virtual.ts). Broker token only; never in the admin.
+  const vt = () => {
+    if (!d.virtual) throw Object.assign(new Error("no virtual TV on this box"), { status: 404 });
+    return d.virtual;
+  };
+  const pageName = (n: string) => {
+    if (!/^[a-z0-9-]{1,20}$/.test(n)) throw Object.assign(new Error("page names: a-z, 0-9, -"), { status: 400 });
+    return n;
+  };
+  app.get(
+    "/virtual",
+    h(async (_req, res) => void res.json(await vt().inspect())),
+  );
+  /** { minutes } turns it on (1..240) and lists it; { off: true } turns it off now. */
+  app.post(
+    "/virtual",
+    h(async (req, res) => {
+      const b = (req.body ?? {}) as { minutes?: unknown; off?: unknown };
+      if (b.off === true) {
+        await vt().off();
+        return void res.json({ ok: true, active: false });
+      }
+      const minutes = typeof b.minutes === "number" && Number.isFinite(b.minutes) ? b.minutes : 60;
+      const until = vt().on(minutes);
+      await d.registry.merge(await vt().discover());
+      res.json({ ok: true, active: true, until: until.toISOString() });
+    }),
+  );
+  app.post(
+    "/virtual/:page/open",
+    h(async (req, res) => {
+      const url = (req.body ?? {}).url;
+      if (typeof url !== "string" || !/^(https?:|about:blank$)/.test(url)) return void res.status(400).json({ error: "url: http(s)" });
+      await vt().open(pageName(req.params.page), url);
+      res.json({ ok: true });
+    }),
+  );
+  app.post(
+    "/virtual/:page/eval",
+    h(async (req, res) => {
+      const expression = (req.body ?? {}).expression;
+      if (typeof expression !== "string" || !expression) return void res.status(400).json({ error: "expression: a script" });
+      res.json({ ok: true, value: await vt().evaluate(pageName(req.params.page), expression) });
+    }),
+  );
+  app.get(
+    "/virtual/:page/shot",
+    h(async (req, res) => {
+      const jpeg = await vt().screenshot(pageName(req.params.page));
+      if (!jpeg) return void res.status(204).end();
+      res.set("cache-control", "no-store").type("image/jpeg").send(jpeg);
+    }),
+  );
+  app.delete(
+    "/virtual/:page",
+    h(async (req, res) => {
+      await vt().closePage(pageName(req.params.page));
       res.json({ ok: true });
     }),
   );

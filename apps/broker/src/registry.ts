@@ -51,7 +51,8 @@ export class DisplayRegistry {
   ) {}
 
   list(): DisplayRecord[] {
-    return this.store.get().displays;
+    // Box 0.30.1: a hidden driver's TVs (the virtual test TV while it's off) don't exist for anyone.
+    return this.store.get().displays.filter((d) => !this.drivers.get(d.driver)?.hidden?.());
   }
 
   get(id: string): DisplayRecord | undefined {

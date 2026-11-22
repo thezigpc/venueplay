@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBrokerApp } from "./app.js";
 import { MockDriver } from "./drivers/mock.js";
+import { VirtualScreenDriver } from "./drivers/virtual.js";
 import { AirplayDriver } from "./drivers/airplay/index.js";
 import { RokuDriver, type RokuAirplayAuth } from "./drivers/roku/index.js";
 import { LocalScreenDriver } from "./drivers/local/index.js";
@@ -103,6 +104,9 @@ if (enabled.includes("local")) {
 }
 const mockCount = envNum("MOCK_DISPLAYS", 0);
 if (mockCount) drivers.set("mock", new MockDriver(mockCount));
+// Box 0.30.1: the virtual test TV. Always there, off (and hidden) until POST /virtual turns it on.
+const virtual = new VirtualScreenDriver({ log, runDir: process.env.VIRTUAL_RUN_DIR ?? "/tmp/bargames-virtual", noBrowser: !existsSync("/usr/bin/chromium") });
+drivers.set(virtual.id, virtual);
 
 const registry = new DisplayRegistry(new JsonStore<{ displays: DisplayRecord[] }>(path.join(dataDir, "displays.json"), { displays: [] }), drivers);
 
@@ -164,7 +168,7 @@ if (venuebox) venuebox.listen(clientPort).on("listening", () => log.info("boot",
 const audio = audioFromEnv(registry, dataDir, log, { python: atvPython, script: atvScript });
 
 // restart: exit and let compose (restart: unless-stopped) start it with the restored files.
-const brokerApp = createBrokerApp({ registry, roku, airplay: airplayDriver, vizio, appletv, venuebox, audio, token, log, dataDir, setBoxName: boxName.set, restart: () => process.kill(process.pid, "SIGTERM") });
+const brokerApp = createBrokerApp({ registry, virtual, roku, airplay: airplayDriver, vizio, appletv, venuebox, audio, token, log, dataDir, setBoxName: boxName.set, restart: () => process.kill(process.pid, "SIGTERM") });
 let started = false;
 for (const host of listen.hosts) {
   brokerApp.listen(port, host, () => {

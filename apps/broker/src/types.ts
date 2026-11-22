@@ -123,6 +123,8 @@ export interface Health {
 
 export interface DisplayDriver {
   readonly id: string;
+  /** Box 0.30.1: true while this driver's TVs must not be listed or used (the virtual test TV when off). */
+  hidden?(): boolean;
   discover(timeoutMs?: number): Promise<DisplayDevice[]>;
   capabilities(device: DisplayDevice): Promise<Capabilities>;
   power(device: DisplayDevice, on: boolean): Promise<void>;
