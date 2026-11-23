@@ -54,7 +54,7 @@ test("video: a Roku gets the link through its built-in player; status, pause, st
   }) as typeof fetch;
   const stopped: string[] = [];
   const streams = Object.assign(new PendingStreamService(), { stopFor: async (id: string) => void stopped.push(id), state: () => ({ delivery: "airplay" as const, url: "x", state: "streaming", needsCode: false }) });
-  const roku = new RokuDriver(streams, doFetch);
+  const roku = new RokuDriver(streams, doFetch, { movies: true });
   const dir = mkdtempSync(path.join(tmpdir(), "video-"));
   const reg = new DisplayRegistry(
     new JsonStore<{ displays: DisplayRecord[] }>(path.join(dir, "displays.json"), {
@@ -333,7 +333,7 @@ test("video 0.29.8: a Roku without a built-in player (404) gets the movie over A
     return { ok: true };
   };
   const auth = new JsonStore<RokuAirplayAuth>(path.join(dir, "roku-airplay.json"), { airplay: {} }, 0o600);
-  const roku = new RokuDriver(new PendingStreamService(), doFetch, { atv: fake("main"), video: fake("video"), auth });
+  const roku = new RokuDriver(new PendingStreamService(), doFetch, { atv: fake("main"), video: fake("video"), auth, movies: true });
   const dev = { id: "roku:T1", driver: "roku", name: "Bar TV", address: "http://192.0.2.71:8060", isTv: true, meta: { supportsAirplay: true } } as DisplayDevice;
 
   assert.deepEqual((await roku.capabilities(dev)).moviePairing, { paired: false });
@@ -363,4 +363,18 @@ test("video 0.29.8: a Roku without a built-in player (404) gets the movie over A
   assert.deepEqual(calls.filter((c) => c.op === "video:video_control").map((c) => c.args.action), ["seek", "pause", "stop"]);
   assert.ok(!ecp.includes("/keypress/Home"), "stop goes over AirPlay, not ECP");
   assert.equal(readFileSync(path.join(dir, "roku-airplay.json"), "utf8").includes("SECRET"), false);
+});
+
+test("video 0.30.2: Rokus aren't offered for movies unless ROKU_VIDEO=on (no player there yet)", async () => {
+  let calls = 0;
+  const doFetch = (async () => (calls++, new Response(""))) as typeof fetch;
+  const roku = new RokuDriver(new PendingStreamService(), doFetch, { atv: async () => ({}), video: async () => ({}) });
+  const dev = { id: "roku:P1", driver: "roku", name: "Stick", address: "http://192.0.2.61:8060", model: "Roku Express 3930X" };
+  assert.equal(roku.videoInfo(dev), undefined);
+  const r = await roku.playVideo(dev, { url: "http://media.example/v.mp4", title: "x" });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "unsupported");
+  assert.match(r.message ?? "", /Roku channel/);
+  assert.equal(calls, 0);
+  assert.equal((await roku.capabilities(dev)).moviePairing, undefined);
 });

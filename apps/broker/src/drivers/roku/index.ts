@@ -35,11 +35,22 @@ export class RokuDriver implements DisplayDriver {
      * Box 0.29.8: movies over AirPlay when the Roku has no built-in player for links (Roku OS 15+
      * answers /input/15985 with 404). `atv` pairs (stock pyatv), `video` plays (our pyatv build).
      */
-    private readonly air: { atv?: AtvCall; video?: AtvCall; auth?: JsonStore<RokuAirplayAuth>; clientName?: () => string } = {},
+    private readonly air: {
+      atv?: AtvCall;
+      video?: AtvCall;
+      auth?: JsonStore<RokuAirplayAuth>;
+      clientName?: () => string;
+      /**
+       * Box 0.30.2: movies on Rokus at all. Off by default: venue Rokus have no player for links
+       * (ECP 404) and AirPlay didn't play there either, so Rokus aren't offered for movies until
+       * the Venuebox Roku channel exists. ROKU_VIDEO=on brings the 0.29.8 path back for testing.
+       */
+      movies?: boolean;
+    } = {},
   ) {}
 
   private canAirplay(device: DisplayDevice): boolean {
-    return Boolean(this.air.video && this.air.auth) && device.meta?.supportsAirplay !== false;
+    return Boolean(this.air.movies && this.air.video && this.air.auth) && device.meta?.supportsAirplay !== false;
   }
 
   private airTarget(device: DisplayDevice) {
@@ -224,12 +235,14 @@ export class RokuDriver implements DisplayDriver {
 
   // ---- Box 0.27.0: a video URL the Roku plays itself (its built-in player, channel 15985)
 
-  videoInfo(device: DisplayDevice): VideoInfo {
+  videoInfo(device: DisplayDevice): VideoInfo | undefined {
+    if (!this.air.movies) return undefined;
     // device.model is "Roku Express 3930X": the last word is the model number.
     return { kind: "roku", model: (device.model ?? "").split(/\s+/).pop() || "Roku" };
   }
 
   async playVideo(device: DisplayDevice, v: VideoRequest): Promise<VideoResult> {
+    if (!this.air.movies) return { ok: false, reason: "unsupported", message: `${device.name} can't play movies yet: Roku TVs get them with the Venuebox Roku channel` };
     if (this.streams.state?.(device.id)) await this.streams.stopFor(device.id).catch(() => undefined);
     if (this.viaAirplay.has(device.id)) await this.airCall(device, "video_control", { action: "stop" }).catch(() => undefined);
     this.viaAirplay.delete(device.id);

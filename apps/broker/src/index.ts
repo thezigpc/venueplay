@@ -78,6 +78,7 @@ const roku = enabled.includes("roku")
   ? new RokuDriver(streams, fetch, {
       atv: atvHelper?.call,
       video: (atvVideoHelper ?? atvHelper)?.call,
+      movies: process.env.ROKU_VIDEO === "on",
       auth: new JsonStore<RokuAirplayAuth>(path.join(dataDir, "roku-airplay.json"), { airplay: {} }, 0o600),
       clientName: () => process.env.BOX_NAME ?? "Bar Games box",
     })
