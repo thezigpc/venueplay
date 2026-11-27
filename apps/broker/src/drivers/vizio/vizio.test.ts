@@ -30,7 +30,11 @@ function fakeTv() {
       return ok({ ITEM: { AUTH_TOKEN: "tok-1" } });
     }
     if (!auth || !tv.paired.has(auth)) return { status: 403, body: { STATUS: { RESULT: "REQUIRES_PAIRING" } } };
-    if (p === "/key_command/") return ok();
+    if (p === "/key_command/") {
+      // Like the venue's Vizio: both power keys toggle.
+      if ((body as { KEYLIST: { CODESET: number }[] }).KEYLIST[0].CODESET === 11) tv.on = !tv.on;
+      return ok();
+    }
     if (p.endsWith("/current_input")) {
       if (method === "PUT") tv.input = (body as { VALUE: string }).VALUE;
       return ok({ ITEMS: [{ VALUE: tv.input, HASHVAL: 777 }] });
@@ -90,6 +94,9 @@ test("vizio: discovery, PIN pairing, power, input, keys", async () => {
   assert.ok(caps.remoteKeys?.includes("VolumeUp"));
 
   await vizio.power(dev, false);
+  assert.equal(fake.tv.on, false);
+  await vizio.power(dev, false); // already off: no key, so a toggling TV stays off
+  assert.equal(fake.tv.on, false, "off twice keeps it off");
   await vizio.setInput(dev, "hdmi2");
   await vizio.keypress(dev, "Select");
   await assert.rejects(vizio.keypress(dev, "Lit_a"), /no "Lit_a" key/);
@@ -98,12 +105,16 @@ test("vizio: discovery, PIN pairing, power, input, keys", async () => {
     { auth: "tok-1", body: { KEYLIST: [{ CODESET: 11, CODE: 0, ACTION: "KEYPRESS" }] } },
     { auth: "tok-1", body: { KEYLIST: [{ CODESET: 3, CODE: 2, ACTION: "KEYPRESS" }] } },
   ]);
+  await vizio.power(dev, true);
+  await vizio.power(dev, true);
+  assert.equal(fake.tv.on, true, "on twice keeps it on");
+  assert.equal(fake.calls.filter((c) => c.path === "/key_command/" && (c.body as { KEYLIST: { CODESET: number }[] }).KEYLIST[0].CODESET === 11).length, 2, "one power key each way");
   assert.equal(fake.tv.input, "HDMI-2");
   assert.deepEqual(fake.calls.find((c) => c.method === "PUT" && c.path.endsWith("/current_input"))?.body, { REQUEST: "MODIFY", VALUE: "HDMI-2", HASHVAL: 777 });
 
   // Unpaired on the TV: the box drops its token and says so.
   fake.tv.paired.clear();
-  await assert.rejects(vizio.power(dev, true), /no longer accepts/);
+  await assert.rejects(vizio.power(dev, false), /no longer accepts/);
   assert.equal(auth.get().tokens[dev.id], undefined);
 });
 

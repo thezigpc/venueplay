@@ -135,7 +135,13 @@ export class VizioDriver implements DisplayDriver {
   }
 
   async power(device: DisplayDevice, on: boolean): Promise<void> {
-    await this.control(device, (api, t) => api.key(t, on ? POWER_ON : POWER_OFF));
+    await this.control(device, async (api, t) => {
+      // Box 0.31.1: some Vizios treat the power-off key as a toggle, so "off" on a TV that's
+      // already off switched it on. Ask first; if the TV can't say, send the key as before.
+      const now = await api.powerOn().catch(() => undefined);
+      if (now === on) return;
+      await api.key(t, on ? POWER_ON : POWER_OFF);
+    });
   }
 
   async setInput(device: DisplayDevice, input: string): Promise<void> {
