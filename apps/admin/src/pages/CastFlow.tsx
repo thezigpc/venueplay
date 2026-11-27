@@ -53,6 +53,8 @@ export function CastFlow({ games, displays, media, preselect, onClose }: { games
   const blocked = (d: Display): string | undefined => {
     if (d.health?.online === false) return "offline";
     if (provider && !provider.targets.some((t) => t.displayId === d.id)) return `not linked to ${provider.displayName}`;
+    // Box 0.31.0: a kiosk (a page people tap) only goes on touch screens.
+    if (game?.manifest.kiosk && !d.touch) return "not a touch screen";
     return undefined;
   };
   const usable = displays.filter((d) => !blocked(d));

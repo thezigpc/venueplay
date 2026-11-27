@@ -1,7 +1,7 @@
 // The contract between a game and the Bar Games box. Everything here is plain data,
 // safe to import from browser code, Node code, and the box itself.
 
-export const SDK_VERSION = "0.19.0";
+export const SDK_VERSION = "0.20.0";
 /** Bumped only on breaking changes to VenueContext, events or commands. */
 export const PROTOCOL_VERSION = 1;
 
@@ -76,6 +76,8 @@ export interface VenueInfo {
   timezone?: string;
   /** Units the venue prefers. SDK 0.5.0+. */
   units?: "imperial" | "metric";
+  /** SDK 0.20.0: the venue's country, an ISO 3166-1 code like "US" (phone numbers, formats). */
+  country?: string;
   /** A lobby countdown, if one is running (SDK 0.9.0). */
   countdown?: Countdown;
   /** Tonight's winners per game that reports results (SDK 0.9.0). */
@@ -161,6 +163,11 @@ export const STANDARD_EVENTS = [
   "video_started",
   /** SDK 0.17.0: { tv: displayId }. */
   "video_stopped",
+  /**
+   * SDK 0.20.0, check-in apps: { visit: number, firstVisit: boolean }. A patron checked in;
+   * never their phone or name. Tonight and Home Assistant count arrivals from it.
+   */
+  "checked_in",
 ] as const;
 export type StandardEventType = (typeof STANDARD_EVENTS)[number];
 
@@ -323,6 +330,16 @@ export interface MatchResultArgs {
 // when the app declares guests.cohosts and the venue turned that on for the app.
 
 export type GuestRole = "host" | "cohost";
+
+/** SDK 0.20.0: one of the box's own screens (bg.screen(req)). */
+export interface ScreenInfo {
+  /** The box's display id, e.g. "local:HDMI-A-1". Stable for that screen. */
+  id: string;
+  /** Its name in the box admin. */
+  name: string;
+  /** The venue marked it as a touch screen. */
+  touch: boolean;
+}
 
 /** Who a guest request is from (bg.guest(req)). */
 export interface GuestInfo {
@@ -500,6 +517,14 @@ export const HEADERS = {
   guest: "x-bargames-guest",
   guestRole: "x-bargames-guest-role",
   guestName: "x-bargames-guest-name",
+  /**
+   * SDK 0.20.0 (box 0.31.0): the request comes from one of the box's own screens (a screen
+   * plugged into the box). Its display id; with screenName (URI-encoded) and screenTouch
+   * ("1" for a touch screen). Read them with bg.screen(req).
+   */
+  screen: "x-bargames-screen",
+  screenName: "x-bargames-screen-name",
+  screenTouch: "x-bargames-screen-touch",
 } as const;
 
 /** Why the gateway let a request in. */

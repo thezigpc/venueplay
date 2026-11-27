@@ -45,6 +45,7 @@ import {
   GUEST_PATHS,
   type GuestCohostResult,
   type GuestInfo,
+  type ScreenInfo,
   type GuestLinkInfo,
   type GuestRole,
   type MatchGame,
@@ -79,6 +80,8 @@ export interface GatewayInfo {
   staff: boolean;
   /** SDK 0.16.0: a guest staff gave this app's controls to. Never set off a box. */
   guest?: GuestInfo;
+  /** SDK 0.20.0: one of the box's own screens (a screen plugged into the box). Never set off a box. */
+  screen?: ScreenInfo;
 }
 
 export interface BarGames {
@@ -194,6 +197,13 @@ export interface BarGames {
    * staff: let them run things, keep settings for bg.isStaff. Undefined off a box.
    */
   guest(req: IncomingMessage): GuestInfo | undefined;
+  /**
+   * SDK 0.20.0 (box 0.31.0): the box's own screen behind this request (a screen plugged into
+   * the box, showing your page), so a kiosk page can trust it without a setup step. The
+   * box's browser carries a signed cookie the gateway checks; anyone else's request has no
+   * screen. Undefined off a box, and on boxes before 0.31.0.
+   */
+  screen(req: IncomingMessage): ScreenInfo | undefined;
   /** SDK 0.16.0: your app's guest links. Off a box: list() is [], the rest throws. */
   guests: {
     /** Guest hosts and co-hosts whose links are still good. */
@@ -385,7 +395,19 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
       access: viaGateway ? (first(h[HEADERS.access]) as AccessReason | undefined) : undefined,
       staff: viaGateway && first(h[HEADERS.staff]) === "1",
       ...(viaGateway && guestOf(first(h[HEADERS.guest]), first(h[HEADERS.guestRole]), first(h[HEADERS.guestName]))),
+      ...(viaGateway && screenOf(first(h[HEADERS.screen]), first(h[HEADERS.screenName]), first(h[HEADERS.screenTouch]))),
     };
+  }
+
+  function screenOf(id: string | undefined, name: string | undefined, touch: string | undefined): { screen?: ScreenInfo } {
+    if (!id) return {};
+    let decoded = "";
+    try {
+      decoded = decodeURIComponent(name ?? "");
+    } catch {
+      decoded = name ?? "";
+    }
+    return { screen: { id, name: decoded || id, touch: touch === "1" } };
   }
 
   function guestOf(id: string | undefined, role: string | undefined, name: string | undefined): { guest?: GuestInfo } {
@@ -517,6 +539,7 @@ export function createBarGames(opts: BarGamesOptions = {}): BarGames {
       },
     },
     guest: (req) => gateway(req).guest,
+    screen: (req) => gateway(req).screen,
     guests: {
       async list() {
         if (!connected) return [];

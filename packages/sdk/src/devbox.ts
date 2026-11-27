@@ -42,6 +42,12 @@ export const MOCK_STAFF_COOKIE = "bg_staff_mock";
  * bg.guests.addCohost() returns work too.
  */
 export const MOCK_GUEST_COOKIE = "bg_guest_mock";
+/**
+ * SDK 0.20.0: be one of the box's own screens (bg.screen). Open MOCK_SCREEN_PATH
+ * (?name=Door&touch=1, ?off=1 to stop) and this browser's requests carry x-bargames-screen.
+ */
+export const MOCK_SCREEN_PATH = "/__bargames/dev/screen";
+export const MOCK_SCREEN_COOKIE = "bg_screen_mock";
 /** SDK 0.11.1: the pretend box admin page (venue.adminUrl on the mock box). */
 export const MOCK_ADMIN_PATH = "/__bargames/dev/admin";
 /**
@@ -85,6 +91,7 @@ export function mockContext(gameId: string, displayName: string, publicUrl: stri
       location: { latitude: 40.7128, longitude: -74.006, label: "Test City" },
       timezone: "America/New_York",
       units: "imperial",
+      country: "US",
       ...(opts.announcement ? { announcement: { id: "mock-1", text: opts.announcement, ...(opts.announcementShow ? { show: opts.announcementShow } : {}), ...(opts.announcementPosition ? { position: opts.announcementPosition } : {}) } } : {}),
       // SDK 0.11.1: a pretend box admin, so BoxAdminLink / boxAdminUrl() show up on the mock.
       adminUrl: new URL(MOCK_ADMIN_PATH, publicUrl).toString(),
@@ -764,7 +771,15 @@ export function mockBox(o: MockBoxOptions) {
       h[HEADERS.guestRole] = guest.role;
       h[HEADERS.guestName] = encodeURIComponent(guest.label);
     }
-    const rest = cookies.filter((c) => !c.startsWith(`${MOCK_STAFF_COOKIE}=`) && !c.startsWith(`${MOCK_GUEST_COOKIE}=`)).join("; ");
+    // SDK 0.20.0: a pretend box screen.
+    const screen = cookies.find((c) => c.startsWith(`${MOCK_SCREEN_COOKIE}=`))?.slice(MOCK_SCREEN_COOKIE.length + 1);
+    if (screen) {
+      const [name, touch] = decodeURIComponent(screen).split("|");
+      h[HEADERS.screen] = "local:MOCK-1";
+      h[HEADERS.screenName] = encodeURIComponent(name || "Box screen");
+      h[HEADERS.screenTouch] = touch === "1" ? "1" : "0";
+    }
+    const rest = cookies.filter((c) => !c.startsWith(`${MOCK_STAFF_COOKIE}=`) && !c.startsWith(`${MOCK_GUEST_COOKIE}=`) && !c.startsWith(`${MOCK_SCREEN_COOKIE}=`)).join("; ");
     if (rest) h.cookie = rest;
     else delete h.cookie;
     h["x-forwarded-proto"] = "http";
@@ -820,6 +835,17 @@ export function mockBox(o: MockBoxOptions) {
       const landing = o.manifest.guests.path ?? o.manifest.routes.host ?? "/";
       res.writeHead(303, { location: `${base ?? ""}${landing}`, "set-cookie": `${MOCK_GUEST_COOKIE}=${g.id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=21600` });
       console.log(`${c.ok("guest")} ${g.label} (${g.role}) signed in (requests now with ${HEADERS.guest}: ${g.id})`);
+      return void res.end();
+    }
+    // SDK 0.20.0: pretend to be the box's own screen: ?name=Door&touch=1; ?off=1 to stop.
+    if (staffPath === MOCK_SCREEN_PATH || (base && staffPath === base + MOCK_SCREEN_PATH)) {
+      const q = new URL(req.url!, "http://x").searchParams;
+      const off = q.get("off") === "1";
+      const value = encodeURIComponent(`${(q.get("name") || "Box screen").slice(0, 60)}|${q.get("touch") === "1" ? "1" : "0"}`);
+      const table = o.manifest?.routes.table;
+      const landing = table && !table.includes("{") ? table : "/";
+      res.writeHead(303, { location: `${base ?? ""}${landing}`, "set-cookie": `${MOCK_SCREEN_COOKIE}=${off ? "" : value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${off ? 0 : 86400}` });
+      console.log(c.ok(off ? "no longer a box screen" : `this browser is now a box screen (requests with ${HEADERS.screen}: local:MOCK-1)`));
       return void res.end();
     }
     if (req.url?.split("?")[0].startsWith(MOCK_INTEGRATION_PATH)) return void integrationControl(req, res);

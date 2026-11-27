@@ -174,11 +174,16 @@ export function VenuePage() {
           </select>
         </label>
         <label>
+          Country
+          <input value={v.country ?? ""} placeholder="US" maxLength={2} style={{ width: "5em" }} onChange={(e) => set("country", e.target.value.trim().toUpperCase() || null)} />
+        </label>
+        <p className="muted">A two-letter code (US, CA, GB…). Apps use it for phone numbers and formats.</p>
+        <label>
           Idle TVs show
           <select value={v.idleModule ?? ""} onChange={(e) => set("idleModule", e.target.value || null)}>
             <option value="">The box's idle screen (games, Wi-Fi, join QR)</option>
             {(games.data ?? [])
-              .filter((g) => isApp(g.manifest))
+              .filter((g) => isApp(g.manifest) && g.manifest.routes.table && !g.manifest.kiosk)
               .map((g) => (
                 <option key={g.id} value={g.id} disabled={!g.enabled}>
                   {g.context.game.displayName}

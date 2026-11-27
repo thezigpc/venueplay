@@ -23,6 +23,7 @@ import { VIDEO_KEYS, videoKeyAction } from "../../types.js";
 import type { Capabilities, DeliveryMethod, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, StreamState, VideoAction, VideoInfo, VideoRequest, VideoResult, VideoStatus } from "../../types.js";
 import { localFormats, waylandSocket, type LocalVideo } from "./video.js";
 import { NotBuiltYet } from "../../types.js";
+import { screenCookieParams } from "../../screenCookie.js";
 
 export interface Connector {
   /** e.g. "HDMI-A-1", "DP-2" */
@@ -172,6 +173,8 @@ export function kioskArgs(url: string, profileDir: string, debugPort: number, sc
 export interface LocalOptions {
   runner?: ProcRunner;
   log?: Logger;
+  /** Box 0.31.0: signs the screen cookie that tells apps it's this screen (bg.screen). */
+  screenKey?: string;
   /** Writable directory for the Chromium profile and the Wayland runtime dir. */
   runDir?: string;
   drmDir?: string;
@@ -247,6 +250,9 @@ interface Session {
   attempts: number;
   /** Box 0.26.1: when the guard last blocked a page. */
   blockedAt?: number;
+  /** Box 0.31.0: the screen (for its cookie) and when its cookie was last set. */
+  device: DisplayDevice;
+  cookieAt?: number;
 }
 
 export class LocalScreenDriver implements DisplayDriver {
@@ -328,7 +334,10 @@ export class LocalScreenDriver implements DisplayDriver {
       await s.setHome?.(url);
       this.stopRetry(s);
       s.resetHistory = true;
-      if (await this.navigate(url)) {
+      s.device = device;
+      const cookie = screenCookieParams(this.o.screenKey, device, url);
+      if (cookie) s.cookieAt = Date.now();
+      if (await this.navigate(url, cookie)) {
         s.url = url;
         return { ok: true, delivery: "local" };
       }
@@ -353,7 +362,7 @@ export class LocalScreenDriver implements DisplayDriver {
     mkdirSync(env.XDG_RUNTIME_DIR, { recursive: true, mode: 0o700 });
     const proc = runner.spawn(`local:${c.name}`, this.o.cage ?? "cage", kioskArgs(url, `${this.runDir}/chromium`, this.debugPort, kioskScale(c.modes[0]), touch), env);
     const site = siteOf(url);
-    const session: Session = { connector: c.name, proc, url, touch, sites: new Set(site ? [site] : []), attempts: 0 };
+    const session: Session = { connector: c.name, proc, url, touch, sites: new Set(site ? [site] : []), attempts: 0, device };
     this.session = session;
     // Ready once DevTools answers (Chromium is up on the screen).
     for (let i = 0; i < 40; i++) {
@@ -438,6 +447,14 @@ export class LocalScreenDriver implements DisplayDriver {
     const r = await call("Runtime.evaluate", { expression: `[performance.getEntriesByType("navigation")[0]?.responseStatus ?? 0, location.href]`, returnByValue: true });
     const [status, href] = ((r?.result as { value?: unknown } | undefined)?.value ?? [0, ""]) as [number, string];
     if (this.session !== s) return;
+    // Box 0.31.0: keep the screen cookie fresh on a page that stays up for weeks.
+    if (s.cookieAt !== undefined && Date.now() - s.cookieAt > 12 * 3600_000) {
+      const cookie = screenCookieParams(this.o.screenKey, s.device, String(href));
+      if (cookie) {
+        s.cookieAt = Date.now();
+        void call("Network.setCookie", cookie);
+      }
+    }
     // Box 0.26.1: a link to another site on a touch screen lands on Chromium's "blocked" page.
     // Go back to the page it was on (or home) and say why, rather than reloading the block.
     if (String(href).startsWith("chrome-error://") && s.blockedAt && Date.now() - s.blockedAt < 5000) {
@@ -507,6 +524,14 @@ export class LocalScreenDriver implements DisplayDriver {
           kioskId = typeof r?.identifier === "string" ? r.identifier : undefined;
         };
         ws.onopen = () => {
+          // Box 0.31.0: the screen cookie. Chromium started on the page before DevTools was
+          // up, so the first time in a session, reload once to send it.
+          const cookie = screenCookieParams(this.o.screenKey, s.device, s.url);
+          if (cookie) {
+            const first = s.cookieAt === undefined;
+            s.cookieAt = Date.now();
+            void call("Network.setCookie", cookie).then(() => (first ? call("Page.reload", {}) : undefined));
+          }
           if (s.touch) ws.send(JSON.stringify({ id: id++, method: "Fetch.enable", params: { patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }] } }));
           ws.send(JSON.stringify({ id: id++, method: "Page.enable", params: {} }));
           if (s.touch) {
@@ -600,7 +625,7 @@ export class LocalScreenDriver implements DisplayDriver {
     }
   }
 
-  private async navigate(url: string): Promise<boolean> {
+  private async navigate(url: string, cookie?: Record<string, unknown>): Promise<boolean> {
     const wsUrl = await this.pageWs();
     if (!wsUrl) return false;
     return new Promise<boolean>((resolve) => {
@@ -616,7 +641,11 @@ export class LocalScreenDriver implements DisplayDriver {
       };
       const t = setTimeout(() => done(false), 5000);
       ws.onerror = () => done(false);
-      ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Page.navigate", params: { url } }));
+      // Box 0.31.0: the screen cookie first (its answer, id 2, comes before the navigation's).
+      ws.onopen = () => {
+        if (cookie) ws.send(JSON.stringify({ id: 2, method: "Network.setCookie", params: cookie }));
+        ws.send(JSON.stringify({ id: 1, method: "Page.navigate", params: { url } }));
+      };
       ws.onmessage = (ev) => {
         const msg = JSON.parse(String(ev.data)) as { id?: number; error?: unknown };
         if (msg.id === 1) done(!msg.error);

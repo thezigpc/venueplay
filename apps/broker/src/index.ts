@@ -1,4 +1,4 @@
-import { installCrashHandlers, createLogger, envNum, JsonStore } from "@bargames/common";
+import { installCrashHandlers, createLogger, envNum, JsonStore, screenKey } from "@bargames/common";
 import { readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
@@ -101,12 +101,12 @@ if (enabled.includes("local")) {
   // Box 0.28.2: movies on the plugged-in screen with mpv; sound on the box's HDMI (LOCAL_VIDEO_AUDIO: an ALSA device instead).
   const mpv = process.env.LOCAL_VIDEO === "off" || !existsSync("/usr/bin/mpv") ? undefined : "/usr/bin/mpv";
   const video = new LocalVideo({ mpv, log, audioDevice: () => process.env.LOCAL_VIDEO_AUDIO || boxOutputs().find((o) => o.available && /HDMI/.test(o.name))?.address });
-  drivers.set("local", new LocalScreenDriver({ runner: existsSync("/usr/bin/cage") ? new NodeProcRunner(log, localDir) : undefined, log, runDir: localDir, video, hardwareDecoders }));
+  drivers.set("local", new LocalScreenDriver({ runner: existsSync("/usr/bin/cage") ? new NodeProcRunner(log, localDir) : undefined, log, runDir: localDir, video, hardwareDecoders, screenKey: screenKey(token) }));
 }
 const mockCount = envNum("MOCK_DISPLAYS", 0);
 if (mockCount) drivers.set("mock", new MockDriver(mockCount));
 // Box 0.30.1: the virtual test TV. Always there, off (and hidden) until POST /virtual turns it on.
-const virtual = new VirtualScreenDriver({ log, runDir: process.env.VIRTUAL_RUN_DIR ?? "/tmp/bargames-virtual", noBrowser: !existsSync("/usr/bin/chromium") });
+const virtual = new VirtualScreenDriver({ log, runDir: process.env.VIRTUAL_RUN_DIR ?? "/tmp/bargames-virtual", noBrowser: !existsSync("/usr/bin/chromium"), screenKey: screenKey(token) });
 drivers.set(virtual.id, virtual);
 
 const registry = new DisplayRegistry(new JsonStore<{ displays: DisplayRecord[] }>(path.join(dataDir, "displays.json"), { displays: [] }), drivers);

@@ -100,6 +100,48 @@ export function verifyToken(secret: string, kind: string, token: string | undefi
   return { expiresAt, nonce };
 }
 
+/**
+ * Box 0.31.0: the box's own screens (plugged-in screens, the virtual test TV) carry this
+ * cookie. The broker sets it in its own Chromium for the venue's sites; the gateway checks
+ * it, strips it, and tells apps x-bargames-screen (bg.screen(req)).
+ */
+export const SCREEN_COOKIE = "bg_screen";
+
+/** Who a box screen is: what its cookie carries. */
+export interface ScreenIdentity {
+  id: string;
+  name: string;
+  touch: boolean;
+}
+
+/**
+ * The key screen cookies are signed with. Core and the broker share the broker token; the
+ * gateway never gets that token, only this key (in its config from core).
+ */
+export function screenKey(brokerToken: string): string {
+  return createHmac("sha256", brokerToken).update("bargames:screen-cookie").digest("base64url");
+}
+
+/** A screen cookie's value: a "screen" token whose nonce is the screen, as base64url JSON. */
+export function signScreen(key: string, screen: ScreenIdentity, expiresAt: number): string {
+  const nonce = Buffer.from(JSON.stringify({ id: screen.id, name: screen.name, touch: screen.touch })).toString("base64url");
+  return signToken(key, "screen", expiresAt, nonce);
+}
+
+/** The screen behind a cookie, when it's signed with this key and not expired. */
+export function verifyScreen(key: string | undefined, token: string | undefined, now = Date.now()): ScreenIdentity | undefined {
+  if (!key) return undefined;
+  const t = verifyToken(key, "screen", token, now);
+  if (!t) return undefined;
+  try {
+    const v = JSON.parse(Buffer.from(t.nonce, "base64url").toString("utf8")) as Partial<ScreenIdentity>;
+    if (typeof v.id !== "string" || !v.id) return undefined;
+    return { id: v.id, name: typeof v.name === "string" && v.name ? v.name : v.id, touch: v.touch === true };
+  } catch {
+    return undefined;
+  }
+}
+
 /** The venue-wide staff cookie (gateway-signed "staff" token): staff signed in to the box admin. */
 export const STAFF_COOKIE = "bg_staff";
 /** The box admin's session cookie (core). The gateway never passes it to a game. */
@@ -265,6 +307,8 @@ export interface GatewayConfig {
    * ones, so a revoke reaches the gateway at its next refresh).
    */
   guests?: GatewayGuest[];
+  /** Box 0.31.0: checks the box screens' cookies (screenKey of the broker token). */
+  screenKey?: string;
 }
 
 /** A guest link the gateway honours: its cookie gives that one app's controls. */

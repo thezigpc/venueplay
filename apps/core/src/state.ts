@@ -43,6 +43,8 @@ export interface VenueSettings {
   /** IANA time zone, e.g. "America/New_York". */
   timezone?: string | null;
   units?: "imperial" | "metric" | null;
+  /** Box 0.31.0: ISO 3166-1 alpha-2, e.g. "US" (SDK 0.20.0 ctx.venue.country). */
+  country?: string | null;
   /** A display module (menu) idle TVs show instead of the box's idle screen. null: the box's. */
   idleModule?: string | null;
   /** The name at the top of the admin, its sign-in screen and browser tab. Empty: "Bar Games". */

@@ -563,3 +563,58 @@ test("guest links (box 0.19.0): one app's controls, told apart from staff, ended
     upstream.close();
   }
 });
+
+test("box screens (box 0.31.0): a broker-signed cookie becomes x-bargames-screen; forged or foreign ones don't", async () => {
+  const { screenKey, signScreen } = await import("@bargames/common");
+  const seen: { screen?: string; name?: string; touch?: string; cookie?: string }[] = [];
+  const upstream = createServer((req, res) => {
+    seen.push({ screen: req.headers["x-bargames-screen"] as string | undefined, name: req.headers["x-bargames-screen-name"] as string | undefined, touch: req.headers["x-bargames-screen-touch"] as string | undefined, cookie: req.headers.cookie });
+    res.end("ok");
+  });
+  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
+  const target = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  const key = screenKey("broker-tok");
+  const cfg = {
+    boxVersion: "0.31.0",
+    domain: "example.com",
+    venue: { name: "Kava", theme: DEFAULT_THEME },
+    routes: [{ host: "play.example.com", path: "/checkin", kind: "game", gameId: "checkin", target, enabled: true, injectTheme: false }],
+    access: { pinEnabled: false, pin: "", whitelist: [], autoVenueIp: true, venueCidrs: [], adminRemote: false, open: true },
+    contexts: {},
+    hub: { games: [] },
+    setupRequired: false,
+    adminUrl: "https://play.example.com/admin",
+    screenKey: key,
+  } as unknown as GatewayConfig;
+  const gw = createGateway({ config: () => cfg, detectedCidrs: () => [], secret: "core-tok", coreToken: "core-tok", log: createLogger("t", "error") });
+  await new Promise<void>((r) => gw.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(gw.address() as AddressInfo).port}`;
+  const get = (p: string, headers: Record<string, string> = {}) =>
+    new Promise<number>((resolve, reject) => {
+      const req = request(base + p, { headers: { ...headers, host: "play.example.com", "cf-connecting-ip": "8.8.8.8" } }, (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode!));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  try {
+    const exp = Date.now() + 3600e3;
+    const good = signScreen(key, { id: "local:HDMI-A-1", name: "Door – kiosk", touch: true }, exp);
+    assert.equal(await get("/checkin/kiosk", { cookie: `bg_screen=${good}; mine=1` }), 200);
+    assert.deepEqual(seen.at(-1), { screen: "local:HDMI-A-1", name: encodeURIComponent("Door – kiosk"), touch: "1", cookie: "mine=1" }, "the app gets the screen, never the cookie");
+
+    await get("/checkin/kiosk", { cookie: `bg_screen=${signScreen(screenKey("other-box"), { id: "local:HDMI-A-1", name: "x", touch: true }, exp)}` });
+    assert.equal(seen.at(-1)!.screen, undefined, "another box's key");
+    await get("/checkin/kiosk", { cookie: `bg_screen=${signScreen(key, { id: "local:HDMI-A-1", name: "x", touch: true }, Date.now() - 1000)}` });
+    assert.equal(seen.at(-1)!.screen, undefined, "expired");
+    await get("/checkin/kiosk", { "x-bargames-screen": "local:HDMI-A-1", "x-bargames-screen-touch": "1" });
+    assert.deepEqual(seen.at(-1), { screen: undefined, name: undefined, touch: undefined, cookie: undefined }, "a forged header is dropped");
+    delete (cfg as { screenKey?: string }).screenKey;
+    await get("/checkin/kiosk", { cookie: `bg_screen=${good}` });
+    assert.equal(seen.at(-1)!.screen, undefined, "no key in the config (older core): no screens");
+  } finally {
+    gw.close();
+    upstream.close();
+  }
+});

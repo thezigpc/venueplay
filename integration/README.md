@@ -21,6 +21,25 @@ level-3 game in about 150 lines, see `C:\CodeProjects\GameBroker\examples\hello-
 **Don't edit anything under `C:\CodeProjects\GameBroker`.** If you need something from
 the SDK or the platform, write it under "SDK requests" in your report (step 9).
 
+## What's new in SDK 0.20.0 (the box's own screens, kiosk apps, check-ins, country)
+
+- **Most modules: nothing to change.**
+- **`bg.screen(req)`** (box 0.31.0) → `{ id, name, touch } | undefined`: the request comes
+  from one of the box's own screens (a screen plugged into the box). The broker puts a
+  signed cookie in its own browser, and the gateway checks it, strips it and sends
+  `x-bargames-screen`, `x-bargames-screen-name` (URI-encoded) and `x-bargames-screen-touch`
+  ("1"/"0"). Nobody else can get it, so a kiosk page can trust that screen with no setup
+  code. Undefined off a box and on older boxes, so keep a fallback (a setup code) for
+  iPads and old boxes. On the mock box, open `/__bargames/dev/screen?name=Door&touch=1`
+  (`?off=1` to stop) to make your browser a box screen.
+- **`"kiosk": true`** in bargames.json: your TV view (`routes.table`) is a page people tap.
+  The box offers it only for touch screens and never as what idle TVs show. Needs
+  `routes.table`.
+- **`checked_in`** is a standard event, for check-in apps: `{ visit: number, firstVisit:
+  boolean }`, never a phone or a name.
+- **`ctx.venue.country`**: the venue's ISO 3166-1 code ("US"), set in the box admin under
+  Venue. It's optional, so keep your own default.
+
 ## What's new in SDK 0.19.0 (audio tracks, subtitles, the TV's remote)
 
 - **Most modules: nothing to change.**

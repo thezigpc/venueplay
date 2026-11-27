@@ -17,6 +17,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import type { Logger } from "@bargames/common";
 import type { Capabilities, DisplayContent, DisplayDevice, DisplayDriver, Health, ShowResult, VideoAction, VideoInfo, VideoRequest, VideoResult, VideoStatus } from "../types.js";
 import { isSeek } from "../types.js";
+import { screenCookieParams } from "../screenCookie.js";
 
 export const VIRTUAL_TV = "virtual:tv1";
 const MAX_MINUTES = 240;
@@ -47,6 +48,8 @@ export interface VirtualOptions {
   log?: Logger;
   /** Tests: no browser at all (show and video still work, screenshots are empty). */
   noBrowser?: boolean;
+  /** Box 0.31.0: signs the TV page's screen cookie (bg.screen), like a plugged-in screen's. */
+  screenKey?: string;
 }
 
 /** Links can carry keys (a media server's, a host seat): never keep them in console lines. */
@@ -135,11 +138,13 @@ export class VirtualScreenDriver implements DisplayDriver {
   async power() {}
   async setInput() {}
 
-  async show(_d: DisplayDevice, content: DisplayContent): Promise<ShowResult> {
+  async show(d: DisplayDevice, content: DisplayContent): Promise<ShowResult> {
     if (!this.active()) return { ok: false, message: "The virtual TV is off." };
     const url = content.kind === "url" || content.kind === "idle" ? content.url : undefined;
     this.shown = content;
     this.video = undefined;
+    const cookie = url && !this.o.noBrowser ? screenCookieParams(this.o.screenKey, d, url) : undefined;
+    if (cookie) await this.send("Network.setCookie", cookie, (await this.page("tv")).sessionId).catch(() => undefined);
     if (url) await this.open("tv", url);
     return { ok: true, delivery: "mock" };
   }

@@ -528,7 +528,8 @@ function ShowOnTv({ d, games, reload }: { d: Display; games: Game[]; reload: () 
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-  const castable = games.filter((g) => g.enabled && g.manifest.routes.table && (isApp(g.manifest) || g.manifest.commands.includes("create_room")));
+  // Box 0.31.0: kiosk apps (pages people tap) only for touch screens.
+  const castable = games.filter((g) => g.enabled && g.manifest.routes.table && (isApp(g.manifest) || g.manifest.commands.includes("create_room")) && (!g.manifest.kiosk || d.touch));
   // Box 0.24.0: players' pages, for touch screens used as kiosks or host screens.
   const pages = games.filter((g) => g.enabled && !isApp(g.manifest) && g.manifest.routes.player);
   if (!castable.length && !pages.length) return null;
@@ -688,7 +689,7 @@ function StartupChoice({ d, rule, games, run, busy, media }: { d: Display; rule?
   const value = !rule || rule.mode === "last" ? "last" : rule.mode === "game" ? `game:${rule.gameId}` : rule.mode === "media" ? `media:${rule.gameId}:${rule.itemId}` : rule.mode;
   const provider = media[0];
   const { items } = useMediaItems(provider?.gameId);
-  const castable = games.filter((g) => g.manifest.routes.table);
+  const castable = games.filter((g) => g.manifest.routes.table && (!g.manifest.kiosk || d.touch));
   const choose = (v: string) => {
     const next: StartupRule = v.startsWith("game:")
       ? { mode: "game", gameId: v.slice(5) }

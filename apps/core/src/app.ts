@@ -1,5 +1,5 @@
 import QRCode from "qrcode";
-import { bearer, GATEWAY_PROOF_HEADER, safeEqual, signToken, STAFF_COOKIE, STAFF_LINK_TTL_MS, STAFF_TTL_MS, type Logger } from "@bargames/common";
+import { bearer, GATEWAY_PROOF_HEADER, safeEqual, screenKey, signToken, STAFF_COOKIE, STAFF_LINK_TTL_MS, STAFF_TTL_MS, type Logger } from "@bargames/common";
 import { PasswordLimiter } from "./limiter.js";
 import { HostSampler } from "./systemStats.js";
 import { createBackup, packBackup, resumePendingRestore, unpackBackup, writeCoreFiles } from "./backup.js";
@@ -252,7 +252,7 @@ export function createApp(d: AppDeps) {
   const idleModuleOf = (): InstalledGame | undefined => {
     const id = d.state.venue.get().idleModule;
     const g = id ? d.games.get(id) : undefined;
-    return g && g.enabled && isApp(g.manifest) && g.manifest.routes.table ? g : undefined;
+    return g && g.enabled && isApp(g.manifest) && g.manifest.routes.table && !g.manifest.kiosk ? g : undefined;
   };
   const idleContent = async () => {
     const venue = d.state.venue.get();
@@ -451,6 +451,7 @@ export function createApp(d: AppDeps) {
           leaderboards: venueExtras().leaderboards,
           rooms: roomCache.snapshot(),
           guests: gatewayGuests(),
+          screenKey: screenKey(d.config.brokerToken),
         }),
       );
     }),
@@ -1701,7 +1702,7 @@ export function createApp(d: AppDeps) {
       const b = req.body as Partial<VenueSettings>;
       const next: VenueSettings = {
         ...cur,
-        ...pick(b, ["name", "theme", "wifi", "domain", "hostnamePattern", "playLabel", "adminLabel", "adminOwnHost", "slug", "publicScheme", "publicPort", "location", "timezone", "units", "idleModule", "adminTitle"]),
+        ...pick(b, ["name", "theme", "wifi", "domain", "hostnamePattern", "playLabel", "adminLabel", "adminOwnHost", "slug", "publicScheme", "publicPort", "location", "timezone", "units", "country", "idleModule", "adminTitle"]),
         ...(typeof b.adminTitle === "string" ? { adminTitle: b.adminTitle.trim().replace(/\s+/g, " ").slice(0, 24) || null } : {}),
       };
       const venueProblem = checkVenueExtras(next, (id) => d.games.get(id));
@@ -2860,9 +2861,11 @@ export function checkVenueExtras(v: VenueSettings, gameOf: (id: string) => Insta
     }
   }
   if (v.units != null && v.units !== "imperial" && v.units !== "metric") return "units: imperial or metric";
+  if (v.country != null && v.country !== "" && (typeof v.country !== "string" || !/^[A-Z]{2}$/.test(v.country))) return 'country: a two-letter code like "US"';
   if (v.idleModule != null && v.idleModule !== "") {
     const g = gameOf(String(v.idleModule));
     if (!g || !isApp(g.manifest)) return "idleModule: pick an installed app with a TV view (a menu)";
+    if (g.manifest.kiosk) return `idleModule: ${g.manifest.name} is a page people tap; it only goes on touch screens`;
   }
   return undefined;
 }

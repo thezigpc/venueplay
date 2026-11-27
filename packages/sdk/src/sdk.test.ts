@@ -1080,3 +1080,41 @@ test("0.17.0 video: manifest video.play; the mock box's fake video TVs (a Roku w
     box.gateway.close();
   }
 });
+
+test("0.20.0: bg.screen(req) on the box's own screens; kiosk apps; checked_in; venue country", async () => {
+  const { STANDARD_EVENTS } = await import("./protocol.js");
+  assert.ok((STANDARD_EVENTS as readonly string[]).includes("checked_in"));
+  const app = { id: "checkin", name: "Check-in", kind: "app", version: "0.1.0", image: "x/c:1", port: 3016, sdk: { version: "0.20.0", level: 2 }, routes: { player: "/", table: "/kiosk" } };
+  const m = validateManifest({ ...app, kiosk: true });
+  assert.ok(m.ok && m.manifest.kiosk === true);
+  assert.equal(validateManifest({ ...app, kiosk: "yes" }).ok, false);
+  const noTable = validateManifest({ ...app, routes: { player: "/" }, kiosk: true });
+  assert.ok(noTable.ok && noTable.manifest.kiosk === undefined && noTable.warnings.some((w) => w.startsWith("kiosk:")));
+
+  const { mockBox, MOCK_SCREEN_PATH } = await import("./devbox.js");
+  let bg: ReturnType<typeof createBarGames> | undefined;
+  const appServer = createServer((req, res) => res.end(JSON.stringify({ screen: bg?.screen(req) ?? null, cookie: req.headers.cookie ?? null }))).listen(0);
+  await new Promise((r2) => appServer.once("listening", r2));
+  const log = console.log;
+  console.log = () => undefined;
+  const box = mockBox({ gameId: "checkin", displayName: "Check-in", gameUrl: `http://127.0.0.1:${(appServer.address() as AddressInfo).port}`, corePort: 0, gatewayPort: 0, manifest: m.ok ? m.manifest : undefined });
+  await Promise.all([new Promise((r2) => box.core.once("listening", r2)), new Promise((r2) => box.gateway.once("listening", r2))]);
+  try {
+    bg = createBarGames({ coreUrl: `http://127.0.0.1:${(box.core.address() as AddressInfo).port}`, token: "dev-token", gameId: "checkin" });
+    const gw = `http://127.0.0.1:${(box.gateway.address() as AddressInfo).port}`;
+    assert.equal(((await (await fetch(`${gw}/kiosk`)).json()) as { screen: unknown }).screen, null, "a phone is no screen");
+    const r = await fetch(`${gw}${MOCK_SCREEN_PATH}?name=${encodeURIComponent("Door – kiosk")}&touch=1`, { redirect: "manual" });
+    assert.equal(r.headers.get("location"), "/kiosk");
+    const cookie = r.headers.get("set-cookie")!.split(";")[0];
+    const me = (await (await fetch(`${gw}/kiosk`, { headers: { cookie: `${cookie}; mine=1` } })).json()) as { screen: unknown; cookie: string };
+    assert.deepEqual(me, { screen: { id: "local:MOCK-1", name: "Door – kiosk", touch: true }, cookie: "mine=1" });
+    const forged = (await (await fetch(`${gw}/kiosk`, { headers: { "x-bargames-screen": "local:X" } })).json()) as { screen: unknown };
+    assert.equal(forged.screen, null);
+    assert.equal(createBarGames({ coreUrl: "", token: "", gameId: "checkin" }).screen({ headers: { "x-bargames-via": "1", "x-bargames-screen": "local:X" } } as never), undefined, "off a box: never");
+  } finally {
+    console.log = log;
+    box.core.close();
+    box.gateway.close();
+    appServer.close();
+  }
+});

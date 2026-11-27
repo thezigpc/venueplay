@@ -143,6 +143,11 @@ export interface GameManifest {
    * co-hosts (bg.guests.addCohost); the venue still has to allow it per app.
    */
   guests?: { path?: string; cohosts?: boolean };
+  /**
+   * SDK 0.20.0: the TV view (routes.table) is a page people tap, such as a check-in kiosk.
+   * The box offers it only for touch screens and never as what idle TVs show.
+   */
+  kiosk?: boolean;
   /** Static, non-secret environment. Keys starting with BG_ are reserved. */
   env: Record<string, string>;
   minBoxVersion?: string;
@@ -322,6 +327,14 @@ export function validateManifest(input: unknown): ManifestResult {
     else guests = { ...(g.path ? { path: g.path as string } : {}), ...(g.cohosts ? { cohosts: true } : {}) };
   }
 
+  // SDK 0.20.0: a touch-only TV view.
+  let kiosk: boolean | undefined;
+  if (m.kiosk !== undefined) {
+    if (typeof m.kiosk !== "boolean") errors.push("kiosk: true or false");
+    else if (m.kiosk && !(isObj(m.routes) && typeof m.routes.table === "string")) warnings.push("kiosk: needs routes.table (the page people tap); ignored");
+    else if (m.kiosk) kiosk = true;
+  }
+
   if (errors.length) return { ok: false, errors, warnings };
 
   const sdk = m.sdk as { version: string };
@@ -361,6 +374,7 @@ export function validateManifest(input: unknown): ManifestResult {
     ...(matches ? { matches } : {}),
     ...(tournaments ? { tournaments } : {}),
     ...(guests ? { guests } : {}),
+    ...(kiosk ? { kiosk } : {}),
   };
   return { ok: true, manifest, warnings };
 }

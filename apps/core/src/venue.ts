@@ -26,6 +26,7 @@ export function venueInfo(v: VenueSettings, extras: VenueExtras = {}): VenueInfo
   if (v.location) info.location = v.location;
   if (v.timezone) info.timezone = v.timezone;
   if (v.units) info.units = v.units;
+  if (v.country) info.country = v.country;
   const a = liveAnnouncement(extras.announcement);
   if (a) info.announcement = a;
   const c = extras.countdown;
@@ -110,6 +111,8 @@ export function buildGatewayConfig(input: {
   rooms?: Record<string, HubRoom[]>;
   /** Box 0.19.0: guest links still good. */
   guests?: GatewayGuest[];
+  /** Box 0.31.0: checks the box screens' cookies. */
+  screenKey?: string;
 }): GatewayConfig {
   const { venue, access, games } = input;
   const extras: VenueExtras = { games, announcement: input.announcement, countdown: input.countdown, leaderboards: input.leaderboards };
@@ -157,6 +160,7 @@ export function buildGatewayConfig(input: {
     adminUrl: adminUrl(venue),
     ...(input.staffNotBefore ? { staffNotBefore: input.staffNotBefore } : {}),
     ...(input.guests?.length ? { guests: input.guests } : {}),
+    ...(input.screenKey ? { screenKey: input.screenKey } : {}),
   };
 }
 

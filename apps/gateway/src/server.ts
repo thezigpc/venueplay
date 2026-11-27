@@ -1,4 +1,4 @@
-import { ADMIN_COOKIE, GATEWAY_PROOF_HEADER, GUEST_COOKIE_PREFIX, safeEqual, signToken, STAFF_COOKIE, STAFF_LINK_TTL_MS, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayGuest, type GatewayRoute, type Logger } from "@bargames/common";
+import { ADMIN_COOKIE, GATEWAY_PROOF_HEADER, GUEST_COOKIE_PREFIX, safeEqual, SCREEN_COOKIE, signToken, STAFF_COOKIE, verifyScreen, STAFF_LINK_TTL_MS, STAFF_TTL_MS, verifyToken, type GatewayConfig, type GatewayGuest, type GatewayRoute, type Logger } from "@bargames/common";
 import { GAMES_LINK_CSS, gamesLinkHtml, HEADERS, PATHS, themeToCss, type VenueContext } from "@bargames/sdk";
 import httpProxy from "http-proxy";
 import { createHash, createHmac, randomBytes } from "node:crypto";
@@ -169,10 +169,17 @@ export function createGateway(d: GatewayDeps) {
       req.headers[HEADERS.guestRole] = guest.role;
       req.headers[HEADERS.guestName] = encodeURIComponent(guest.label);
     }
+    // Box 0.31.0: one of the box's own screens (its broker-signed cookie), for every app.
+    const screen = verifyScreen(d.config()?.screenKey, readCookie(req.headers.cookie, SCREEN_COOKIE));
+    if (screen) {
+      req.headers[HEADERS.screen] = screen.id;
+      req.headers[HEADERS.screenName] = encodeURIComponent(screen.name);
+      req.headers[HEADERS.screenTouch] = screen.touch ? "1" : "0";
+    }
     // Games never see the box admin's session either (it's scoped to /admin, but be sure),
     // nor any guest cookie (theirs could be replayed; another app's is none of their business).
     const base = route.kind === "admin" ? withoutCookie(req.headers.cookie, STAFF_COOKIE) : withoutCookie(withoutCookie(req.headers.cookie, STAFF_COOKIE), ADMIN_COOKIE);
-    const cookies = withoutGuestCookies(base);
+    const cookies = withoutGuestCookies(withoutCookie(base, SCREEN_COOKIE));
     if (cookies) req.headers.cookie = cookies;
     else delete req.headers.cookie;
     // Box 0.19.3: the admin session can also come as a header (browsers that drop the cookie); games never get it.

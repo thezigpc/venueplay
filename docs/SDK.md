@@ -102,6 +102,16 @@ that guest a cookie for this app only and tells the app `x-bargames-guest` (id),
 hours staff chose), on "Turn off", or when the admin password changes; a co-host ends with
 their host. Results can mark teams: `results[].player.team: true`.
 
+**The box's own screens (SDK 0.20.0, box 0.31.0):** `bg.screen(req)` returns
+`{ id, name, touch }` when the request comes from a screen plugged into the box (and the
+virtual test TV), else undefined. The broker sets a signed `bg_screen` cookie in its own
+Chromium for the site it shows; the gateway checks it with a key core gives it (derived
+from the broker token), strips it and sends `x-bargames-screen`, `-screen-name`
+(URI-encoded) and `-screen-touch`. A kiosk page can trust such a screen with no setup step.
+`"kiosk": true` in the manifest marks `routes.table` as a page people tap: the box offers it
+only for touch screens and never for idle TVs. `checked_in` (`{ visit, firstVisit }`) is a
+standard event, and `ctx.venue.country` is the venue's ISO 3166-1 code when staff set it.
+
 **Bracket matches (SDK 0.15.0):** a game that declares `"matches": { "players": [min, max] }`
 plays one tournament match per room: `create_room` gets `args.match` (`id`, `players`, `title`),
 and the game reports `bg.reportResults({ roomCode, matchId, results })`. A tournament app

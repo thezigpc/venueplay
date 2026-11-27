@@ -76,6 +76,8 @@ export interface Venue {
   location?: VenueLocation | null;
   timezone?: string | null;
   units?: "imperial" | "metric" | null;
+  /** Box 0.31.0: ISO 3166-1 alpha-2. */
+  country?: string | null;
   idleModule?: string | null;
   /** The name at the top of this admin. Empty: "Bar Games". */
   adminTitle?: string | null;
